@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Viktora Threshold</title>
+    <script type="module" src="/main.js" defer></script>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        background: #f5f5f7;
+        color: #1d1d1f;
+        margin: 0;
+        padding: 40px;
+        min-height: 100vh;
+        box-sizing: border-box;
+      }
+      h1 { font-size: 24px; margin: 0 0 8px 0; }
+      .subtitle { color: #6e6e73; font-size: 13px; margin: 0 0 24px 0; }
+      .panel {
+        background: white;
+        border-radius: 12px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        margin-bottom: 16px;
+      }
+      .panel h2 { margin: 0 0 8px 0; font-size: 15px; font-weight: 600; }
+      .status {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .status.ok { background: #e6f4ea; color: #137333; }
+      .status.fail { background: #fce8e6; color: #c5221f; }
+      .path {
+        font-family: ui-monospace, SF Mono, monospace;
+        font-size: 12px;
+        margin-top: 8px;
+        color: #6e6e73;
+      }
+      .placeholder {
+        margin-top: 24px;
+        padding: 16px;
+        background: #fffbeb;
+        border-left: 3px solid #f9ab00;
+        border-radius: 6px;
+        font-size: 13px;
+        color: #1d1d1f;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Viktora Threshold</h1>
+    <p class="subtitle">Phase B Increment 1 — D-12-19 OCR utility probe scaffold</p>
+
+    <div class="panel">
+      <h2>OCR utility status (D-12-19 absolute-path probe)</h2>
+      <p id="ocr-status">Probing…</p>
+      <p id="ocr-path" class="path"></p>
+    </div>
+
+    <div class="placeholder">
+      <strong>Phase B work-in-progress.</strong> Next increments add the 3-screen onboarding wizard (P-12-05),
+      Configure pane (URL + bearer token), main capture UI (drag-drop / file picker / screenshot), and the
+      structured-toast component (D-12-18). See <a href="https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md">WP-OCR-12 v1.2-FINAL</a>.
+    </div>
+  </body>
+</html>

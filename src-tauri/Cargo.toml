@@ -1,0 +1,40 @@
+[package]
+name = "viktora-threshold"
+version = "0.1.0"
+description = "Viktora Threshold — Mac desktop capture app for Apolla workspaces (WP-OCR-12)"
+authors = ["Ross Cantrell"]
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "viktora_threshold_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client for ingest endpoint POSTs (D-12-13: from Rust shell, no Origin header)
+# rustls-tls so we don't pull in OpenSSL on macOS
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+
+# SHA-256 for deterministic documentId generation (D-OCR-06 / D-ADDIN-05 pattern: prefix + first 16 hex chars)
+sha2 = "0.10"
+hex = "0.4"
+
+# HOME directory resolution for D-12-19 OCR utility absolute-path probe
+dirs = "5"
+
+# Lenient error handling in IPC commands
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
