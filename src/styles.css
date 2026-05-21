@@ -25,6 +25,16 @@ code {
 .view { display: block; padding: 40px; }
 .view[hidden] { display: none; }
 
+/* Wizard views center their content for a focused onboarding feel */
+.wizard-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 40px;
+}
+.wizard-view[hidden] { display: none; }
+
 /* ───────── Loading screen ───────── */
 
 .spinner-shell {
@@ -36,6 +46,89 @@ code {
 .loading-text {
   color: #6e6e73;
   font-size: 14px;
+}
+
+/* ───────── Wizard card ───────── */
+
+.wizard-card {
+  max-width: 560px;
+  width: 100%;
+  text-align: center;
+  background: white;
+  border-radius: 16px;
+  padding: 48px 40px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+}
+.wizard-step {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #0071e3;
+  margin: 0 0 12px 0;
+}
+.wizard-title {
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  letter-spacing: -0.5px;
+}
+.wizard-lede {
+  font-size: 15px;
+  color: #424245;
+  margin: 0 0 24px 0;
+  line-height: 1.5;
+}
+.wizard-bullets {
+  text-align: left;
+  margin: 0 auto 32px auto;
+  padding: 0 0 0 20px;
+  max-width: 420px;
+  color: #424245;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.wizard-bullets li { margin-bottom: 4px; }
+
+.wizard-prompts {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  margin: 24px 0;
+}
+.wizard-prompt {
+  background: #f5f5f7;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 20px 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.wizard-prompt:hover {
+  background: #fafafc;
+  border-color: #d2d2d7;
+}
+.wizard-prompt:active {
+  transform: scale(0.98);
+}
+.prompt-icon {
+  font-size: 28px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+.prompt-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+.prompt-detail {
+  font-size: 11px;
+  color: #6e6e73;
 }
 
 /* ───────── App header (Configure + Main) ───────── */
@@ -111,6 +204,10 @@ code {
   border: 1px solid transparent;
   font-weight: 500;
   transition: background 0.12s, border-color 0.12s;
+}
+.btn-lg {
+  font-size: 14px;
+  padding: 10px 24px;
 }
 .btn-primary {
   background: #0071e3;
@@ -192,3 +289,15 @@ code {
   color: #1d1d1f;
   line-height: 1.5;
 }
+
+/* ───────── Status pill (reusable, replaces inline-styled spans) ───────── */
+
+.status-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.status-pill.ok { background: #e6f4ea; color: #137333; }
+.status-pill.fail { background: #fce8e6; color: #c5221f; }

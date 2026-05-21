@@ -1,24 +1,38 @@
-// Viktora Threshold — frontend router + Configure pane logic.
-// WP-OCR-12 v1.2-FINAL Phase B increment 2.
+// Viktora Threshold — frontend router + wizard + Configure pane logic.
+// WP-OCR-12 v1.2-FINAL Phase B increment 3.
 //
-// Routing model: simple hash-based view swap. We toggle the `hidden` attribute
-// on three sections (#view-loading, #view-configure, #view-main). No framework.
+// Routing model: vanilla DOM view-swapping. Five sections:
+//   #view-loading      → bootstrap
+//   #view-welcome      → wizard step 1 (first-launch only, P-12-05)
+//   #view-configure    → wizard step 2 OR standalone Configure pane
+//   #view-done         → wizard step 3 (first-launch only)
+//   #view-main         → main capture UI
 //
 // Bootstrap flow:
-//   1. Page loads → #view-loading visible
-//   2. invoke load_config → None → navigate to #view-configure (first-launch
-//      per D-12-15 + AC-11); Some(cfg) → navigate to #view-main
-//   3. Configure pane: paste URL + token → Test connection → Save → main
-//   4. Main view loads OCR utility status (D-12-19 probe result)
+//   1. invoke load_config
+//   2. None → wizard (Welcome → Configure-in-wizard → Done → Main)
+//   3. Some(cfg) → Main directly (skips wizard per AC-11)
 //
-// Subsequent increments add: wizard wrapping (3 screens), main capture UI
-// (file picker, drag-drop, screenshot subprocess), structured toast.
+// Standalone Configure (from Main's "Configure" button) skips wizard chrome
+// and offers a Back button.
 
 const tauri = window.__TAURI__;
 
+// ───────── State ─────────
+
+const state = {
+  // True while we're walking the 3-screen wizard. Determines:
+  //   • Save button label ("Next" vs "Save")
+  //   • Configure form's step-indicator visibility
+  //   • Where Save navigates next (Done vs Main)
+  inWizard: false,
+  // Cached after Save so the Done screen can transition to Main with the right cfg.
+  lastConfig: null,
+};
+
 // ───────── View routing ─────────
 
-const VIEWS = ["view-loading", "view-configure", "view-main"];
+const VIEWS = ["view-loading", "view-welcome", "view-configure", "view-done", "view-main"];
 
 function showView(id) {
   for (const v of VIEWS) {
@@ -33,7 +47,6 @@ function showView(id) {
 
 async function bootstrap() {
   if (!tauri) {
-    // Browser-preview fallback. The actual IPC commands need the Tauri runtime.
     document.getElementById("view-loading").innerHTML =
       '<div class="spinner-shell"><p class="loading-text">' +
       "No Tauri runtime — this view is only meaningful inside the bundled .app." +
@@ -46,34 +59,71 @@ async function bootstrap() {
     cfg = await tauri.core.invoke("load_config");
   } catch (err) {
     console.error("load_config failed:", err);
-    // Treat load failure as first-launch (corrupt config → start over).
     cfg = null;
   }
 
   if (cfg) {
-    // Pre-populate Configure pane in case user navigates back via "Configure"
+    // Returning user — pre-populate fields in case they hit Configure later
     document.getElementById("config-base-url").value = cfg.base_url || "";
     document.getElementById("config-bearer-token").value = cfg.bearer_token || "";
     enterMainView(cfg);
   } else {
-    enterConfigureView();
+    // First launch — start the wizard
+    enterWizardWelcome();
   }
 }
 
-// ───────── Configure pane ─────────
+// ───────── Wizard chrome ─────────
 
-function enterConfigureView() {
+function enterWizardWelcome() {
+  state.inWizard = true;
+  showView("view-welcome");
+}
+
+function enterWizardConfigure() {
+  state.inWizard = true;
+  // Show step indicator, hide back button, change Save → Next
+  document.getElementById("configure-step").removeAttribute("hidden");
+  document.getElementById("configure-title").textContent = "Connect to your workspace";
+  document.getElementById("configure-subtitle").textContent =
+    "Paste your Apolla base URL and the bearer token your server was started with.";
+  document.getElementById("btn-back-to-main").setAttribute("hidden", "");
+  document.getElementById("btn-save").textContent = "Next";
   showView("view-configure");
   document.getElementById("config-base-url").focus();
 }
+
+function enterWizardDone(cfg) {
+  state.lastConfig = cfg;
+  showView("view-done");
+}
+
+function finishWizard() {
+  state.inWizard = false;
+  enterMainView(state.lastConfig);
+}
+
+// ───────── Standalone Configure (post-onboarding) ─────────
+
+function enterStandaloneConfigure() {
+  state.inWizard = false;
+  document.getElementById("configure-step").setAttribute("hidden", "");
+  document.getElementById("configure-title").textContent = "Viktora Threshold";
+  document.getElementById("configure-subtitle").textContent =
+    "Update your Apolla workspace connection.";
+  document.getElementById("btn-back-to-main").removeAttribute("hidden");
+  document.getElementById("btn-save").textContent = "Save";
+  showView("view-configure");
+  document.getElementById("config-base-url").focus();
+}
+
+// ───────── Configure form logic (shared between wizard step 2 + standalone) ─────────
 
 function showConnectionResult(resultEl, result) {
   resultEl.removeAttribute("hidden");
   resultEl.className = "result " + (result.ok ? "ok" : "fail");
   let html = "<strong>" + (result.ok ? "✓ " : "✗ ") + escapeHtml(result.message) + "</strong>";
-  if (result.detail) {
-    html += escapeHtml(result.detail);
-  }
+  if (result.detail) html += escapeHtml(result.detail);
   resultEl.innerHTML = html;
 }
 
@@ -139,28 +189,34 @@ async function handleSave(e) {
 
   try {
     await tauri.core.invoke("save_config", { config });
-    enterMainView(config);
   } catch (err) {
     showConnectionResult(resultEl, {
       ok: false,
       message: "Failed to save configuration",
       detail: String(err),
     });
+    return;
+  }
+
+  // Navigate based on wizard vs standalone mode
+  if (state.inWizard) {
+    enterWizardDone(config);
+  } else {
+    enterMainView(config);
   }
 }
 
 // ───────── Main view ─────────
 
 async function enterMainView(cfg) {
+  state.inWizard = false;
   showView("view-main");
 
-  // Update subtitle with current connection
   const subtitleEl = document.getElementById("main-subtitle");
-  if (subtitleEl) {
+  if (subtitleEl && cfg) {
     subtitleEl.textContent = "Connected to " + cfg.base_url;
   }
 
-  // Render OCR utility status (D-12-19 probe result)
   await renderOcrStatusInMain();
 }
 
@@ -172,10 +228,12 @@ async function renderOcrStatusInMain() {
   try {
     const result = await tauri.core.invoke("get_ocr_utility_status");
     if (result.installed) {
-      statusEl.innerHTML = '<span class="result ok" style="display:inline-block;padding:3px 10px;margin:0;border-left:none;border-radius:12px;font-size:12px;">Installed</span>';
+      statusEl.innerHTML =
+        '<span class="status-pill ok">Installed</span>';
       pathEl.textContent = result.path;
     } else {
-      statusEl.innerHTML = '<span class="result fail" style="display:inline-block;padding:3px 10px;margin:0;border-left:none;border-radius:12px;font-size:12px;">Not installed</span>';
+      statusEl.innerHTML =
+        '<span class="status-pill fail">Not installed</span>';
       pathEl.textContent = result.message || "";
     }
   } catch (err) {
@@ -186,14 +244,31 @@ async function renderOcrStatusInMain() {
 // ───────── Event wiring ─────────
 
 window.addEventListener("DOMContentLoaded", () => {
+  // Wizard step 1 → step 2
+  document
+    .getElementById("btn-wizard-start")
+    .addEventListener("click", enterWizardConfigure);
+
+  // Wizard step 3 prompts — for v1, all three nav to Main (capture flows wire up in increment 4)
+  document.querySelectorAll(".wizard-prompt").forEach((btn) => {
+    btn.addEventListener("click", finishWizard);
+  });
+  document
+    .getElementById("btn-wizard-finish")
+    .addEventListener("click", finishWizard);
+
+  // Configure form
   document
     .getElementById("btn-test-connection")
     .addEventListener("click", handleTestConnection);
-
   document.getElementById("configure-form").addEventListener("submit", handleSave);
 
+  // Standalone Configure entry/exit
   document.getElementById("btn-open-configure").addEventListener("click", () => {
-    enterConfigureView();
+    enterStandaloneConfigure();
+  });
+  document.getElementById("btn-back-to-main").addEventListener("click", () => {
+    enterMainView(state.lastConfig);
   });
 
   bootstrap();

@@ -10,7 +10,7 @@
 
   <body>
     <!-- ──────────────────────────────────────────────────────────────────
-         Loading / first-launch detection view (shown before router runs)
+         Loading view (shown before bootstrap completes)
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-loading" class="view">
       <div class="spinner-shell">
@@ -19,12 +19,35 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Configure pane (also reused inside the wizard in increment 3)
+         Wizard — Screen 1: Welcome (P-12-05)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-welcome" class="view wizard-view" hidden>
+      <div class="wizard-card">
+        <p class="wizard-step">Step 1 of 3</p>
+        <h1 class="wizard-title">Welcome to Viktora Threshold</h1>
+        <p class="wizard-lede">
+          Capture documents and screenshots into your Apolla workspace.
+        </p>
+        <ul class="wizard-bullets">
+          <li>Drag and drop transcripts or notes from Finder</li>
+          <li>Pick a file with the Mac file picker</li>
+          <li>Region-select a screenshot for OCR + ingest</li>
+        </ul>
+        <button type="button" id="btn-wizard-start" class="btn btn-primary btn-lg">
+          Get started
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Wizard Screen 2 = Configure pane (also reused standalone from Main)
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-configure" class="view" hidden>
       <header class="app-header">
-        <h1>Viktora Threshold</h1>
-        <p class="subtitle">Connect to your Apolla workspace</p>
+        <p id="configure-step" class="wizard-step" hidden>Step 2 of 3</p>
+        <h1 id="configure-title">Viktora Threshold</h1>
+        <p id="configure-subtitle" class="subtitle">Connect to your Apolla workspace</p>
+        <button type="button" id="btn-back-to-main" class="btn btn-link" hidden>← Back</button>
       </header>
 
       <form id="configure-form" class="configure-form" autocomplete="off">
@@ -75,7 +98,40 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Main capture UI placeholder (full UI lands in increment 4)
+         Wizard — Screen 3: You're set up (P-12-05)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-done" class="view wizard-view" hidden>
+      <div class="wizard-card">
+        <p class="wizard-step">Step 3 of 3</p>
+        <h1 class="wizard-title">You're set up</h1>
+        <p class="wizard-lede">
+          Try your first capture by doing one of these:
+        </p>
+        <div class="wizard-prompts">
+          <button type="button" class="wizard-prompt" id="prompt-drag" data-action="drag">
+            <span class="prompt-icon">⤓</span>
+            <span class="prompt-title">Drag a file</span>
+            <span class="prompt-detail">.txt · .md · .vtt · .srt · .html</span>
+          </button>
+          <button type="button" class="wizard-prompt" id="prompt-upload" data-action="upload">
+            <span class="prompt-icon">📂</span>
+            <span class="prompt-title">Pick a file</span>
+            <span class="prompt-detail">Mac file picker</span>
+          </button>
+          <button type="button" class="wizard-prompt" id="prompt-screenshot" data-action="screenshot">
+            <span class="prompt-icon">⌗</span>
+            <span class="prompt-title">Capture a region</span>
+            <span class="prompt-detail">OCR a piece of screen</span>
+          </button>
+        </div>
+        <button type="button" id="btn-wizard-finish" class="btn btn-secondary">
+          Take me to the app
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Main capture UI placeholder (full capture flows in increment 4)
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-main" class="view" hidden>
       <header class="app-header">
@@ -91,10 +147,9 @@
       </div>
 
       <div class="placeholder">
-        <strong>Increment 2 of 5 complete.</strong> Configure pane + Test connection + config
-        persistence wired up. Next increments add the 3-screen onboarding wizard wrapper (P-12-05),
-        main capture UI (file picker / drag-drop / screenshot subprocess), structured-toast
-        component (D-12-18), and lenient response handling (D-12-17).
+        <strong>Increment 3 of 5 complete.</strong> 3-screen onboarding wizard wraps first-launch
+        flow (P-12-05). Next increments add main capture UI (file picker, drag-drop, screenshot
+        subprocess), structured-toast component (D-12-18), and lenient response handling (D-12-17).
       </div>
     </section>
   </body>
