@@ -13,10 +13,10 @@ name: ci
 # does NOT bundle DMG/MSI or attach to releases — it's strictly the
 # "does it build + do tests pass on a clean Mac runner?" check.
 #
-# Matrix is macos-latest only for now. Windows enters the matrix when
-# Phase B's Windows.Media.Ocr code lands (WP-OCR-13 §5 Phase B); adding
-# windows-latest speculatively would just fail-compile against missing
-# platform-specific deps that Phase A hasn't introduced yet.
+# Matrix is macos-latest + windows-latest as of Phase B (WP-OCR-13 §5).
+# Phase A added macos-latest; Phase B adds windows-latest now that
+# `windows`-crate / arboard / Windows.Media.Ocr deps are in place. Both
+# platform jobs run in parallel on every PR + push to main.
 
 on:
   pull_request:
@@ -35,6 +35,8 @@ jobs:
         include:
           - platform: macos-latest      # Apple Silicon runner (M-series)
             target: aarch64-apple-darwin
+          - platform: windows-latest    # Windows Server 2022 runner
+            target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
 

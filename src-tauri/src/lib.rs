@@ -24,6 +24,10 @@ use tauri::{Emitter, Manager};
 #[cfg(target_os = "macos")]
 mod ocr_mac;
 
+// WP-OCR-13 Phase B — Windows in-process OCR (D-13-03, AC-3).
+#[cfg(target_os = "windows")]
+mod ocr_windows;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Globals (D-12-02-AMEND: in-flight ingestion counter)
 // ───────────────────────────────────────────────────────────────────────────
@@ -46,8 +50,6 @@ const SHUTDOWN_MAX_WAIT: Duration = Duration::from_secs(60);
 // ───────────────────────────────────────────────────────────────────────────
 
 pub struct AppState {
-    /// D-12-19: absolute path to `ocr-capture` resolved at startup.
-    pub ocr_capture_path: Mutex<Option<PathBuf>>,
     /// Cached config for capture flows; populated on first load_config call.
     pub config: Mutex<Option<AppConfig>>,
 }
@@ -68,98 +70,6 @@ fn is_allowed_extension(path: &Path) -> bool {
     extension_lower(path)
         .map(|e| ALLOWED_EXTENSIONS.contains(&e.as_str()))
         .unwrap_or(false)
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// D-12-19 OCR utility probe
-// ───────────────────────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct OcrUtilityStatus {
-    pub installed: bool,
-    pub path: Option<String>,
-    pub message: Option<String>,
-    /// True if this platform supports screen capture at all. Currently macOS only.
-    /// Windows screen-capture support lands in Phase Win-2 (FN-OCR-12-07) via
-    /// ms-screenclip: invocation + Windows.Media.Ocr in-process.
-    pub screen_capture_supported: bool,
-    /// Operating system identifier for UI conditional rendering.
-    pub platform: String,
-}
-
-/// D-12-19 — macOS GUI-launched .app bundles inherit a minimal launchd PATH
-/// that excludes ~/.local/bin / /opt/homebrew/bin / /usr/local/bin. Probe
-/// absolute paths at startup, bypassing PATH resolution.
-///
-/// On Windows, this returns None — screen-capture support there is planned
-/// for Phase Win-2 (FN-OCR-12-07) and uses an in-process approach
-/// (ms-screenclip: URI + Windows.Media.Ocr) rather than a subprocess to
-/// a separate OCR utility binary.
-#[cfg(target_os = "macos")]
-fn probe_ocr_capture() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let candidates = [
-        home.join(".local").join("bin").join("ocr-capture"),
-        PathBuf::from("/opt/homebrew/bin/ocr-capture"),
-        PathBuf::from("/usr/local/bin/ocr-capture"),
-    ];
-    for candidate in &candidates {
-        if candidate.is_file() {
-            log::info!("D-12-19 probe: ocr-capture found at {}", candidate.display());
-            return Some(candidate.clone());
-        }
-    }
-    log::warn!("D-12-19 probe: ocr-capture not found at any canonical location");
-    None
-}
-
-#[cfg(not(target_os = "macos"))]
-fn probe_ocr_capture() -> Option<PathBuf> {
-    log::info!("D-12-19 probe: skipped on non-macOS platform");
-    None
-}
-
-#[tauri::command]
-fn get_ocr_utility_status(state: tauri::State<AppState>) -> OcrUtilityStatus {
-    let guard = state.ocr_capture_path.lock().expect("AppState mutex poisoned");
-    let platform = if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(target_os = "windows") {
-        "windows"
-    } else {
-        "other"
-    };
-    let screen_capture_supported = cfg!(target_os = "macos");
-
-    match &*guard {
-        Some(p) => OcrUtilityStatus {
-            installed: true,
-            path: Some(p.to_string_lossy().into_owned()),
-            message: None,
-            screen_capture_supported: true,
-            platform: platform.into(),
-        },
-        None => {
-            let message = if cfg!(target_os = "macos") {
-                "OCR utility not installed. Run `bash setup.sh` from the viktora-threshold repo \
-                 to install it via pipx, then restart Viktora Threshold."
-                    .to_string()
-            } else if cfg!(target_os = "windows") {
-                "Screen capture is coming to Windows in v0.2 (FN-OCR-12-07). \
-                 File upload and drag-drop work normally."
-                    .to_string()
-            } else {
-                "Screen capture is not supported on this platform.".to_string()
-            };
-            OcrUtilityStatus {
-                installed: false,
-                path: None,
-                message: Some(message),
-                screen_capture_supported,
-                platform: platform.into(),
-            }
-        }
-    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -639,16 +549,16 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
 // Capture Screen — WP-OCR-13 v0.2 native in-process OCR
 // ───────────────────────────────────────────────────────────────────────────
 //
-// Mac: `/usr/sbin/screencapture -i` for the region crosshair (D-13-04), then
-//      Vision framework in-process for OCR (D-13-02 via objc2-vision). No
-//      external utility involvement.
-// Windows: lands in Phase B (D-13-03/05 — `ms-screenclip:` + Windows.Media.Ocr).
-// Other: file upload + drag-drop still work; Capture Screen returns a
-//      structured "not supported on this platform" toast.
+// Mac:     `/usr/sbin/screencapture -i` for the region crosshair (D-13-04),
+//          then Vision framework in-process for OCR (D-13-02 via objc2-vision).
+// Windows: `ms-screenclip:` URI for the snipping crosshair (D-13-05), then
+//          Windows.Media.Ocr in-process (D-13-03 via the `windows` crate).
+// Other:   file upload + drag-drop still work; Capture Screen returns a
+//          structured "not supported on this platform" toast.
 
 /// Capture a region from the screen and POST the OCR'd text to the configured
-/// Apolla backend. Platform dispatch lives inside; see ocr_mac for the Mac
-/// implementation.
+/// Apolla backend. Platform dispatch lives inside; see ocr_mac / ocr_windows
+/// for the per-platform implementations.
 #[tauri::command]
 async fn run_screen_capture(
     app_handle: tauri::AppHandle,
@@ -659,26 +569,31 @@ async fn run_screen_capture(
     #[cfg(target_os = "macos")]
     {
         run_screen_capture_mac(app_handle, cfg).await;
-        Ok(())
+        return Ok(());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        run_screen_capture_windows(app_handle, cfg).await;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = app_handle.emit(
             "threshold://toast",
             IngestionOutcome {
                 kind: "failure".into(),
-                title: "Screen capture not yet supported on this platform".into(),
+                title: "Screen capture not supported on this platform".into(),
                 body: Some(
-                    "Native in-process OCR for this platform is planned for a future Threshold release. \
-                     File upload + drag-drop work today."
+                    "Native in-process OCR is available on macOS + Windows. \
+                     File upload + drag-drop work everywhere."
                         .into(),
                 ),
                 source_path: Some("__screen_capture__".into()),
             },
         );
-        // `cfg` is unused on non-Mac platforms; bind it to a temp so the
-        // compiler doesn't flag the parameter when this arm is selected.
+        // `cfg` is unused on platforms that don't dispatch into a backend.
         let _ = cfg;
         Ok(())
     }
@@ -740,6 +655,84 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
     let _ = app_handle.emit("threshold://toast", outcome);
 }
 
+/// Windows-side capture pipeline: `ms-screenclip:` URI (D-13-05) + arboard
+/// clipboard polling (D-13-06) + Windows.Media.Ocr in-process (D-13-03).
+/// Wraps the synchronous capture in `tokio::task::spawn_blocking` so the
+/// 60s clipboard poll doesn't stall the tokio runtime.
+#[cfg(target_os = "windows")]
+async fn run_screen_capture_windows(app_handle: tauri::AppHandle, cfg: AppConfig) {
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+
+    let capture_outcome = tokio::task::spawn_blocking(ocr_windows::capture_and_ocr_windows)
+        .await
+        .unwrap_or_else(|join_err| {
+            Err(ocr_windows::CaptureError::OcrFailed(format!(
+                "blocking task panicked: {join_err}"
+            )))
+        });
+
+    let outcome = match capture_outcome {
+        Ok(result) if result.text.trim().is_empty() => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Capture had no text".into(),
+            body: Some(
+                "Windows.Media.Ocr returned no recognizable text in the selected region."
+                    .into(),
+            ),
+            source_path: Some("__screen_capture__".into()),
+        },
+        Ok(result) => {
+            // AC-19 payload literals — same shape + values as the Mac path
+            // (build_screenshot_payload is platform-agnostic by design).
+            let payload = build_screenshot_payload(&result.text, &result.source_app);
+            post_payload_to_apolla(
+                payload,
+                &cfg,
+                "screen capture",
+                Some("__screen_capture__".into()),
+            )
+            .await
+        }
+        Err(ocr_windows::CaptureError::Timeout) => IngestionOutcome {
+            kind: "failure".into(),
+            // AC-8 Windows wording.
+            title: "Capture timed out — did you cancel?".into(),
+            body: Some(
+                "No image landed on the clipboard within 60 seconds. \
+                 If you started a snip but didn't release, try again."
+                    .into(),
+            ),
+            source_path: Some("__screen_capture__".into()),
+        },
+        Err(ocr_windows::CaptureError::SnipLaunchFailed(code)) => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Couldn't open the Snipping Tool".into(),
+            // D-13-12: ms-screenclip: URI requires Win10 May 2020 update or later.
+            body: Some(format!(
+                "ShellExecuteW returned {code}. \
+                 Capture Screen requires Windows 10 May 2020 update (build 19041) or later \
+                 — please update Windows, or use file upload / drag-drop in the meantime."
+            )),
+            source_path: Some("__screen_capture__".into()),
+        },
+        Err(ocr_windows::CaptureError::ClipboardError(msg)) => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Clipboard access failed".into(),
+            body: Some(format!("{msg}. Try again, or restart Threshold.")),
+            source_path: Some("__screen_capture__".into()),
+        },
+        Err(ocr_windows::CaptureError::OcrFailed(msg)) => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Capture failed".into(),
+            body: Some(msg),
+            source_path: Some("__screen_capture__".into()),
+        },
+    };
+
+    IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    let _ = app_handle.emit("threshold://toast", outcome);
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // D-12-02-AMEND: wait for in-flight ingestions before exit
 // ───────────────────────────────────────────────────────────────────────────
@@ -791,9 +784,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let ocr_path = probe_ocr_capture();
+            // WP-OCR-13 v0.2: in-process Vision (Mac) / Windows.Media.Ocr (Windows)
+            // replaces the v0.1 D-12-19 startup probe for `~/.local/bin/ocr-capture`.
+            // AppState's only remaining field is the cached config — populated on
+            // first `load_config` IPC call, not at startup.
             app.manage(AppState {
-                ocr_capture_path: Mutex::new(ocr_path),
                 config: Mutex::new(None),
             });
             Ok(())
@@ -829,7 +824,6 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            get_ocr_utility_status,
             load_config,
             save_config,
             test_connection,

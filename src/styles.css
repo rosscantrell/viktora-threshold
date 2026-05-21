@@ -370,15 +370,6 @@ code {
 }
 .drop-icon { font-size: 16px; }
 
-/* Compact panel variant for Main view's OCR status (less vertical space than the original) */
-.panel-compact {
-  padding: 14px 18px;
-}
-.panel-compact h2 {
-  margin: 0 0 6px 0;
-  font-size: 13px;
-}
-
 /* ───────── Full-window drag-drop overlay ───────── */
 
 .drop-overlay {
