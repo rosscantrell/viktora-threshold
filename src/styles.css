@@ -440,6 +440,7 @@ code {
 .toast-success { border-left-color: #34a853; }
 .toast-idempotent { border-left-color: #fbbc04; }
 .toast-failure { border-left-color: #ea4335; }
+.toast-pending { border-left-color: #0071e3; }
 
 .toast-leaving { animation: toast-leave 0.2s ease-in forwards; }
 
@@ -461,6 +462,12 @@ code {
 .toast-success .toast-icon { color: #137333; }
 .toast-idempotent .toast-icon { color: #b06000; }
 .toast-failure .toast-icon { color: #c5221f; }
+.toast-pending .toast-icon { color: #0071e3; animation: spin 1.5s linear infinite; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 .toast-text {
   flex: 1;

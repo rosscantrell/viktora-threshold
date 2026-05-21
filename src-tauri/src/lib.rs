@@ -491,9 +491,7 @@ async fn ingest_files(
 }
 
 /// Open the native macOS file picker (NSOpenPanel via tauri-plugin-dialog)
-/// filtered to the plain-text extensions in ALLOWED_EXTENSIONS. Returns the
-/// list of chosen paths (empty if user cancelled). Frontend then invokes
-/// `ingest_files` with the returned paths.
+/// filtered to the plain-text extensions in ALLOWED_EXTENSIONS.
 #[tauri::command]
 async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
     use tauri_plugin_dialog::DialogExt;
@@ -503,10 +501,7 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
     app_handle
         .dialog()
         .file()
-        .add_filter(
-            "Plain-text formats",
-            &["txt", "md", "vtt", "srt", "html"],
-        )
+        .add_filter("Plain-text formats", &["txt", "md", "vtt", "srt", "html"])
         .pick_files(move |paths| {
             let _ = tx.send(paths);
         });
@@ -517,6 +512,149 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
         .filter_map(|fp| fp.into_path().ok())
         .filter_map(|pb| pb.to_str().map(String::from))
         .collect()
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Increment 5: Capture Screen via OCR utility subprocess (D-12-19 cached path)
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Spawn the OCR utility (`ocr-capture --once --region`) using the absolute
+/// path cached at startup via D-12-19. The utility handles capture + OCR + POST
+/// itself; we just parse its stdout for the outcome line and emit a toast.
+#[tauri::command]
+async fn run_screen_capture(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let cfg = current_config(&state)?;
+    let ocr_path = state
+        .ocr_capture_path
+        .lock()
+        .expect("ocr_capture_path mutex poisoned")
+        .clone();
+
+    let ocr_binary = match ocr_path {
+        Some(p) => p,
+        None => {
+            let _ = app_handle.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "OCR utility not installed".into(),
+                    body: Some(
+                        "Run `bash setup.sh` from the viktora-threshold repo to install it via pipx, \
+                         then restart Viktora Threshold."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return Ok(());
+        }
+    };
+
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+
+    // The subprocess can take 10-30s (region select + OCR + POST + extraction).
+    // We don't apply a wrapper timeout here — `ocr-capture` has its own 60s
+    // POST timeout per WP-OCR-01 internals.
+    let result = tokio::process::Command::new(&ocr_binary)
+        .args(["--once", "--region"])
+        .env("APOLLA_BASE_URL", &cfg.base_url)
+        .env("APOLLA_INGEST_TOKEN", &cfg.bearer_token)
+        .output()
+        .await;
+
+    IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+
+    let outcome = parse_screen_capture_outcome(result);
+    let _ = app_handle.emit("threshold://toast", outcome);
+    Ok(())
+}
+
+/// Pure helper that parses the OCR utility's subprocess output into an
+/// IngestionOutcome. Extracted for unit testability.
+fn parse_screen_capture_outcome(
+    result: std::io::Result<std::process::Output>,
+) -> IngestionOutcome {
+    match result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // OCR utility stdout formats (per WP-OCR-01 + WP-OCR-03):
+            //   "✓ Captured: <title> | terms: <N>"           — new full-window
+            //   "✓ Captured [region]: <title> | terms: <N>"  — new region
+            //   "↺ Already captured: <title>"                — idempotent
+            //   "↺ Already captured [region]: <title>"
+            //   "… region capture cancelled: …"              — user pressed Esc
+            //   "✗ …"                                        — capture/OCR/POST failed
+            // Case-insensitive match so we catch both "Captured" (new) and
+            // "Already captured" (idempotent) — the OCR utility uses different
+            // capitalization for the two paths per WP-OCR-01 + WP-OCR-03 README.
+            let last_status_line = stdout
+                .lines()
+                .rev()
+                .find(|l| {
+                    let lower = l.to_lowercase();
+                    lower.contains("captured") || lower.contains("cancelled") || l.starts_with("✗")
+                })
+                .unwrap_or("")
+                .trim()
+                .to_string();
+
+            if last_status_line.contains("Already captured") {
+                IngestionOutcome {
+                    kind: "idempotent".into(),
+                    title: last_status_line,
+                    body: None,
+                    source_path: Some("__screen_capture__".into()),
+                }
+            } else if last_status_line.contains("cancelled") {
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "Region capture cancelled".into(),
+                    body: Some("You pressed Esc during region select. No capture sent.".into()),
+                    source_path: Some("__screen_capture__".into()),
+                }
+            } else if last_status_line.starts_with("✗") {
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "Capture failed".into(),
+                    body: Some(last_status_line),
+                    source_path: Some("__screen_capture__".into()),
+                }
+            } else if last_status_line.contains("Captured") {
+                IngestionOutcome {
+                    kind: "success".into(),
+                    title: last_status_line,
+                    body: None,
+                    source_path: Some("__screen_capture__".into()),
+                }
+            } else {
+                // Subprocess returned 0 but emitted nothing parseable
+                IngestionOutcome {
+                    kind: "success".into(),
+                    title: "Screen captured".into(),
+                    body: Some(stdout.trim().to_string()),
+                    source_path: Some("__screen_capture__".into()),
+                }
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("Capture failed (exit {})", out.status.code().unwrap_or(-1)),
+                body: Some(stderr.lines().last().unwrap_or("").trim().to_string()),
+                source_path: Some("__screen_capture__".into()),
+            }
+        }
+        Err(e) => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Couldn't spawn OCR utility".into(),
+            body: Some(format!("{}", e)),
+            source_path: Some("__screen_capture__".into()),
+        },
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -613,8 +751,227 @@ pub fn run() {
             save_config,
             test_connection,
             ingest_files,
-            pick_files
+            pick_files,
+            run_screen_capture
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Unit tests (Phase B AC-15)
+// ───────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+    use std::path::Path;
+    use std::process::{ExitStatus, Output};
+
+    // ───── documentId generation (D-OCR-06 / D-ADDIN-05 convention) ─────
+
+    #[test]
+    fn document_id_is_deterministic() {
+        let id1 = compute_document_id("hello world");
+        let id2 = compute_document_id("hello world");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn document_id_uses_desktop_prefix_and_16_hex_chars() {
+        let id = compute_document_id("hello world");
+        assert!(id.starts_with("DESKTOP-"));
+        assert_eq!(id.len(), "DESKTOP-".len() + 16);
+        // After the prefix, only hex chars
+        let suffix = &id["DESKTOP-".len()..];
+        assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn document_id_changes_with_content() {
+        let id1 = compute_document_id("hello world");
+        let id2 = compute_document_id("hello world!");
+        assert_ne!(id1, id2);
+    }
+
+    // ───── Extension allow-list (D-12-05) ─────
+
+    #[test]
+    fn allowed_extensions_accept_lowercase() {
+        for ext in &["txt", "md", "vtt", "srt", "html"] {
+            let path = format!("test.{}", ext);
+            assert!(
+                is_allowed_extension(Path::new(&path)),
+                "Expected .{} to be allowed",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_extensions_accept_uppercase() {
+        for ext in &["TXT", "MD", "VTT", "SRT", "HTML"] {
+            let path = format!("test.{}", ext);
+            assert!(
+                is_allowed_extension(Path::new(&path)),
+                "Expected .{} to be allowed (case-insensitive)",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_extensions_reject_unsupported() {
+        for ext in &["docx", "pdf", "jpg", "png", "xlsx", "pptx"] {
+            let path = format!("test.{}", ext);
+            assert!(
+                !is_allowed_extension(Path::new(&path)),
+                "Expected .{} to be rejected",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_extensions_reject_no_extension() {
+        assert!(!is_allowed_extension(Path::new("README")));
+        assert!(!is_allowed_extension(Path::new("path/to/file")));
+    }
+
+    // ───── D-12-17 lenient response deserialization (AC-14) ─────
+
+    #[test]
+    fn lenient_response_accepts_extra_unknown_fields() {
+        let json = r#"{
+            "indexed": true,
+            "alreadyExisted": false,
+            "termsExtracted": ["alpha", "beta"],
+            "title": "test doc",
+            "marker": { "future": "v2 field" },
+            "someOtherUnknown": 42
+        }"#;
+        let parsed: IngestServerResponse =
+            serde_json::from_str(json).expect("Lenient deserialization should not error");
+        assert_eq!(parsed.indexed, Some(true));
+        assert_eq!(parsed.already_existed, Some(false));
+        assert_eq!(
+            parsed.terms_extracted,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
+        assert_eq!(parsed.title, Some("test doc".to_string()));
+        // Unknown 'marker' and 'someOtherUnknown' fields silently ignored
+    }
+
+    #[test]
+    fn lenient_response_handles_missing_fields() {
+        let json = r#"{"indexed": true}"#;
+        let parsed: IngestServerResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(parsed.indexed, Some(true));
+        assert_eq!(parsed.already_existed, None);
+        assert_eq!(parsed.terms_extracted, None);
+        assert_eq!(parsed.title, None);
+    }
+
+    #[test]
+    fn lenient_response_handles_empty_object() {
+        let parsed: IngestServerResponse =
+            serde_json::from_str("{}").expect("empty object should parse");
+        assert_eq!(parsed.indexed, None);
+        assert_eq!(parsed.already_existed, None);
+        assert_eq!(parsed.terms_extracted, None);
+    }
+
+    // ───── AppConfig defaults ─────
+
+    #[test]
+    fn config_default_uses_localhost_and_workspace_mode() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.base_url, "http://localhost:3001");
+        assert_eq!(cfg.mode, "workspace");
+        assert!(cfg.bearer_token.is_empty());
+        assert!(cfg.last_used.is_none());
+    }
+
+    #[test]
+    fn config_round_trips_through_json() {
+        let cfg = AppConfig {
+            base_url: "https://hosted.viktora.ai".to_string(),
+            bearer_token: "test-token-123".to_string(),
+            last_used: Some("2026-05-21T16:00:00Z".to_string()),
+            mode: "workspace".to_string(),
+        };
+        let json = serde_json::to_string(&cfg).expect("should serialize");
+        let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(parsed.base_url, cfg.base_url);
+        assert_eq!(parsed.bearer_token, cfg.bearer_token);
+        assert_eq!(parsed.last_used, cfg.last_used);
+        assert_eq!(parsed.mode, cfg.mode);
+    }
+
+    // ───── Screen-capture outcome parser ─────
+
+    fn make_output(stdout: &str, stderr: &str, exit_code: i32) -> std::io::Result<Output> {
+        Ok(Output {
+            status: ExitStatus::from_raw(exit_code << 8), // shifted because the lower 8 bits are signal info
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        })
+    }
+
+    #[test]
+    fn parse_screen_capture_success_full_window() {
+        let result = make_output("✓ Captured: My Document | terms: 42\n", "", 0);
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "success");
+        assert!(outcome.title.contains("My Document"));
+    }
+
+    #[test]
+    fn parse_screen_capture_success_region() {
+        let result = make_output("✓ Captured [region]: Slack thread | terms: 18\n", "", 0);
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "success");
+        assert!(outcome.title.contains("Slack thread"));
+        assert!(outcome.title.contains("[region]"));
+    }
+
+    #[test]
+    fn parse_screen_capture_idempotent() {
+        let result = make_output("↺ Already captured [region]: README\n", "", 0);
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "idempotent");
+        assert!(outcome.title.contains("Already captured"));
+    }
+
+    #[test]
+    fn parse_screen_capture_user_cancelled() {
+        let result = make_output(
+            "… region capture cancelled: user pressed Esc\n",
+            "",
+            0,
+        );
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "failure");
+        assert!(outcome.title.contains("cancelled"));
+    }
+
+    #[test]
+    fn parse_screen_capture_nonzero_exit_code() {
+        let result = make_output("", "Vision OCR returned empty\n", 1);
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "failure");
+        assert!(outcome.title.contains("exit 1"));
+    }
+
+    #[test]
+    fn parse_screen_capture_spawn_error() {
+        let result = Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "binary missing",
+        ));
+        let outcome = parse_screen_capture_outcome(result);
+        assert_eq!(outcome.kind, "failure");
+        assert!(outcome.title.contains("Couldn't spawn"));
+    }
 }

@@ -25,6 +25,11 @@ const state = {
   lastConfig: null,
 };
 
+// Maps source_path → pending toast ID so we can dismiss the pre-flight toast
+// when the response toast arrives. Screen captures use the special key
+// "__screen_capture__" which the Rust shell also stamps onto the outcome.
+const pendingToasts = new Map();
+
 // ───────── View routing ─────────
 
 const VIEWS = ["view-loading", "view-welcome", "view-configure", "view-done", "view-main"];
@@ -72,20 +77,39 @@ async function bootstrap() {
 // ───────── Backend event subscriptions ─────────
 
 async function wireBackendEvents() {
-  // D-12-18 toast events from any ingestion outcome
+  // D-12-18 toast events from any ingestion outcome.
+  // Pre-flight "Uploading…" toasts (registered in pendingToasts by source_path)
+  // are dismissed when the matching response toast arrives.
   await tauri.event.listen("threshold://toast", (event) => {
     const payload = event.payload || {};
+    if (payload.source_path && pendingToasts.has(payload.source_path)) {
+      const pendingId = pendingToasts.get(payload.source_path);
+      pendingToasts.delete(payload.source_path);
+      dismissToast(pendingId);
+    }
     showToast(payload);
   });
 
-  // Drag-drop paths from WindowEvent::DragDrop in the Rust shell
+  // Drag-drop paths from WindowEvent::DragDrop in the Rust shell.
+  // Emit a pre-flight toast per dropped path, then kick off ingestion.
   await tauri.event.listen("threshold://drop-paths", async (event) => {
     const paths = event.payload || [];
     hideDropOverlay();
     if (paths.length === 0) return;
+    for (const path of paths) {
+      emitPreflightToast(path);
+    }
     try {
       await tauri.core.invoke("ingest_files", { paths });
     } catch (err) {
+      // The IPC itself failed (rare — usually means current_config errored).
+      // Dismiss all pending and show one failure toast.
+      for (const path of paths) {
+        if (pendingToasts.has(path)) {
+          dismissToast(pendingToasts.get(path));
+          pendingToasts.delete(path);
+        }
+      }
       showToast({
         kind: "failure",
         title: "Drag-drop ingestion failed",
@@ -262,8 +286,19 @@ async function handleUploadFile() {
   try {
     const paths = await tauri.core.invoke("pick_files");
     if (!paths || paths.length === 0) return; // user cancelled
+
+    // Emit a pre-flight toast for each chosen file
+    for (const path of paths) {
+      emitPreflightToast(path);
+    }
+
     await tauri.core.invoke("ingest_files", { paths });
   } catch (err) {
+    // Dismiss any pending pre-flight toasts before showing the error
+    for (const [path, id] of pendingToasts.entries()) {
+      dismissToast(id);
+      pendingToasts.delete(path);
+    }
     showToast({
       kind: "failure",
       title: "File upload failed",
@@ -272,13 +307,49 @@ async function handleUploadFile() {
   }
 }
 
-function handleCaptureScreen() {
-  // Stub until increment 5 — the actual screenshot subprocess wiring lands then.
-  showToast({
-    kind: "failure",
-    title: "Capture Screen coming in increment 5",
-    body: "The OCR utility subprocess wiring + cached D-12-19 path will be hooked up next.",
+async function handleCaptureScreen() {
+  // Pre-flight toast — visible after region select while OCR + POST run
+  emitPreflightToast("__screen_capture__", {
+    title: "Capturing screen…",
+    body: "Drag a region; OCR + ingest will follow.",
   });
+  try {
+    await tauri.core.invoke("run_screen_capture");
+  } catch (err) {
+    // Dismiss the pre-flight toast and show the failure
+    if (pendingToasts.has("__screen_capture__")) {
+      dismissToast(pendingToasts.get("__screen_capture__"));
+      pendingToasts.delete("__screen_capture__");
+    }
+    showToast({
+      kind: "failure",
+      title: "Couldn't start screen capture",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Emit a pre-flight "pending" toast. Registers its ID in pendingToasts keyed
+ * by source_path so the response toast can dismiss it when ingestion completes.
+ *
+ * @param {string} key - source_path or "__screen_capture__"
+ * @param {object} [override] - optional {title, body} override
+ */
+function emitPreflightToast(key, override) {
+  const filename = key === "__screen_capture__" ? null : basename(key);
+  const id = showToast({
+    kind: "pending",
+    title: override?.title ?? "Uploading " + filename,
+    body: override?.body ?? "Sending to Apolla. Extraction usually takes 10-15s.",
+    sticky: true,
+  });
+  pendingToasts.set(key, id);
+}
+
+function basename(path) {
+  const parts = String(path).split("/");
+  return parts[parts.length - 1] || path;
 }
 
 // ───────── Drag-drop visual overlay ─────────
@@ -322,21 +393,39 @@ function wireDragVisuals() {
 const TOAST_AUTO_DISMISS_MS = 5000;
 let toastIdCounter = 0;
 
+/**
+ * Render a structured toast (D-12-18). Returns the toast's DOM id so callers
+ * (e.g. pre-flight pending toasts) can dismiss it later.
+ *
+ * Payload shape:
+ *   { kind, title, body?, cta?, sticky? }
+ *
+ * kind ∈ {"success", "idempotent", "failure", "pending"}
+ * sticky=true → no auto-dismiss (must be dismissed by caller or close button)
+ */
 function showToast(payload) {
   const stack = document.getElementById("toast-stack");
-  if (!stack) return;
+  if (!stack) return null;
 
   const kind = payload.kind || "success";
   const title = payload.title || "";
   const body = payload.body || "";
   const cta = payload.cta || null; // {label, action} — reserved for v2 marker tidbit
+  const sticky = !!payload.sticky;
 
   const id = "toast-" + ++toastIdCounter;
   const toast = document.createElement("div");
   toast.className = "toast toast-" + kind;
   toast.id = id;
 
-  const iconChar = kind === "success" ? "✓" : kind === "idempotent" ? "↺" : "✗";
+  const iconChar =
+    kind === "success"
+      ? "✓"
+      : kind === "idempotent"
+        ? "↺"
+        : kind === "pending"
+          ? "⟳"
+          : "✗";
 
   toast.innerHTML = `
     <span class="toast-icon">${iconChar}</span>
@@ -358,15 +447,17 @@ function showToast(payload) {
   if (cta) {
     toast.querySelector(".toast-cta").addEventListener("click", () => {
       console.log("toast CTA clicked:", cta);
-      // v2: navigate to /marker/:id or wherever cta.action points
       dismissToast(id);
     });
   }
 
   stack.appendChild(toast);
 
-  // Auto-dismiss after TOAST_AUTO_DISMISS_MS
-  setTimeout(() => dismissToast(id), TOAST_AUTO_DISMISS_MS);
+  if (!sticky) {
+    setTimeout(() => dismissToast(id), TOAST_AUTO_DISMISS_MS);
+  }
+
+  return id;
 }
 
 function dismissToast(id) {
