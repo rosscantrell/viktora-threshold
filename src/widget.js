@@ -47,51 +47,70 @@ async function init() {
 // ───────────────────────────────────────────────────────────────────────────
 //
 // Tauri 2's `data-tauri-drag-region` attribute didn't reliably register
-// mousedown for drag on this widget config (100x100, decorations:false,
-// transparent:true, focus:false, alwaysOnTop:true). Empirically verified
+// mousedown for drag on this widget config. Empirically verified
 // 2026-05-21: drag fired from neither button nor border ring.
 //
-// Fallback: pure-JS movement-threshold heuristic. Tracks screen coords on
-// mousedown; if mouse moves > DRAG_THRESHOLD_PX before mouseup, invoke
-// the native `startDragging()` API on the current window. The browser-side
-// click event still fires on the button when no drag was initiated, so
-// capture-on-click keeps working.
+// Fallback v1 (JS startDragging API) ALSO failed empirically — possibly
+// because `tauri.window.getCurrentWindow()` isn't exposed via
+// `withGlobalTauri: true`, or because the Tauri 2 API path differs from
+// what we tried.
 //
-// Threshold of 4px is tight enough to feel responsive but loose enough to
-// absorb hand jitter on a fast tap. Tuneable in Phase 2 if pilot empirical
-// suggests otherwise.
+// Fallback v2 (current): pure-JS movement-threshold heuristic that
+// invokes a custom Rust IPC command `widget_start_drag`. The Rust side
+// has direct access to the `tauri::Window` handle and calls
+// `window.start_dragging()` from there. More robust than any JS-side path.
+// Diagnostic logging is intentionally loud so console output during
+// smoke can tell us which step (if any) is failing.
 
 const DRAG_THRESHOLD_PX = 4;
 let mouseDownAt = null;
 let dragInitiated = false;
 
-window.addEventListener("mousedown", (e) => {
+// Diagnostic — surface what's actually on `window.__TAURI__` for this build.
+console.log("[widget-spike] __TAURI__ keys:", Object.keys(window.__TAURI__ || {}));
+console.log("[widget-spike] __TAURI__.window:", window.__TAURI__?.window);
+
+document.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return; // left button only
   mouseDownAt = { x: e.screenX, y: e.screenY };
   dragInitiated = false;
+  console.log("[widget-spike] mousedown at", mouseDownAt.x, mouseDownAt.y);
 });
 
-window.addEventListener("mousemove", async (e) => {
+document.addEventListener("mousemove", async (e) => {
   if (!mouseDownAt || dragInitiated) return;
   const dx = e.screenX - mouseDownAt.x;
   const dy = e.screenY - mouseDownAt.y;
-  if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
+  const dist = Math.hypot(dx, dy);
+  if (dist > DRAG_THRESHOLD_PX) {
     dragInitiated = true;
+    console.log("[widget-spike] mousemove crossed threshold (", dist.toFixed(1), "px) — invoking widget_start_drag");
     try {
-      const win = tauri.window.getCurrentWindow();
-      await win.startDragging();
-      console.log("[widget-spike] startDragging fired");
+      await invoke("widget_start_drag");
+      console.log("[widget-spike] widget_start_drag returned");
     } catch (err) {
-      console.error("[widget-spike] startDragging failed:", err);
+      console.error("[widget-spike] widget_start_drag failed:", err);
+      // Also try the JS API path as a last-ditch — log either way.
+      try {
+        const win = tauri.window?.getCurrentWindow?.();
+        if (win) {
+          await win.startDragging();
+          console.log("[widget-spike] JS startDragging fired (fallback path)");
+        } else {
+          console.warn("[widget-spike] no tauri.window.getCurrentWindow available");
+        }
+      } catch (jsErr) {
+        console.error("[widget-spike] JS startDragging also failed:", jsErr);
+      }
     }
   }
 });
 
-window.addEventListener("mouseup", () => {
+document.addEventListener("mouseup", () => {
+  if (mouseDownAt) {
+    console.log("[widget-spike] mouseup (drag=", dragInitiated, ")");
+  }
   mouseDownAt = null;
-  // Defer clearing dragInitiated by one tick so the click handler can
-  // check it and bail out. Browsers fire mouseup → click in that order;
-  // a 0ms setTimeout puts the reset after the click handler.
   setTimeout(() => {
     dragInitiated = false;
   }, 0);

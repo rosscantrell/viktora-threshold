@@ -556,6 +556,22 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
 // Other:   file upload + drag-drop still work; Capture Screen returns a
 //          structured "not supported on this platform" toast.
 
+/// Start a native window drag for the widget. Phase 1 spike fallback for
+/// S-CUX-05 — the JS-side `getCurrentWindow().startDragging()` path was
+/// empirically unreliable on the widget config (Mac, focus:false +
+/// transparent:true + decorations:false + alwaysOnTop:true). Going through
+/// Rust gives us direct access to the window handle.
+///
+/// Called from widget.js once the JS mousemove heuristic decides the user
+/// is dragging (displacement > threshold). Returns Ok(()) on success;
+/// returns the error string if start_dragging fails.
+#[tauri::command]
+fn widget_start_drag(window: tauri::Window) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|e| format!("start_dragging failed: {}", e))
+}
+
 /// Capture a region from the screen and POST the OCR'd text to the configured
 /// Apolla backend. Platform dispatch lives inside; see ocr_mac / ocr_windows
 /// for the per-platform implementations.
@@ -829,7 +845,8 @@ pub fn run() {
             test_connection,
             ingest_files,
             pick_files,
-            run_screen_capture
+            run_screen_capture,
+            widget_start_drag
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
