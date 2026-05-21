@@ -668,12 +668,15 @@ fn build_widget_menu(
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
 
-    // Debug-only Open Console item — strip in release builds via
-    // `cfg!(debug_assertions)`. Lets developers (and Ross during pilot)
-    // open the webview's devtools without fighting AppKit/Win32 for the
-    // default "Inspect Element" context-menu option (we override it
-    // wholesale with this menu).
-    if cfg!(debug_assertions) {
+    // Debug-only Open Console item — strip in release builds via the
+    // `#[cfg(debug_assertions)]` attribute (NOT the runtime `cfg!()`
+    // macro — that one still compiles the body, which would fail to
+    // resolve the cfg-gated `MENU_DEVTOOLS` constant in release builds).
+    // Lets developers (and Ross during pilot) open the webview's
+    // devtools without fighting AppKit/Win32 for the default "Inspect
+    // Element" context-menu option (we override it wholesale).
+    #[cfg(debug_assertions)]
+    {
         let devtools = MenuItem::with_id(app, MENU_DEVTOOLS, "Open Console", true, None::<&str>)?;
         let sep_dev = PredefinedMenuItem::separator(app)?;
         return Menu::with_items(
@@ -692,6 +695,7 @@ fn build_widget_menu(
         );
     }
 
+    #[allow(unreachable_code)]
     Menu::with_items(
         app,
         &[
