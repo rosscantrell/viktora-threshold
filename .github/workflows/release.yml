@@ -83,9 +83,9 @@ jobs:
 
             ## Known limitations
 
-            - **Unsigned binaries** — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install. Code-signing tracked in v0.3+ (FN-OCR-13-02 + FN-OCR-13-03).
+            - **Unsigned binaries** — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install. Code-signing tracked in FN-OCR-13-02 + FN-OCR-13-03.
             - **Plain-text formats only** for file upload + drag-drop: `.txt`, `.md`, `.vtt`, `.srt`, `.html`. Rich formats (`.docx`, `.pdf`, `.pptx`) tracked in FN-OCR-12-02.
-            - **`sourceApp` ships empty on screen captures** (FN-OCR-13-12). The click-driven Capture Screen flow makes Threshold the frontmost app at the moment of capture, so the pre-invocation lookup resolves to Threshold itself; the self-filter then maps it to `""` rather than ship misleading data. Symmetric across Mac + Windows. Architectural fix (NSWorkspace-activation-observer on Mac; equivalent on Windows) tracked in the compact-UX workstream for v0.3+.
+            - **`sourceApp` ships empty on Mac screen captures** (asymmetric finding from v0.3 widget rollout). The Mac widget click activates Threshold momentarily despite the v0.3 widget UX; the Mac `is_threshold_own_bundle_id` filter maps the self-reference to `""` rather than ship misleading data. **Windows captures DO attribute correctly** via `WS_EX_NOACTIVATE` shim (Phase 3) — empirically validated 2026-05-21 with `olk` (Outlook), `msedge` (Edge), etc. landing as the real `sourceApp` values. The Mac NSPanel-style shim follow-up is tracked as FN-CUX-12 in the WP-Threshold-Compact-UX AAR (`AAR-WP-Threshold-Compact-UX.md`).
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
