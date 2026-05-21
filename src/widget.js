@@ -196,11 +196,17 @@ document.addEventListener("contextmenu", async (e) => {
 // (e.g., cancellation → reset dot to unknown, no flash; real failure → red).
 listen("threshold://toast", (event) => {
   const outcome = event.payload;
+  // Mirror title + body into the status dot's tooltip so hovering the
+  // dot reveals the last toast inline. Surfaces failure reasons without
+  // requiring a native notification or a separate toast UI.
+  const tooltip = [outcome.title, outcome.body].filter(Boolean).join(" — ");
+  statusDot.title = tooltip || "Connectivity";
+  console.log("[widget] toast:", outcome);
 
   // Heuristic: cancellation titles use "cancelled" or "timed out" wording.
   // Don't go red on those — they're user actions, not system failures.
-  const title = (outcome.title || "").toLowerCase();
-  if (title.includes("cancel") || title.includes("timed out")) {
+  const titleLc = (outcome.title || "").toLowerCase();
+  if (titleLc.includes("cancel") || titleLc.includes("timed out")) {
     setStatus("unknown");
     return;
   }
