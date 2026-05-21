@@ -889,18 +889,15 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
         },
         Ok(result) => {
             // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
-            // Surface sourceApp to stdout/stderr so Phase 2 smoke can verify
-            // the NSPanel shim is working (sourceApp = target app bundle ID
-            // → shim succeeded; sourceApp = "" → shim insufficient, filter
-            // is catching the focus-steal). Both eprintln! and log::info!
-            // because env_logger default level may suppress info without
-            // RUST_LOG=info set, but eprintln! always shows.
-            eprintln!(
-                "[CAPTURE] sourceApp = {:?}  (non-empty = NSPanel shim working; \
-                 empty = filter caught focus-steal)",
-                result.source_app
-            );
-            log::info!("capture sourceApp = {:?}", result.source_app);
+            // KNOWN LIMITATION: on Mac, sourceApp currently ships "" for
+            // widget-triggered captures. NSWorkspace.frontmostApplication
+            // returns Threshold's bundle ID at click time (the widget steals
+            // focus on click despite Phase 2A's attempts); the
+            // is_threshold_own_bundle_id filter catches the self-reference
+            // and returns None → "". Honest unknown over misleading data.
+            // The proper NSPanel-style fix is deferred (see notes at
+            // `widget_platform_mac::apply_non_activating_widget_style`).
+            log::debug!("capture sourceApp = {:?}", result.source_app);
             let payload = build_screenshot_payload(&result.text, &result.source_app);
             post_payload_to_apolla(
                 payload,

@@ -1,35 +1,49 @@
 //! Mac platform shim for the Threshold floating widget (WP-Threshold-Compact-UX
-//! Phase 2; D-CUX-04 root fix).
+//! Phase 2; D-CUX-04 partial fix; KNOWN LIMITATION on sourceApp).
 //!
-//! Empirical findings (Phase 1 S-CUX-03 + Phase 2A v1/v2/v3):
+//! **What this module accomplishes:** Sets the NSApp activation policy to
+//! `.accessory` at runtime (mirrors `LSUIElement=YES` from Phase 2B's
+//! `Info.plist` override in dev mode), then sets the widget window's
+//! `collectionBehavior` for cross-space presence + disables native
+//! window-background drag so our JS click-vs-drag heuristic isn't fought
+//! by AppKit's own drag implementation.
+//!
+//! **KNOWN LIMITATION — sourceApp still ships "" via the filter.**
+//! Three approaches tried during Phase 2A to make widget clicks
+//! non-activating; all failed:
 //!
 //!   v1 — NSWindowStyleMaskNonactivatingPanel (bit 7) on existing NSWindow.
-//!        AppKit rejected: `NSWindow does not support nonactivating panel
-//!        styleMask 0x80`. Panel-class-only flag, ignored on NSWindow.
+//!        AppKit rejects: `NSWindow does not support nonactivating panel
+//!        styleMask 0x80`. Panel-class-only flag.
 //!
-//!   v2 — Class-swap NSWindow to a ThresholdPanel subclass declared via
-//!        objc2's `define_class!`, with `canBecomeKeyWindow` +
-//!        `canBecomeMainWindow` overridden to return NO. Compiled cleanly
-//!        but panicked at runtime: `assertion left == right failed: old
-//!        and new class sizes were not equal; this is UB! left: 464, right:
-//!        456`. `define_class!` generates a class smaller than NSWindow
-//!        (likely because thread_kind/ivars metadata diverges from NSWindow's
-//!        full Cocoa-internal layout), and objc2's set_class safety check
-//!        refuses size mismatches.
+//!   v2 — Class-swap NSWindow → ThresholdPanel via objc2 `define_class!`
+//!        with `canBecomeKeyWindow`/`canBecomeMainWindow` → NO. Panics at
+//!        runtime: `old and new class sizes were not equal; this is UB!
+//!        left: 464  right: 456`. `define_class!` generates a class
+//!        smaller than NSWindow's actual Cocoa-internal layout; objc2's
+//!        `set_class` safety check refuses size mismatches.
 //!
-//!   v3 (this module) — Different approach entirely: call
-//!        `NSApplication.setActivationPolicy(.accessory)` at startup.
-//!        Mimics `LSUIElement=YES` behavior in dev mode (release builds
-//!        already get this from Info.plist via Phase 2B). Per Apple docs,
-//!        `.accessory` apps "cannot be the active app, so their menus
-//!        aren't shown in the menu bar." Empirical: this often prevents
-//!        NSWorkspace.frontmostApplication from returning the .accessory
-//!        app's bundle ID — verifies via Ross's smoke.
+//!   v3 (current) — `NSApplication.setActivationPolicy(.accessory)`.
+//!        Empirically validated 2026-05-21: app launches cleanly, no
+//!        panic, BUT `sourceApp` still ships `""` because `.accessory`
+//!        only affects Dock / menu-bar / Cmd-Tab UI surfaces, not the
+//!        NSWorkspace.frontmostApplication-on-click activation path.
 //!
-//! If v3 ALSO fails, the canonical next step is hand-rolled NSPanel
-//! creation via objc2 unsafe-FFI (bypass `define_class!`'s size check),
-//! or accept that the high-level approach has a ceiling and ship with
-//! the filter as the primary protection.
+//! **Deferred follow-up (v0.3.1 or later):** the NSPanel-style shim
+//! needs a focused workstream. Likely paths:
+//!
+//!   a) Raw FFI `object_setClass` + manual size assertion to bypass
+//!      objc2's safety check; if NSWindow + raw-ClassBuilder subclass
+//!      sizes actually match (the safety check may be more conservative
+//!      than required), the swap works correctly.
+//!   b) Fork or patch Tauri 2 to construct NSPanel directly instead of
+//!      NSWindow for windows with a `panel: true` config flag.
+//!   c) Method swizzling at the AppKit level — but global side effects.
+//!
+//! Until that lands, the Mac `is_threshold_own_bundle_id` filter (shipped
+//! in PR #3 / commit 00ec1e7) continues to catch focus-steals and ship
+//! `sourceApp: ""` rather than misleading data. Symmetric with the
+//! Windows-side `is_threshold_own_exe` filter (PR #2 / commit e5cb31a).
 //!
 //! Called from `lib.rs::run`'s `.setup()` hook on the main thread.
 
