@@ -75,8 +75,23 @@ pub struct OcrUtilityStatus {
     pub installed: bool,
     pub path: Option<String>,
     pub message: Option<String>,
+    /// True if this platform supports screen capture at all. Currently macOS only.
+    /// Windows screen-capture support lands in Phase Win-2 (FN-OCR-12-07) via
+    /// ms-screenclip: invocation + Windows.Media.Ocr in-process.
+    pub screen_capture_supported: bool,
+    /// Operating system identifier for UI conditional rendering.
+    pub platform: String,
 }
 
+/// D-12-19 — macOS GUI-launched .app bundles inherit a minimal launchd PATH
+/// that excludes ~/.local/bin / /opt/homebrew/bin / /usr/local/bin. Probe
+/// absolute paths at startup, bypassing PATH resolution.
+///
+/// On Windows, this returns None — screen-capture support there is planned
+/// for Phase Win-2 (FN-OCR-12-07) and uses an in-process approach
+/// (ms-screenclip: URI + Windows.Media.Ocr) rather than a subprocess to
+/// a separate OCR utility binary.
+#[cfg(target_os = "macos")]
 fn probe_ocr_capture() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let candidates = [
@@ -94,24 +109,52 @@ fn probe_ocr_capture() -> Option<PathBuf> {
     None
 }
 
+#[cfg(not(target_os = "macos"))]
+fn probe_ocr_capture() -> Option<PathBuf> {
+    log::info!("D-12-19 probe: skipped on non-macOS platform");
+    None
+}
+
 #[tauri::command]
 fn get_ocr_utility_status(state: tauri::State<AppState>) -> OcrUtilityStatus {
     let guard = state.ocr_capture_path.lock().expect("AppState mutex poisoned");
+    let platform = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else {
+        "other"
+    };
+    let screen_capture_supported = cfg!(target_os = "macos");
+
     match &*guard {
         Some(p) => OcrUtilityStatus {
             installed: true,
             path: Some(p.to_string_lossy().into_owned()),
             message: None,
+            screen_capture_supported: true,
+            platform: platform.into(),
         },
-        None => OcrUtilityStatus {
-            installed: false,
-            path: None,
-            message: Some(
+        None => {
+            let message = if cfg!(target_os = "macos") {
                 "OCR utility not installed. Run `bash setup.sh` from the viktora-threshold repo \
                  to install it via pipx, then restart Viktora Threshold."
-                    .into(),
-            ),
-        },
+                    .to_string()
+            } else if cfg!(target_os = "windows") {
+                "Screen capture is coming to Windows in v0.2 (FN-OCR-12-07). \
+                 File upload and drag-drop work normally."
+                    .to_string()
+            } else {
+                "Screen capture is not supported on this platform.".to_string()
+            };
+            OcrUtilityStatus {
+                installed: false,
+                path: None,
+                message: Some(message),
+                screen_capture_supported,
+                platform: platform.into(),
+            }
+        }
     }
 }
 

@@ -301,6 +301,7 @@ code {
 }
 .status-pill.ok { background: #e6f4ea; color: #137333; }
 .status-pill.fail { background: #fce8e6; color: #c5221f; }
+.status-pill.pending { background: #fff4e5; color: #b06000; }
 
 /* ───────── Increment 4: Main capture controls ───────── */
 
