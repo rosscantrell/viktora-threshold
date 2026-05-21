@@ -253,6 +253,16 @@ pub fn run() {
             });
             Ok(())
         })
+        // D-12-02 — quit-on-window-close (launch-on-demand UX).
+        // The Tauri default on macOS is to keep the process alive when all
+        // windows close; we override to exit the app instead. This is the
+        // base D-12-02 behavior; increment 4 layers D-12-02-AMEND on top
+        // (wait for in-flight ingestions before exiting).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                window.app_handle().exit(0);
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_ocr_utility_status,
             load_config,
