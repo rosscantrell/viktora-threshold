@@ -42,3 +42,15 @@ thiserror = "1"
 # Logging
 log = "0.4"
 env_logger = "0.11"
+
+# WP-OCR-13 Phase A — Mac native in-process OCR via Apple Vision framework.
+# Replaces the v0.1.x subprocess to `viktora-ocr-capture`. See AC-1, D-13-02.
+# objc2-app-kit gives us NSWorkspace.frontmostApplication for sourceApp lookup
+# (P-13-09 (c) cross-surface analytics; the orthogonal axis to captureTool).
+# tempfile holds the PNG between `screencapture -i` and Vision OCR.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-vision = "0.3"
+tempfile = "3"
