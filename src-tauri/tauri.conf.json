@@ -8,15 +8,24 @@
   },
   "app": {
     "withGlobalTauri": true,
+    "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Viktora Threshold",
-        "width": 800,
-        "height": 600,
-        "minWidth": 640,
-        "minHeight": 480,
+        "label": "main",
+        "title": "Threshold",
+        "url": "widget.html",
+        "width": 180,
+        "height": 80,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "focus": false,
+        "skipTaskbar": true,
         "dragDropEnabled": true,
-        "resizable": true
+        "shadow": false,
+        "visible": true,
+        "center": true
       }
     ],
     "security": {

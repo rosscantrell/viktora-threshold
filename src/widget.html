@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="widget.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Threshold</title>
+    <script type="module" src="/widget.js" defer></script>
+  </head>
+  <body>
+    <!--
+      Threshold floating widget (WP-Threshold-Compact-UX Phase 2).
+      Horizontal pill (~180x80, Plaud-inspired) with two action buttons:
+        - Capture Screen (crosshair) → fires run_screen_capture IPC
+        - Upload File   (file-input) → opens picker via pick_files IPC,
+                                        also doubles as drag-drop target
+                                        (the whole widget surface accepts
+                                        OS-level file drops; D-12-04
+                                        inheritance)
+      Drag-to-move is implemented in widget.js via the Tauri
+      `widget_start_drag` Rust IPC + a mousemove threshold heuristic
+      (S-CUX-05 fallback finding 2026-05-21).
+    -->
+    <div id="widget">
+      <button
+        id="capture-btn"
+        class="action-btn"
+        type="button"
+        title="Capture region from screen"
+        aria-label="Capture region from screen"
+      >
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none"
+             stroke="currentColor" stroke-width="1.75"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"></circle>
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
+        </svg>
+      </button>
+
+      <button
+        id="upload-btn"
+        class="action-btn"
+        type="button"
+        title="Pick a file or drag-drop files here"
+        aria-label="Pick a file or drag-drop files here"
+      >
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none"
+             stroke="currentColor" stroke-width="1.75"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="12" y1="18" x2="12" y2="12"></line>
+          <polyline points="9 15 12 12 15 15"></polyline>
+        </svg>
+      </button>
+
+      <div id="status-dot" class="status-unknown" title="Connectivity"></div>
+    </div>
+  </body>
+</html>

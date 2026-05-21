@@ -1,0 +1,104 @@
+/* Threshold floating widget — horizontal pill layout, Plaud-inspired.
+ * Window is 180x80; widget fills it as a rounded pill. Two action buttons
+ * side by side (Capture / Upload) with a small connectivity dot at the
+ * bottom-right corner. Transparent body lets Tauri's `transparent: true`
+ * config show through; widget surface itself is dark-translucent so it
+ * stays visible against light + dark wallpapers. */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  color: #e8eaed;
+}
+
+#widget {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(28, 30, 38, 0.92);
+  /* Pill shape: border-radius = half-height absorbs the curve.
+   * 80px window height → 40px radius. */
+  border-radius: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+  padding: 0 18px;
+  gap: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35),
+              inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  cursor: grab;
+}
+
+#widget:active {
+  cursor: grabbing;
+}
+
+.action-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease-out,
+              border-color 0.12s ease-out,
+              transform 0.08s ease-out;
+}
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.action-btn:active {
+  transform: scale(0.95);
+}
+
+.action-btn:focus {
+  outline: none;
+}
+
+/* When the OS-level drag-drop is active on the widget window, the
+ * upload-btn lights up as the visual drop target. Toggled via the
+ * `data-dragover` attribute by widget.js based on Tauri DragDrop events. */
+#upload-btn[data-dragover="true"] {
+  background: rgba(74, 222, 128, 0.22);
+  border-color: rgba(74, 222, 128, 0.7);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+}
+
+/* Connectivity dot — AC-CUX-12 reactive-only.
+ * status-unknown = cold start before any test/POST observed
+ * status-ok      = last test/POST succeeded
+ * status-err     = last test/POST failed */
+#status-dot {
+  position: absolute;
+  bottom: 8px;
+  right: 14px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transition: background 0.2s ease-out;
+}
+
+.status-unknown { background: #6b7280; }
+.status-ok      { background: #4ade80; }
+.status-err     { background: #f87171; }

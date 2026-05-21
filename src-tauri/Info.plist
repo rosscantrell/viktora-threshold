@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WP-Threshold-Compact-UX Phase 2B — Mac Info.plist override (D-CUX-01).
+
+  Tauri 2 generates the bundle's Info.plist from `tauri.conf.json` at bundle
+  time, but doesn't expose `LSUIElement` as a first-class config key. The
+  documented escape hatch is this file at `src-tauri/Info.plist` — Tauri 2
+  merges these keys INTO the generated Info.plist.
+
+  `LSUIElement = true` makes Threshold an "agent" / accessory app:
+    - No Dock icon
+    - Not eligible for Cmd-Tab cycle
+    - NSApplication.activationPolicy = .accessory at launch
+    - Still receives keyboard + mouse events when its windows have focus
+    - Still able to emit native OS notifications
+
+  Effect is observable only in BUNDLED builds (`tauri build` / .app /
+  .dmg / .msi). In dev mode (`tauri dev` / `cargo run`) the binary
+  doesn't have a real .app bundle wrapper, so this key has no effect.
+
+  Cmd-Q regression noted in brief §9 deltas table: with LSUIElement YES,
+  users quit via the widget's right-click menu → Quit (D-CUX-08).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>LSUIElement</key>
+    <true/>
+  </dict>
+</plist>

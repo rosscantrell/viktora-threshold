@@ -28,6 +28,13 @@ mod ocr_mac;
 #[cfg(target_os = "windows")]
 mod ocr_windows;
 
+// WP-Threshold-Compact-UX Phase 2 — Mac NSPanel-style shim for the floating
+// widget (D-CUX-04 architectural fix; addresses Phase 1 S-CUX-03 PARTIAL
+// finding that the Tauri 2 high-level window config doesn't prevent
+// focus-steal on click).
+#[cfg(target_os = "macos")]
+mod widget_platform_mac;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Globals (D-12-02-AMEND: in-flight ingestion counter)
 // ───────────────────────────────────────────────────────────────────────────
@@ -83,6 +90,15 @@ pub struct AppConfig {
     pub bearer_token: String,
     pub last_used: Option<String>,
     pub mode: String,
+    /// WP-Threshold-Compact-UX D-CUX-16 — widget screen position, persisted
+    /// across launches. Both fields optional + #[serde(default)] so v0.2
+    /// configs without these fields deserialize cleanly (additive-only
+    /// schema delta per v1.1-FINAL audit item 12). Default to None →
+    /// Tauri's `center: true` config kicks in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_x: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_y: Option<i32>,
 }
 
 impl Default for AppConfig {
@@ -92,6 +108,8 @@ impl Default for AppConfig {
             bearer_token: String::new(),
             last_used: None,
             mode: "workspace".into(),
+            widget_x: None,
+            widget_y: None,
         }
     }
 }
@@ -556,6 +574,285 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
 // Other:   file upload + drag-drop still work; Capture Screen returns a
 //          structured "not supported on this platform" toast.
 
+/// Start a native window drag for the widget. Phase 1 spike fallback for
+/// S-CUX-05 — the JS-side `getCurrentWindow().startDragging()` path was
+/// empirically unreliable on the widget config (Mac, focus:false +
+/// transparent:true + decorations:false + alwaysOnTop:true). Going through
+/// Rust gives us direct access to the window handle.
+///
+/// Called from widget.js once the JS mousemove heuristic decides the user
+/// is dragging (displacement > threshold). Returns Ok(()) on success;
+/// returns the error string if start_dragging fails.
+#[tauri::command]
+fn widget_start_drag(window: tauri::Window) -> Result<(), String> {
+    window
+        .start_dragging()
+        .map_err(|e| format!("start_dragging failed: {}", e))
+}
+
+/// Persist the widget's current screen position to AppConfig
+/// (WP-Threshold-Compact-UX D-CUX-16). Called from a debounced JS
+/// handler tied to the window's `Moved` event so we don't write the
+/// config file on every pixel of drag motion.
+///
+/// Resilient to partial state: if no AppConfig is cached (user hasn't
+/// hit Configure yet), we lazy-default + populate widget_{x,y}. Save
+/// failures log but don't propagate to the JS layer — the user moving
+/// the widget should never see a toast.
+#[tauri::command]
+fn save_widget_position(state: tauri::State<AppState>, x: i32, y: i32) -> Result<(), String> {
+    let mut cfg_guard = state.config.lock().expect("config mutex poisoned");
+    let mut cfg = cfg_guard.clone().unwrap_or_default();
+    cfg.widget_x = Some(x);
+    cfg.widget_y = Some(y);
+    // Don't touch last_used — that's tracked on Configure-pane saves.
+
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    if let Err(e) = fs::create_dir_all(&dir) {
+        return Err(format!("Failed to create config dir: {}", e));
+    }
+    let path = dir.join("config.json");
+    let json = serde_json::to_string_pretty(&cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    *cfg_guard = Some(cfg);
+    log::debug!("widget position saved: ({x}, {y})");
+    Ok(())
+}
+
+/// Read back the persisted widget position from cached AppConfig. The
+/// widget JS calls this on init and, if a saved position exists,
+/// invokes the Tauri window API to move to it. Defaults to None →
+/// Tauri's `center: true` config kicks in.
+#[tauri::command]
+fn get_widget_position(state: tauri::State<AppState>) -> Option<(i32, i32)> {
+    let cfg = state.config.lock().expect("config mutex poisoned");
+    cfg.as_ref().and_then(|c| match (c.widget_x, c.widget_y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Menu item IDs (D-CUX-15). String literals shared between the menu
+/// builder and the `on_menu_event` handler so the dispatch stays single
+/// source of truth.
+const MENU_CAPTURE: &str = "menu.capture";
+const MENU_PICK_FILE: &str = "menu.pick_file";
+const MENU_EXPAND: &str = "menu.expand";
+const MENU_SETTINGS: &str = "menu.settings";
+const MENU_QUIT: &str = "menu.quit";
+/// Debug-only: surfaces a "Open Console" item in the right-click menu
+/// that opens Tauri's devtools for diagnosis. Constant + menu builder
+/// branch + event handler arm are all #[cfg(debug_assertions)] gated so
+/// release builds don't carry the dead-code reference.
+#[cfg(debug_assertions)]
+const MENU_DEVTOOLS: &str = "menu.devtools";
+
+/// Build the widget's native right-click context menu. Per D-CUX-15:
+///   Capture Screen / Pick File… / Expand… / Settings… / Quit Threshold
+fn build_widget_menu(
+    app: &tauri::AppHandle,
+) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+
+    let capture = MenuItem::with_id(app, MENU_CAPTURE, "Capture Screen", true, None::<&str>)?;
+    let pick_file = MenuItem::with_id(app, MENU_PICK_FILE, "Pick File…", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
+
+    // Debug-only Open Console item — strip in release builds via the
+    // `#[cfg(debug_assertions)]` attribute (NOT the runtime `cfg!()`
+    // macro — that one still compiles the body, which would fail to
+    // resolve the cfg-gated `MENU_DEVTOOLS` constant in release builds).
+    // Lets developers (and Ross during pilot) open the webview's
+    // devtools without fighting AppKit/Win32 for the default "Inspect
+    // Element" context-menu option (we override it wholesale).
+    #[cfg(debug_assertions)]
+    {
+        let devtools = MenuItem::with_id(app, MENU_DEVTOOLS, "Open Console", true, None::<&str>)?;
+        let sep_dev = PredefinedMenuItem::separator(app)?;
+        return Menu::with_items(
+            app,
+            &[
+                &capture,
+                &pick_file,
+                &sep1,
+                &expand,
+                &settings,
+                &sep2,
+                &quit,
+                &sep_dev,
+                &devtools,
+            ],
+        );
+    }
+
+    #[allow(unreachable_code)]
+    Menu::with_items(
+        app,
+        &[
+            &capture,
+            &pick_file,
+            &sep1,
+            &expand,
+            &settings,
+            &sep2,
+            &quit,
+        ],
+    )
+}
+
+/// Show the widget's right-click context menu at the cursor. Called from
+/// widget.js when the user right-clicks the widget.
+#[tauri::command]
+fn show_widget_menu(
+    app_handle: tauri::AppHandle,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    use tauri::menu::ContextMenu;
+    let menu = build_widget_menu(&app_handle).map_err(|e| e.to_string())?;
+    menu.popup(webview_window.as_ref().window().clone())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Expand the widget into the full v0.2 UI (D-CUX-13, AC-CUX-07).
+///
+/// Operations (in order):
+///   1. Save current widget position so collapse can restore it
+///   2. Resize window 100x100 → 800x600
+///   3. Re-enable decorations + disable always-on-top so it behaves like a
+///      regular app window
+///   4. Navigate webview to index.html
+///   5. Bring to front + focus
+///
+/// `target_tab` (currently "main" or "configure") gets stashed in a URL
+/// fragment so the expanded UI's main.js can route to the right initial
+/// view without a separate IPC handshake.
+#[tauri::command]
+fn widget_expand(
+    state: tauri::State<AppState>,
+    webview_window: tauri::WebviewWindow,
+    target_tab: Option<String>,
+) -> Result<(), String> {
+    let window = &webview_window;
+    // Step 1: save widget position before resizing (so collapse can return).
+    if let Ok(pos) = window.outer_position() {
+        let mut cfg_guard = state.config.lock().expect("config mutex poisoned");
+        let mut cfg = cfg_guard.clone().unwrap_or_default();
+        cfg.widget_x = Some(pos.x);
+        cfg.widget_y = Some(pos.y);
+        let _ = save_config_to_disk(&cfg);
+        *cfg_guard = Some(cfg);
+    }
+
+    // Step 2: resize.
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 800.0,
+            height: 600.0,
+        }))
+        .map_err(|e| format!("set_size failed: {e}"))?;
+
+    // Step 3: window chrome.
+    window
+        .set_decorations(true)
+        .map_err(|e| format!("set_decorations failed: {e}"))?;
+    window
+        .set_always_on_top(false)
+        .map_err(|e| format!("set_always_on_top failed: {e}"))?;
+    window
+        .set_resizable(true)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
+
+    // Step 4: navigate to expanded UI. The URL fragment tells main.js
+    // which view to land in. window.eval is the cleanest cross-platform
+    // navigation; window.navigate exists in Tauri 2 but isn't available
+    // on all webview backends.
+    let fragment = target_tab.as_deref().unwrap_or("main");
+    let nav = format!(
+        "window.location.replace('index.html#{}');",
+        fragment.replace('\'', "")
+    );
+    window
+        .eval(&nav)
+        .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+
+    // Step 5: focus.
+    let _ = window.set_focus();
+
+    log::info!("widget expanded → target_tab={}", fragment);
+    Ok(())
+}
+
+/// Collapse the expanded UI back to the floating widget. Restores
+/// widget size, position, chrome, and navigates back to widget.html.
+#[tauri::command]
+fn widget_collapse(
+    state: tauri::State<AppState>,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let window = &webview_window;
+    // Reverse the expand operations.
+    window
+        .set_always_on_top(true)
+        .map_err(|e| format!("set_always_on_top failed: {e}"))?;
+    window
+        .set_decorations(false)
+        .map_err(|e| format!("set_decorations failed: {e}"))?;
+    window
+        .set_resizable(false)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
+    // Widget shape — keep in lockstep with tauri.conf.json's window config
+    // (180x80 horizontal pill).
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 180.0,
+            height: 80.0,
+        }))
+        .map_err(|e| format!("set_size failed: {e}"))?;
+
+    // Restore widget position from cached config (the value we stashed in
+    // widget_expand). If absent, Tauri keeps the current position.
+    let saved = {
+        let cfg = state.config.lock().expect("config mutex poisoned");
+        cfg.as_ref().and_then(|c| match (c.widget_x, c.widget_y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        })
+    };
+    if let Some((x, y)) = saved {
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+    }
+
+    window
+        .eval("window.location.replace('widget.html');")
+        .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+
+    log::info!("widget collapsed");
+    Ok(())
+}
+
+/// Helper for the expand path: persist `cfg` to disk without the
+/// last_used touch. Save failures log but don't propagate.
+fn save_config_to_disk(cfg: &AppConfig) -> Result<(), String> {
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    let json = serde_json::to_string_pretty(cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
 /// Capture a region from the screen and POST the OCR'd text to the configured
 /// Apolla backend. Platform dispatch lives inside; see ocr_mac / ocr_windows
 /// for the per-platform implementations.
@@ -628,6 +925,15 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
         },
         Ok(result) => {
             // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
+            // KNOWN LIMITATION: on Mac, sourceApp currently ships "" for
+            // widget-triggered captures. NSWorkspace.frontmostApplication
+            // returns Threshold's bundle ID at click time (the widget steals
+            // focus on click despite Phase 2A's attempts); the
+            // is_threshold_own_bundle_id filter catches the self-reference
+            // and returns None → "". Honest unknown over misleading data.
+            // The proper NSPanel-style fix is deferred (see notes at
+            // `widget_platform_mac::apply_non_activating_widget_style`).
+            log::debug!("capture sourceApp = {:?}", result.source_app);
             let payload = build_screenshot_payload(&result.text, &result.source_app);
             post_payload_to_apolla(
                 payload,
@@ -791,6 +1097,39 @@ pub fn run() {
             app.manage(AppState {
                 config: Mutex::new(None),
             });
+
+            // WP-Threshold-Compact-UX Phase 2 D-CUX-04: apply the
+            // non-activating-panel shim to the widget's NSWindow on Mac.
+            // Without this, clicking the widget's Capture button steals
+            // focus → NSWorkspace returns Threshold's own bundle ID →
+            // sourceApp ships empty (filter catches the leak). With it,
+            // sourceApp ships the user's actual target app's bundle ID.
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    match window.ns_window() {
+                        Ok(ns_window) => {
+                            if let Err(e) =
+                                widget_platform_mac::apply_non_activating_widget_style(ns_window)
+                            {
+                                log::warn!(
+                                    "widget_platform_mac shim failed: {e} — \
+                                     falling back to the is_threshold_own_bundle_id filter \
+                                     catching focus-steals; sourceApp may ship empty"
+                                );
+                            } else {
+                                log::info!("widget_platform_mac: non-activating shim applied");
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("could not obtain NSWindow handle: {e}");
+                        }
+                    }
+                } else {
+                    log::warn!("could not find 'main' window during setup");
+                }
+            }
+
             Ok(())
         })
         // D-12-02 + D-12-02-AMEND: quit-on-window-close, waiting for in-flight
@@ -811,15 +1150,24 @@ pub fn run() {
                 }
                 // Capture drag-drop events at the window level (D-12-13: paths
                 // delivered to Rust shell, not to the webview JS layer).
-                tauri::WindowEvent::DragDrop(drag_event) => {
-                    if let tauri::DragDropEvent::Drop { paths, .. } = drag_event {
+                // Enter / Leave events surface visual drop-target feedback on
+                // the widget's upload button (Phase 2 UI polish).
+                tauri::WindowEvent::DragDrop(drag_event) => match drag_event {
+                    tauri::DragDropEvent::Enter { .. } => {
+                        let _ = window.emit("threshold://drag-enter", ());
+                    }
+                    tauri::DragDropEvent::Leave => {
+                        let _ = window.emit("threshold://drag-leave", ());
+                    }
+                    tauri::DragDropEvent::Drop { paths, .. } => {
                         let path_strs: Vec<String> = paths
                             .iter()
                             .filter_map(|p| p.to_str().map(String::from))
                             .collect();
                         let _ = window.emit("threshold://drop-paths", path_strs);
                     }
-                }
+                    _ => {}
+                },
                 _ => {}
             }
         })
@@ -829,8 +1177,82 @@ pub fn run() {
             test_connection,
             ingest_files,
             pick_files,
-            run_screen_capture
+            run_screen_capture,
+            widget_start_drag,
+            save_widget_position,
+            get_widget_position,
+            show_widget_menu,
+            widget_expand,
+            widget_collapse
         ])
+        .on_menu_event(|app, event| {
+            // D-CUX-15 dispatch table. Each ID maps to a deferred action.
+            // The async ones (capture, pick_file) spawn a task because
+            // on_menu_event is sync; window APIs are sync so they can run
+            // inline.
+            let id = event.id().0.clone();
+            log::debug!("menu event: {id}");
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let window = match app.get_webview_window("main") {
+                    Some(w) => w,
+                    None => {
+                        log::warn!("menu event {id}: no 'main' window");
+                        return;
+                    }
+                };
+                let state = app.state::<AppState>();
+                match id.as_str() {
+                    MENU_CAPTURE => {
+                        if let Err(e) = run_screen_capture(app.clone(), state).await {
+                            log::warn!("menu capture failed: {e}");
+                        }
+                    }
+                    MENU_PICK_FILE => match pick_files(app.clone()).await {
+                        paths if !paths.is_empty() => {
+                            if let Err(e) =
+                                ingest_files(app.clone(), app.state::<AppState>(), paths).await
+                            {
+                                log::warn!("menu pick_file ingest failed: {e}");
+                            }
+                        }
+                        _ => log::debug!("menu pick_file: user cancelled"),
+                    },
+                    MENU_EXPAND => {
+                        if let Err(e) =
+                            widget_expand(app.state::<AppState>(), window.clone(), None)
+                        {
+                            log::warn!("menu expand failed: {e}");
+                        }
+                    }
+                    MENU_SETTINGS => {
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("configure".into()),
+                        ) {
+                            log::warn!("menu settings failed: {e}");
+                        }
+                    }
+                    MENU_QUIT => {
+                        log::info!("menu quit");
+                        // D-12-02-AMEND drains in-flight ingestions before
+                        // exiting; the existing close handler covers this.
+                        app.exit(0);
+                    }
+                    #[cfg(debug_assertions)]
+                    MENU_DEVTOOLS => {
+                        // Debug-only — see build_widget_menu's matching
+                        // cfg-gated branch. Opens the webview's devtools
+                        // (Web Inspector on Mac / Chromium DevTools on
+                        // Windows) for the widget window.
+                        window.open_devtools();
+                        log::info!("menu open_devtools");
+                    }
+                    other => log::warn!("menu event unhandled: {other}"),
+                }
+            });
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -975,11 +1397,15 @@ mod tests {
             bearer_token: "test-token-123".to_string(),
             last_used: Some("2026-05-21T16:00:00Z".to_string()),
             mode: "workspace".to_string(),
+            widget_x: Some(1820),
+            widget_y: Some(980),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(parsed.base_url, cfg.base_url);
         assert_eq!(parsed.bearer_token, cfg.bearer_token);
+        assert_eq!(parsed.widget_x, cfg.widget_x);
+        assert_eq!(parsed.widget_y, cfg.widget_y);
         assert_eq!(parsed.last_used, cfg.last_used);
         assert_eq!(parsed.mode, cfg.mode);
     }
