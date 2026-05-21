@@ -1150,9 +1150,14 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     match window.hwnd() {
                         Ok(hwnd) => {
-                            if let Err(e) =
-                                widget_platform_windows::apply_non_activating_widget_style(hwnd)
-                            {
+                            // Tauri 2 returns `windows 0.61` HWND; our shim
+                            // is compiled against `windows 0.59` (Phase B
+                            // pin). Two different type identities, same
+                            // memory layout — pass the raw pointer through
+                            // the API boundary to sidestep the duplicate-
+                            // crate-version mismatch.
+                            let hwnd_ptr = hwnd.0 as *mut std::ffi::c_void;
+                            if let Err(e) = widget_platform_windows::apply_non_activating_widget_style(hwnd_ptr) {
                                 log::warn!(
                                     "widget_platform_windows shim failed: {e} — \
                                      falling back to the is_threshold_own_exe filter \

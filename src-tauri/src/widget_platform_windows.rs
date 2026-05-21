@@ -30,24 +30,38 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 /// Apply the non-activating extended-window style to a Tauri-created
-/// widget HWND. The Tauri config already sets `skipTaskbar: true` which
-/// adds WS_EX_TOOLWINDOW; this layer adds the activation-prevention bit.
+/// widget window. The Tauri config already sets `skipTaskbar: true`
+/// which adds WS_EX_TOOLWINDOW; this layer adds the activation-prevention
+/// bit.
 ///
-/// Returns Ok(()) on success. Returns Err on null HWND. Does NOT panic
-/// — the worst case (shim no-ops) is that we fall back to the Windows
-/// `is_threshold_own_exe` filter catching focus-steals at capture time
-/// and shipping `sourceApp: ""`. Degraded but not broken.
+/// Takes a raw `*mut c_void` (the underlying HWND pointer) rather than
+/// a typed `HWND` struct because the dependency graph carries TWO
+/// `windows` crate versions: 0.59 (our pinned Phase B dep) + 0.61
+/// (Tauri 2 v2.11.x internal). The two `HWND` structs have identical
+/// memory layout (`pub *mut c_void`) but different type identity. Going
+/// through the raw pointer at the API boundary sidesteps the version
+/// mismatch — caller passes `window.hwnd()?.0` from Tauri's 0.61 HWND;
+/// we wrap it back into our 0.59 HWND internally.
+///
+/// Returns Ok(()) on success. Returns Err on null pointer. Does NOT
+/// panic — the worst case (shim no-ops) is that we fall back to the
+/// Windows `is_threshold_own_exe` filter catching focus-steals at
+/// capture time and shipping `sourceApp: ""`. Degraded but not broken.
 ///
 /// # Safety
-/// `hwnd` must be a valid HWND that outlives this call. Tauri 2
-/// guarantees this when called from the `.setup()` hook on the
+/// `hwnd_ptr` must be a valid HWND pointer that outlives this call.
+/// Tauri 2 guarantees this when called from the `.setup()` hook on the
 /// already-constructed widget window.
-pub fn apply_non_activating_widget_style(hwnd: HWND) -> Result<(), String> {
-    if hwnd.0.is_null() {
-        return Err("widget HWND is null".into());
+pub fn apply_non_activating_widget_style(
+    hwnd_ptr: *mut std::ffi::c_void,
+) -> Result<(), String> {
+    if hwnd_ptr.is_null() {
+        return Err("widget HWND pointer is null".into());
     }
 
-    // SAFETY: caller guarantees `hwnd` is a valid top-level window
+    let hwnd = HWND(hwnd_ptr);
+
+    // SAFETY: caller guarantees `hwnd_ptr` is a valid top-level window
     // handle. `GetWindowLongPtrW` + `SetWindowLongPtrW` with `GWL_EXSTYLE`
     // are well-defined Win32 operations since Windows 2000; the value
     // we OR in (`WS_EX_NOACTIVATE`) is a documented bit, not a
@@ -68,13 +82,12 @@ pub fn apply_non_activating_widget_style(hwnd: HWND) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// Null-HWND rejection. Real shim behavior requires a live HWND
+    /// Null-pointer rejection. Real shim behavior requires a live HWND
     /// which isn't available in `cargo test --lib`; runtime validation
     /// happens via Ross's wife's Win11 smoke (S-CUX-04 empirical).
     #[test]
     fn apply_non_activating_widget_style_rejects_null() {
-        let hwnd = HWND(std::ptr::null_mut());
-        let result = apply_non_activating_widget_style(hwnd);
+        let result = apply_non_activating_widget_style(std::ptr::null_mut());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("null"));
     }
