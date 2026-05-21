@@ -35,6 +35,14 @@ mod ocr_windows;
 #[cfg(target_os = "macos")]
 mod widget_platform_mac;
 
+// WP-Threshold-Compact-UX Phase 3 — Windows WS_EX_NOACTIVATE shim for the
+// floating widget. By symmetry with the Phase 2 Mac shim; Windows is the
+// happier path because WS_EX_NOACTIVATE is a documented HWND extended
+// style (not panel-class-restricted like Mac's
+// NSWindowStyleMaskNonactivatingPanel).
+#[cfg(target_os = "windows")]
+mod widget_platform_windows;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Globals (D-12-02-AMEND: in-flight ingestion counter)
 // ───────────────────────────────────────────────────────────────────────────
@@ -1123,6 +1131,41 @@ pub fn run() {
                         }
                         Err(e) => {
                             log::warn!("could not obtain NSWindow handle: {e}");
+                        }
+                    }
+                } else {
+                    log::warn!("could not find 'main' window during setup");
+                }
+            }
+
+            // WP-Threshold-Compact-UX Phase 3 D-CUX-04 (Windows side):
+            // apply WS_EX_NOACTIVATE to the widget HWND so click doesn't
+            // make Threshold the foreground window. Symmetric with the
+            // Mac branch above; Windows side is expected to actually
+            // work (WS_EX_NOACTIVATE is a regular HWND extended style,
+            // not panel-class-restricted like Mac's
+            // NSWindowStyleMaskNonactivatingPanel).
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    match window.hwnd() {
+                        Ok(hwnd) => {
+                            if let Err(e) =
+                                widget_platform_windows::apply_non_activating_widget_style(hwnd)
+                            {
+                                log::warn!(
+                                    "widget_platform_windows shim failed: {e} — \
+                                     falling back to the is_threshold_own_exe filter \
+                                     catching focus-steals; sourceApp may ship empty"
+                                );
+                            } else {
+                                log::info!(
+                                    "widget_platform_windows: non-activating shim applied"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("could not obtain HWND handle: {e}");
                         }
                     }
                 } else {
