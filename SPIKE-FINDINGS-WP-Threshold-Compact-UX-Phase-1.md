@@ -105,9 +105,30 @@ Hypothesis (untested): Tauri 2's `data-tauri-drag-region` may be incompatible wi
 
 **Fallback applied (brief's documented S-CUX-05 fallback path — "Custom mouse-event handling in widget HTML"):** Pure-JS movement-threshold heuristic in `widget.js`. Mousedown tracks `screenX`/`screenY`; if mouse moves > 4px before mouseup, invoke `getCurrentWindow().startDragging()` (native Tauri 2 window API). Click handler bails out if drag was initiated. Removed the `data-tauri-drag-region` attributes from `widget.html` to avoid any interference. Pending re-smoke.
 
-### S-CUX-03 — PENDING
+### S-CUX-03 — PARTIAL (Tauri 2 high-level API insufficient; filter catches the leak)
 
-Awaiting Ross's first successful (non-cancelled) capture from a known foreground app. Architectural verdict per the three sourceApp outcomes documented in the brief.
+**Empirical (2026-05-21):** Rust-side `eprintln!` immediately before POST shipped: `[SPIKE S-CUX-03] sourceApp = ""`. The Mac `is_threshold_own_bundle_id` filter (PR #3 commit 00ec1e7) caught a focus-leak — NSWorkspace.frontmostApplication() returned `"ai.viktora.threshold"` at the moment of capture (the widget's Capture-button click activated Threshold despite `focus: false` in tauri.conf.json). Filter rejected the self-reference → unwrap_or_default → empty string. Honest unknown ships rather than misleading self-attribution.
+
+**Verdict:**
+- The Tauri 2 high-level API (`decorations: false + alwaysOnTop: true + transparent: true + focus: false + skipTaskbar: true`) does **NOT** prevent focus-steal on click. The brief's risk table called this Medium-likelihood / Very-high-impact; empirical now confirms.
+- The Mac filter is doing exactly the defense-in-depth job it was shipped for. Filter is permanent for v0.3; treat it as belt + suspenders to the NSPanel shim.
+- Phase 2 **must** include the NSPanel + `acceptsFirstResponder = NO` shim on Mac to actually preserve the target app's frontmost-application state across the widget click. Per brief §12 risk mitigation language.
+
+**Phase 2 envelope shift:** +1–2 days for the NSPanel shim. Total ~7–9 days impl-agent work (was 6–7).
+
+**Windows S-CUX-04 still pending** Ross's wife's Win11 smoke. By symmetry expect WS_EX_NOACTIVATE shim to be needed on Windows too; the Windows filter shipped in PR #2 will catch the leak similarly in the meantime.
+
+### S-CUX-05 — PASS via Rust IPC fallback
+
+`data-tauri-drag-region` empirically failed (mousedown not registered for drag from any region of the widget). JS-side `getCurrentWindow().startDragging()` ALSO failed (likely API path not exposed via `withGlobalTauri: true` or blocked by `focus: false`). Final fallback that worked: pure-JS movement-threshold heuristic invoking a custom Rust IPC `widget_start_drag` that calls `tauri::Window::start_dragging()` from the Rust side. Widget moves on click-and-drag; single-click on the button still fires capture cleanly.
+
+This is the Phase 2 pattern — the JS heuristic + Rust IPC stays. The `data-tauri-drag-region` attribute is treated as broken on this widget config.
+
+---
+
+## Phase 2 directive
+
+**All three critical spikes have empirical verdicts. Greenlight Phase 2 with the +1–2 day NSPanel shim included.** The shim approach is well-documented (objc2-app-kit pattern; can swap NSWindow for NSPanel post-creation + override `canBecomeKey` / `canBecomeMain`). Filter stays as defense-in-depth for the cold-start / animation-transition edge cases.
 
 ### Toast-on-cancel UX adjustment
 
