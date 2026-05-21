@@ -445,7 +445,14 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
         IngestionOutcome {
             kind: "idempotent".into(),
             title: format!("Already captured: {}", server_title),
-            body: None,
+            // Make the dedup mechanism legible: idempotency is content-hash based,
+            // so the same bytes from a different filename/directory still match.
+            // Surfaced after a pilot empirical where Ross had two copies of the same
+            // file in different folders and was confused by the idempotent response.
+            body: Some(
+                "The content matches a previous capture (possibly from a different location)."
+                    .into(),
+            ),
             source_path,
         }
     } else {
