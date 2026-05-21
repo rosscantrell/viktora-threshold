@@ -889,6 +889,18 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
         },
         Ok(result) => {
             // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
+            // Surface sourceApp to stdout/stderr so Phase 2 smoke can verify
+            // the NSPanel shim is working (sourceApp = target app bundle ID
+            // → shim succeeded; sourceApp = "" → shim insufficient, filter
+            // is catching the focus-steal). Both eprintln! and log::info!
+            // because env_logger default level may suppress info without
+            // RUST_LOG=info set, but eprintln! always shows.
+            eprintln!(
+                "[CAPTURE] sourceApp = {:?}  (non-empty = NSPanel shim working; \
+                 empty = filter caught focus-steal)",
+                result.source_app
+            );
+            log::info!("capture sourceApp = {:?}", result.source_app);
             let payload = build_screenshot_payload(&result.text, &result.source_app);
             post_payload_to_apolla(
                 payload,
