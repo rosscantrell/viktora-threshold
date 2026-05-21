@@ -31,14 +31,52 @@ function setStatus(state) {
 }
 
 async function init() {
-  console.log("[widget-spike] init");
+  console.log("[widget] init");
   // Per AC-CUX-12 reactive-only cadence: don't auto-ping /api/health.
   // Status dot starts gray (unknown) until first POST or user-triggered test.
   try {
     const cfg = await invoke("load_config");
-    console.log("[widget-spike] config loaded:", cfg ? "yes" : "(none)");
+    console.log("[widget] config loaded:", cfg ? "yes" : "(none)");
   } catch (err) {
-    console.warn("[widget-spike] load_config failed:", err);
+    console.warn("[widget] load_config failed:", err);
+  }
+
+  // D-CUX-16 position persistence: restore last-known widget position.
+  // If no saved position, Tauri's `center: true` config kicks in on first
+  // launch. After restore, we listen for the window's Moved event and
+  // debounce-save the new position on drag-end.
+  try {
+    const saved = await invoke("get_widget_position");
+    if (saved && Array.isArray(saved) && saved.length === 2) {
+      const [x, y] = saved;
+      const win = tauri.window.getCurrentWindow();
+      const { PhysicalPosition } = tauri.window;
+      await win.setPosition(new PhysicalPosition(x, y));
+      console.log("[widget] restored position:", x, y);
+    } else {
+      console.log("[widget] no saved position; using Tauri default");
+    }
+  } catch (err) {
+    console.warn("[widget] position restore failed:", err);
+  }
+
+  // Listen for window Moved events; debounce-save on drag-end.
+  try {
+    const win = tauri.window.getCurrentWindow();
+    let saveTimer = null;
+    await win.onMoved(async ({ payload }) => {
+      // payload is { x, y } in PhysicalPosition units
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(async () => {
+        try {
+          await invoke("save_widget_position", { x: payload.x, y: payload.y });
+        } catch (err) {
+          console.warn("[widget] position save failed:", err);
+        }
+      }, 250); // 250ms after last move → save once
+    });
+  } catch (err) {
+    console.warn("[widget] could not wire onMoved listener:", err);
   }
 }
 

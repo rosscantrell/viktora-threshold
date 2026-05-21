@@ -90,6 +90,15 @@ pub struct AppConfig {
     pub bearer_token: String,
     pub last_used: Option<String>,
     pub mode: String,
+    /// WP-Threshold-Compact-UX D-CUX-16 — widget screen position, persisted
+    /// across launches. Both fields optional + #[serde(default)] so v0.2
+    /// configs without these fields deserialize cleanly (additive-only
+    /// schema delta per v1.1-FINAL audit item 12). Default to None →
+    /// Tauri's `center: true` config kicks in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_x: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_y: Option<i32>,
 }
 
 impl Default for AppConfig {
@@ -99,6 +108,8 @@ impl Default for AppConfig {
             bearer_token: String::new(),
             last_used: None,
             mode: "workspace".into(),
+            widget_x: None,
+            widget_y: None,
         }
     }
 }
@@ -579,6 +590,50 @@ fn widget_start_drag(window: tauri::Window) -> Result<(), String> {
         .map_err(|e| format!("start_dragging failed: {}", e))
 }
 
+/// Persist the widget's current screen position to AppConfig
+/// (WP-Threshold-Compact-UX D-CUX-16). Called from a debounced JS
+/// handler tied to the window's `Moved` event so we don't write the
+/// config file on every pixel of drag motion.
+///
+/// Resilient to partial state: if no AppConfig is cached (user hasn't
+/// hit Configure yet), we lazy-default + populate widget_{x,y}. Save
+/// failures log but don't propagate to the JS layer — the user moving
+/// the widget should never see a toast.
+#[tauri::command]
+fn save_widget_position(state: tauri::State<AppState>, x: i32, y: i32) -> Result<(), String> {
+    let mut cfg_guard = state.config.lock().expect("config mutex poisoned");
+    let mut cfg = cfg_guard.clone().unwrap_or_default();
+    cfg.widget_x = Some(x);
+    cfg.widget_y = Some(y);
+    // Don't touch last_used — that's tracked on Configure-pane saves.
+
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    if let Err(e) = fs::create_dir_all(&dir) {
+        return Err(format!("Failed to create config dir: {}", e));
+    }
+    let path = dir.join("config.json");
+    let json = serde_json::to_string_pretty(&cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+
+    *cfg_guard = Some(cfg);
+    log::debug!("widget position saved: ({x}, {y})");
+    Ok(())
+}
+
+/// Read back the persisted widget position from cached AppConfig. The
+/// widget JS calls this on init and, if a saved position exists,
+/// invokes the Tauri window API to move to it. Defaults to None →
+/// Tauri's `center: true` config kicks in.
+#[tauri::command]
+fn get_widget_position(state: tauri::State<AppState>) -> Option<(i32, i32)> {
+    let cfg = state.config.lock().expect("config mutex poisoned");
+    cfg.as_ref().and_then(|c| match (c.widget_x, c.widget_y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => None,
+    })
+}
+
 /// Capture a region from the screen and POST the OCR'd text to the configured
 /// Apolla backend. Platform dispatch lives inside; see ocr_mac / ocr_windows
 /// for the per-platform implementations.
@@ -894,7 +949,9 @@ pub fn run() {
             ingest_files,
             pick_files,
             run_screen_capture,
-            widget_start_drag
+            widget_start_drag,
+            save_widget_position,
+            get_widget_position
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
