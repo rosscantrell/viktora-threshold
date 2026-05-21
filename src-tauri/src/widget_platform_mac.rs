@@ -30,7 +30,7 @@
 
 use objc2::define_class;
 use objc2::runtime::{AnyClass, AnyObject, Bool};
-use objc2::{msg_send, ClassType, MainThreadOnly};
+use objc2::{msg_send, ClassType};
 use objc2_app_kit::NSWindow;
 
 /// NSWindowCollectionBehavior flags for the always-on-top-across-spaces
@@ -51,7 +51,6 @@ define_class!(
     /// (Tauri 2 creates NSWindow instances; we can't change that, but we
     /// can swap their class to ours after creation).
     #[unsafe(super(NSWindow))]
-    #[thread_kind = MainThreadOnly]
     #[name = "ThresholdPanel"]
     struct ThresholdPanel;
 
@@ -84,32 +83,53 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
         return Err("ns_window pointer is null".into());
     }
 
-    let cls: &AnyClass = ThresholdPanel::class();
+    // Wrap the entire shim in catch_unwind so any Rust-side panic
+    // (class registration assertion, set_class invariant check, msg_send
+    // panic) degrades gracefully to "filter catches the focus-leak at
+    // capture time" instead of bringing down the whole app process.
+    //
+    // The objc2 0.6 + AppKit interaction surface is somewhat fragile;
+    // we'd rather ship sourceApp = "" via the filter than crash on launch.
+    let result = std::panic::catch_unwind(|| {
+        let cls: &AnyClass = ThresholdPanel::class();
 
-    // SAFETY: caller guarantees `ns_window` is a valid NSWindow object
-    // pointer. AnyObject::set_class is the canonical class-swap operation
-    // (wraps libobjc's `object_setClass`); after the call, `ns_window` is
-    // a ThresholdPanel instance and its `canBecomeKeyWindow` +
-    // `canBecomeMainWindow` selectors return NO.
-    unsafe {
-        let win = ns_window as *mut AnyObject;
-        let _old: &AnyClass = AnyObject::set_class(&*win, cls);
+        // SAFETY: caller guarantees `ns_window` is a valid NSWindow object
+        // pointer. AnyObject::set_class is the canonical class-swap
+        // operation (wraps libobjc's `object_setClass`); after the call,
+        // `ns_window` is a ThresholdPanel instance and its
+        // `canBecomeKeyWindow` + `canBecomeMainWindow` selectors return NO.
+        unsafe {
+            let win = ns_window as *mut AnyObject;
+            let _old: &AnyClass = AnyObject::set_class(&*win, cls);
 
-        // Collection behavior: stationary + travels-with-user + tolerates
-        // full-screen-app transitions (AC-CUX-02).
-        let current_behavior: u64 = msg_send![win, collectionBehavior];
-        let new_behavior = current_behavior
-            | NS_COLLECTION_CAN_JOIN_ALL_SPACES
-            | NS_COLLECTION_STATIONARY
-            | NS_COLLECTION_FULL_SCREEN_AUXILIARY;
-        let _: () = msg_send![win, setCollectionBehavior: new_behavior];
+            // Collection behavior: stationary + travels-with-user + tolerates
+            // full-screen-app transitions (AC-CUX-02).
+            let current_behavior: u64 = msg_send![win, collectionBehavior];
+            let new_behavior = current_behavior
+                | NS_COLLECTION_CAN_JOIN_ALL_SPACES
+                | NS_COLLECTION_STATIONARY
+                | NS_COLLECTION_FULL_SCREEN_AUXILIARY;
+            let _: () = msg_send![win, setCollectionBehavior: new_behavior];
 
-        // setMovableByWindowBackground: NO — our JS click-vs-drag heuristic
-        // owns dragging; let it not fight a native AppKit drag too.
-        let _: () = msg_send![win, setMovableByWindowBackground: false];
+            // setMovableByWindowBackground: NO — our JS click-vs-drag heuristic
+            // owns dragging; let it not fight a native AppKit drag too.
+            let _: () = msg_send![win, setMovableByWindowBackground: false];
+        }
+    });
+
+    match result {
+        Ok(()) => Ok(()),
+        Err(panic) => {
+            let msg = if let Some(s) = panic.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = panic.downcast_ref::<&'static str>() {
+                s.to_string()
+            } else {
+                "non-string panic payload".to_string()
+            };
+            Err(format!("class-swap panicked (recovered): {msg}"))
+        }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
