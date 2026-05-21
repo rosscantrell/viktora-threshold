@@ -20,6 +20,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 
+// WP-OCR-13 Phase A — Mac in-process Vision OCR (D-13-02, AC-2).
+#[cfg(target_os = "macos")]
+mod ocr_mac;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Globals (D-12-02-AMEND: in-flight ingestion counter)
 // ───────────────────────────────────────────────────────────────────────────
@@ -329,7 +333,12 @@ fn compute_document_id(content: &str) -> String {
     format!("DESKTOP-{}", &hex_str[..16])
 }
 
-fn build_payload(path: &Path, content: &str) -> serde_json::Value {
+/// Build the JSON payload for file-upload ingestion (file picker + drag-drop).
+///
+/// WP-OCR-12 D-OCR-08 contract: `captureMethod = 'desktop-app-file-upload'`.
+/// `sourceApp` is Threshold's own bundle ID — the file came in via the
+/// desktop app, not from a third-party app being captured.
+fn build_file_payload(path: &Path, content: &str) -> serde_json::Value {
     let title = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -345,6 +354,175 @@ fn build_payload(path: &Path, content: &str) -> serde_json::Value {
             "capturedAt": Utc::now().to_rfc3339()
         }
     })
+}
+
+/// Build the JSON payload for region-screenshot ingestion (Capture Screen,
+/// WP-OCR-13 v0.2).
+///
+/// AC-19 contract:
+/// - `captureMethod: 'screenshot-ocr'`  — canonical taxonomy (D-OCR-08); matches OCR-utility v0.1.1 wire format
+/// - `captureMode:   'region'`          — D-REG-04 sub-classifier
+/// - `captureTool:   'threshold'`       — P-13-09 (c) NEW v0.2 cross-surface attribution
+/// - `sourceApp:     <bundle ID of frontmost app at capture time>` — best-effort; empty string on lookup failure
+/// - `capturedAt:    ISO 8601 UTC`
+///
+/// Title = first non-empty OCR line, capped at 80 chars (parallels WP-OCR-01
+/// D-OCR-11 title-derivation convention).
+fn build_screenshot_payload(text: &str, source_app: &str) -> serde_json::Value {
+    let title = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| l.chars().take(80).collect::<String>())
+        .unwrap_or_else(|| "(empty capture)".to_string());
+
+    serde_json::json!({
+        "documentId": compute_document_id(text),
+        "title": title,
+        "content": text,
+        "sourceMetadata": {
+            "captureMethod": "screenshot-ocr",
+            "captureMode": "region",
+            "captureTool": "threshold",
+            "sourceApp": source_app,
+            "capturedAt": Utc::now().to_rfc3339()
+        }
+    })
+}
+
+/// POST a built JSON payload to `/api/ingest-document` on the configured
+/// Apolla backend. Owns response handling, lenient deserialization (D-12-17),
+/// and `IngestionOutcome` construction. Shared by both file-upload
+/// (`ingest_one_file`) and screen-capture (`run_screen_capture`) paths.
+///
+/// `display_name` is the human-readable label used in toast titles when the
+/// server doesn't return one (e.g., file basename, or `"screen capture"`).
+/// `source_path` lets the frontend disambiguate toasts — file path for
+/// file uploads, sentinel `"__screen_capture__"` for region captures.
+///
+/// reqwest client config is load-bearing for WP-OCR-08 local-HTTPS mode
+/// (rustls-tls + `danger_accept_invalid_certs(true)` accepts the
+/// mkcert-provisioned local CA); 60s timeout absorbs LLM extraction latency.
+async fn post_payload_to_apolla(
+    payload: serde_json::Value,
+    cfg: &AppConfig,
+    display_name: &str,
+    source_path: Option<String>,
+) -> IngestionOutcome {
+    let url = format!(
+        "{}/api/ingest-document",
+        cfg.base_url.trim_end_matches('/')
+    );
+
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(60))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: "HTTP client init failed".into(),
+                body: Some(format!("{}", e)),
+                source_path,
+            };
+        }
+    };
+
+    let req = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&payload);
+
+    let response = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let detail = if e.is_timeout() {
+                "Server timed out (60s). LLM extraction may be slow or the server may be unreachable."
+                    .to_string()
+            } else if e.is_connect() {
+                "Connection refused. Is the schema-browser running at the configured base URL?".into()
+            } else {
+                format!("{}", e)
+            };
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("Couldn't reach Apolla: {}", display_name),
+                body: Some(detail),
+                source_path,
+            };
+        }
+    };
+
+    let status = response.status();
+    if !status.is_success() {
+        let body_text = response.text().await.unwrap_or_default();
+        let detail = if status.as_u16() == 401 {
+            "Server rejected the bearer token. Check your INGESTION_API_KEY in Configure.".into()
+        } else if status.as_u16() == 429 {
+            "Rate-limited by the server. Wait a moment and retry.".into()
+        } else {
+            format!("HTTP {} from {}: {}", status.as_u16(), url, body_text)
+        };
+        return IngestionOutcome {
+            kind: "failure".into(),
+            title: format!("Server returned {}", status.as_u16()),
+            body: Some(detail),
+            source_path,
+        };
+    }
+
+    // Lenient deserialization (D-12-17)
+    let parsed: IngestServerResponse = match response.json().await {
+        Ok(p) => p,
+        Err(e) => {
+            // 2xx but body unparseable — treat as success with warning.
+            return IngestionOutcome {
+                kind: "success".into(),
+                title: format!("Captured: {}", display_name),
+                body: Some(format!(
+                    "Server returned 2xx but response body couldn't be parsed: {}",
+                    e
+                )),
+                source_path,
+            };
+        }
+    };
+
+    let server_title = parsed
+        .title
+        .clone()
+        .unwrap_or_else(|| display_name.to_string());
+    let term_count = parsed
+        .terms_extracted
+        .as_ref()
+        .map(|v| v.len())
+        .unwrap_or(0);
+
+    if parsed.already_existed.unwrap_or(false) {
+        IngestionOutcome {
+            kind: "idempotent".into(),
+            title: format!("Already captured: {}", server_title),
+            // Surfacing the dedup mechanism: idempotency is content-hash
+            // based, so the same bytes from a different filename/directory
+            // still match. (Pilot empirical: Ross had two copies in
+            // different folders and was confused by the idempotent toast.)
+            body: Some(
+                "The content matches a previous capture (possibly from a different location)."
+                    .into(),
+            ),
+            source_path,
+        }
+    } else {
+        IngestionOutcome {
+            kind: "success".into(),
+            title: format!("Captured: {}", server_title),
+            body: Some(format!("Extracted {} term(s).", term_count)),
+            source_path,
+        }
+    }
 }
 
 /// POST the file content to /api/ingest-document. Returns the IngestionOutcome
@@ -394,118 +572,11 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
         };
     }
 
-    // Build payload + POST (D-12-13: from Rust shell, no Origin header)
-    let payload = build_payload(&path, &content);
-    let url = format!(
-        "{}/api/ingest-document",
-        cfg.base_url.trim_end_matches('/')
-    );
-
-    let client = match reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(Duration::from_secs(60)) // LLM extraction can take 10-15s
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return IngestionOutcome {
-                kind: "failure".into(),
-                title: "HTTP client init failed".into(),
-                body: Some(format!("{}", e)),
-                source_path,
-            };
-        }
-    };
-
-    let req = client
-        .post(&url)
-        .header(
-            "Authorization",
-            format!("Bearer {}", cfg.bearer_token),
-        )
-        .header("Content-Type", "application/json")
-        .json(&payload);
-
-    let response = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            let detail = if e.is_timeout() {
-                "Server timed out (60s). LLM extraction may be slow or the server may be unreachable."
-                    .to_string()
-            } else if e.is_connect() {
-                "Connection refused. Is the schema-browser running at the configured base URL?".into()
-            } else {
-                format!("{}", e)
-            };
-            return IngestionOutcome {
-                kind: "failure".into(),
-                title: format!("Couldn't reach Apolla: {}", display_name),
-                body: Some(detail),
-                source_path,
-            };
-        }
-    };
-
-    let status = response.status();
-    if !status.is_success() {
-        let body_text = response.text().await.unwrap_or_default();
-        let detail = if status.as_u16() == 401 {
-            "Server rejected the bearer token. Check your INGESTION_API_KEY in Configure.".into()
-        } else if status.as_u16() == 429 {
-            "Rate-limited by the server. Wait a moment and retry.".into()
-        } else {
-            format!("HTTP {} from {}: {}", status.as_u16(), url, body_text)
-        };
-        return IngestionOutcome {
-            kind: "failure".into(),
-            title: format!("Server returned {}", status.as_u16()),
-            body: Some(detail),
-            source_path,
-        };
-    }
-
-    // Lenient deserialization (D-12-17)
-    let parsed: IngestServerResponse = match response.json().await {
-        Ok(p) => p,
-        Err(e) => {
-            // Server returned 2xx but the body isn't parseable. Treat as success-with-warning.
-            return IngestionOutcome {
-                kind: "success".into(),
-                title: format!("Captured: {}", display_name),
-                body: Some(format!(
-                    "Server returned 2xx but response body couldn't be parsed: {}",
-                    e
-                )),
-                source_path,
-            };
-        }
-    };
-
-    let server_title = parsed.title.clone().unwrap_or(display_name.clone());
-    let term_count = parsed.terms_extracted.as_ref().map(|v| v.len()).unwrap_or(0);
-
-    if parsed.already_existed.unwrap_or(false) {
-        IngestionOutcome {
-            kind: "idempotent".into(),
-            title: format!("Already captured: {}", server_title),
-            // Make the dedup mechanism legible: idempotency is content-hash based,
-            // so the same bytes from a different filename/directory still match.
-            // Surfaced after a pilot empirical where Ross had two copies of the same
-            // file in different folders and was confused by the idempotent response.
-            body: Some(
-                "The content matches a previous capture (possibly from a different location)."
-                    .into(),
-            ),
-            source_path,
-        }
-    } else {
-        IngestionOutcome {
-            kind: "success".into(),
-            title: format!("Captured: {}", server_title),
-            body: Some(format!("Extracted {} term(s).", term_count)),
-            source_path,
-        }
-    }
+    // Build payload + POST (D-12-13: from Rust shell, no Origin header).
+    // WP-OCR-13: POST mechanics live in `post_payload_to_apolla` so the
+    // screen-capture path can reuse them with the same client config.
+    let payload = build_file_payload(&path, &content);
+    post_payload_to_apolla(payload, cfg, &display_name, source_path).await
 }
 
 /// Helper: pull the current config out of AppState; error if not configured.
@@ -565,146 +636,108 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Increment 5: Capture Screen via OCR utility subprocess (D-12-19 cached path)
+// Capture Screen — WP-OCR-13 v0.2 native in-process OCR
 // ───────────────────────────────────────────────────────────────────────────
+//
+// Mac: `/usr/sbin/screencapture -i` for the region crosshair (D-13-04), then
+//      Vision framework in-process for OCR (D-13-02 via objc2-vision). No
+//      external utility involvement.
+// Windows: lands in Phase B (D-13-03/05 — `ms-screenclip:` + Windows.Media.Ocr).
+// Other: file upload + drag-drop still work; Capture Screen returns a
+//      structured "not supported on this platform" toast.
 
-/// Spawn the OCR utility (`ocr-capture --once --region`) using the absolute
-/// path cached at startup via D-12-19. The utility handles capture + OCR + POST
-/// itself; we just parse its stdout for the outcome line and emit a toast.
+/// Capture a region from the screen and POST the OCR'd text to the configured
+/// Apolla backend. Platform dispatch lives inside; see ocr_mac for the Mac
+/// implementation.
 #[tauri::command]
 async fn run_screen_capture(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let cfg = current_config(&state)?;
-    let ocr_path = state
-        .ocr_capture_path
-        .lock()
-        .expect("ocr_capture_path mutex poisoned")
-        .clone();
 
-    let ocr_binary = match ocr_path {
-        Some(p) => p,
-        None => {
-            let _ = app_handle.emit(
-                "threshold://toast",
-                IngestionOutcome {
-                    kind: "failure".into(),
-                    title: "OCR utility not installed".into(),
-                    body: Some(
-                        "Run `bash setup.sh` from the viktora-threshold repo to install it via pipx, \
-                         then restart Viktora Threshold."
-                            .into(),
-                    ),
-                    source_path: None,
-                },
-            );
-            return Ok(());
-        }
-    };
+    #[cfg(target_os = "macos")]
+    {
+        run_screen_capture_mac(app_handle, cfg).await;
+        Ok(())
+    }
 
-    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
-
-    // The subprocess can take 10-30s (region select + OCR + POST + extraction).
-    // We don't apply a wrapper timeout here — `ocr-capture` has its own 60s
-    // POST timeout per WP-OCR-01 internals.
-    let result = tokio::process::Command::new(&ocr_binary)
-        .args(["--once", "--region"])
-        .env("APOLLA_BASE_URL", &cfg.base_url)
-        .env("APOLLA_INGEST_TOKEN", &cfg.bearer_token)
-        .output()
-        .await;
-
-    IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
-
-    let outcome = parse_screen_capture_outcome(result);
-    let _ = app_handle.emit("threshold://toast", outcome);
-    Ok(())
-}
-
-/// Pure helper that parses the OCR utility's subprocess output into an
-/// IngestionOutcome. Extracted for unit testability.
-fn parse_screen_capture_outcome(
-    result: std::io::Result<std::process::Output>,
-) -> IngestionOutcome {
-    match result {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            // OCR utility stdout formats (per WP-OCR-01 + WP-OCR-03):
-            //   "✓ Captured: <title> | terms: <N>"           — new full-window
-            //   "✓ Captured [region]: <title> | terms: <N>"  — new region
-            //   "↺ Already captured: <title>"                — idempotent
-            //   "↺ Already captured [region]: <title>"
-            //   "… region capture cancelled: …"              — user pressed Esc
-            //   "✗ …"                                        — capture/OCR/POST failed
-            // Case-insensitive match so we catch both "Captured" (new) and
-            // "Already captured" (idempotent) — the OCR utility uses different
-            // capitalization for the two paths per WP-OCR-01 + WP-OCR-03 README.
-            let last_status_line = stdout
-                .lines()
-                .rev()
-                .find(|l| {
-                    let lower = l.to_lowercase();
-                    lower.contains("captured") || lower.contains("cancelled") || l.starts_with("✗")
-                })
-                .unwrap_or("")
-                .trim()
-                .to_string();
-
-            if last_status_line.contains("Already captured") {
-                IngestionOutcome {
-                    kind: "idempotent".into(),
-                    title: last_status_line,
-                    body: None,
-                    source_path: Some("__screen_capture__".into()),
-                }
-            } else if last_status_line.contains("cancelled") {
-                IngestionOutcome {
-                    kind: "failure".into(),
-                    title: "Region capture cancelled".into(),
-                    body: Some("You pressed Esc during region select. No capture sent.".into()),
-                    source_path: Some("__screen_capture__".into()),
-                }
-            } else if last_status_line.starts_with("✗") {
-                IngestionOutcome {
-                    kind: "failure".into(),
-                    title: "Capture failed".into(),
-                    body: Some(last_status_line),
-                    source_path: Some("__screen_capture__".into()),
-                }
-            } else if last_status_line.contains("Captured") {
-                IngestionOutcome {
-                    kind: "success".into(),
-                    title: last_status_line,
-                    body: None,
-                    source_path: Some("__screen_capture__".into()),
-                }
-            } else {
-                // Subprocess returned 0 but emitted nothing parseable
-                IngestionOutcome {
-                    kind: "success".into(),
-                    title: "Screen captured".into(),
-                    body: Some(stdout.trim().to_string()),
-                    source_path: Some("__screen_capture__".into()),
-                }
-            }
-        }
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app_handle.emit(
+            "threshold://toast",
             IngestionOutcome {
                 kind: "failure".into(),
-                title: format!("Capture failed (exit {})", out.status.code().unwrap_or(-1)),
-                body: Some(stderr.lines().last().unwrap_or("").trim().to_string()),
+                title: "Screen capture not yet supported on this platform".into(),
+                body: Some(
+                    "Native in-process OCR for this platform is planned for a future Threshold release. \
+                     File upload + drag-drop work today."
+                        .into(),
+                ),
                 source_path: Some("__screen_capture__".into()),
-            }
+            },
+        );
+        // `cfg` is unused on non-Mac platforms; bind it to a temp so the
+        // compiler doesn't flag the parameter when this arm is selected.
+        let _ = cfg;
+        Ok(())
+    }
+}
+
+/// Mac-side capture pipeline: screencapture -i (region crosshair) + Vision
+/// OCR (in-process via objc2-vision). Wraps the synchronous capture in
+/// `tokio::task::spawn_blocking` so the runtime thread isn't blocked.
+#[cfg(target_os = "macos")]
+async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
+    IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+
+    // `screencapture` + Vision are both synchronous blocking calls; offload
+    // to a blocking worker so the tokio runtime stays responsive.
+    let capture_outcome = tokio::task::spawn_blocking(ocr_mac::capture_and_ocr_mac)
+        .await
+        .unwrap_or_else(|join_err| {
+            Err(ocr_mac::CaptureError::OcrFailed(format!(
+                "blocking task panicked: {join_err}"
+            )))
+        });
+
+    let outcome = match capture_outcome {
+        Ok(result) if result.text.trim().is_empty() => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Capture had no text".into(),
+            body: Some(
+                "Vision OCR returned no recognizable text in the selected region."
+                    .into(),
+            ),
+            source_path: Some("__screen_capture__".into()),
+        },
+        Ok(result) => {
+            // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
+            let payload = build_screenshot_payload(&result.text, &result.source_app);
+            post_payload_to_apolla(
+                payload,
+                &cfg,
+                "screen capture",
+                Some("__screen_capture__".into()),
+            )
+            .await
         }
+        Err(ocr_mac::CaptureError::CancelledByUser) => IngestionOutcome {
+            kind: "failure".into(),
+            title: "Region capture cancelled".into(),
+            body: Some("You pressed Esc during region select. No capture sent.".into()),
+            source_path: Some("__screen_capture__".into()),
+        },
         Err(e) => IngestionOutcome {
             kind: "failure".into(),
-            title: "Couldn't spawn OCR utility".into(),
+            title: "Capture failed".into(),
             body: Some(format!("{}", e)),
             source_path: Some("__screen_capture__".into()),
         },
-    }
+    };
+
+    IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    let _ = app_handle.emit("threshold://toast", outcome);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -815,9 +848,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
-    use std::process::{ExitStatus, Output};
 
     // ───── documentId generation (D-OCR-06 / D-ADDIN-05 convention) ─────
 
@@ -959,69 +990,130 @@ mod tests {
         assert_eq!(parsed.mode, cfg.mode);
     }
 
-    // ───── Screen-capture outcome parser ─────
+    // ───── Screenshot payload (WP-OCR-13 AC-19) ─────
+    //
+    // Round-trip the screenshot payload through `serde_json::Value` and
+    // assert the exact field literals required by AC-19:
+    //   captureMethod = 'screenshot-ocr'   (D-OCR-08 canonical taxonomy)
+    //   captureMode   = 'region'           (D-REG-04 sub-classifier)
+    //   captureTool   = 'threshold'        (P-13-09 (c) NEW v0.2)
+    //   sourceApp     = <bundle ID>        (best-effort; ^([a-z]+\.)+[a-z]+$)
+    //   capturedAt    = <ISO 8601 UTC>
+    //
+    // The unit test passes a known `source_app` so the assertion can be
+    // exact. The `frontmost_app_bundle_id` lookup itself is exercised in
+    // the end-to-end empirical capture (Phase D); covering it here would
+    // require a live NSWorkspace context the test runner doesn't have.
 
-    fn make_output(stdout: &str, stderr: &str, exit_code: i32) -> std::io::Result<Output> {
-        Ok(Output {
-            status: ExitStatus::from_raw(exit_code << 8), // shifted because the lower 8 bits are signal info
-            stdout: stdout.as_bytes().to_vec(),
-            stderr: stderr.as_bytes().to_vec(),
-        })
+    fn parse_payload(payload: &serde_json::Value) -> &serde_json::Map<String, serde_json::Value> {
+        payload
+            .as_object()
+            .expect("payload should be a JSON object")
+    }
+
+    fn source_metadata(payload: &serde_json::Value) -> &serde_json::Map<String, serde_json::Value> {
+        parse_payload(payload)
+            .get("sourceMetadata")
+            .expect("payload should have sourceMetadata")
+            .as_object()
+            .expect("sourceMetadata should be a JSON object")
     }
 
     #[test]
-    fn parse_screen_capture_success_full_window() {
-        let result = make_output("✓ Captured: My Document | terms: 42\n", "", 0);
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "success");
-        assert!(outcome.title.contains("My Document"));
-    }
+    fn screenshot_payload_sets_ac19_literals() {
+        let payload = build_screenshot_payload("Hello world\nSecond line", "com.example.app");
 
-    #[test]
-    fn parse_screen_capture_success_region() {
-        let result = make_output("✓ Captured [region]: Slack thread | terms: 18\n", "", 0);
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "success");
-        assert!(outcome.title.contains("Slack thread"));
-        assert!(outcome.title.contains("[region]"));
-    }
-
-    #[test]
-    fn parse_screen_capture_idempotent() {
-        let result = make_output("↺ Already captured [region]: README\n", "", 0);
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "idempotent");
-        assert!(outcome.title.contains("Already captured"));
-    }
-
-    #[test]
-    fn parse_screen_capture_user_cancelled() {
-        let result = make_output(
-            "… region capture cancelled: user pressed Esc\n",
-            "",
-            0,
+        let top = parse_payload(&payload);
+        assert_eq!(top.get("title").and_then(|v| v.as_str()), Some("Hello world"));
+        assert_eq!(
+            top.get("content").and_then(|v| v.as_str()),
+            Some("Hello world\nSecond line")
         );
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "failure");
-        assert!(outcome.title.contains("cancelled"));
+        let document_id = top
+            .get("documentId")
+            .and_then(|v| v.as_str())
+            .expect("documentId is a string");
+        assert!(document_id.starts_with("DESKTOP-"), "got {document_id:?}");
+        assert_eq!(document_id.len(), "DESKTOP-".len() + 16);
+
+        let meta = source_metadata(&payload);
+        assert_eq!(
+            meta.get("captureMethod").and_then(|v| v.as_str()),
+            Some("screenshot-ocr")
+        );
+        assert_eq!(
+            meta.get("captureMode").and_then(|v| v.as_str()),
+            Some("region")
+        );
+        assert_eq!(
+            meta.get("captureTool").and_then(|v| v.as_str()),
+            Some("threshold")
+        );
+        assert_eq!(
+            meta.get("sourceApp").and_then(|v| v.as_str()),
+            Some("com.example.app")
+        );
+        // ISO 8601 shape — chrono's RFC 3339 parser is the canonical check.
+        let captured_at = meta
+            .get("capturedAt")
+            .and_then(|v| v.as_str())
+            .expect("capturedAt is a string");
+        chrono::DateTime::parse_from_rfc3339(captured_at)
+            .unwrap_or_else(|e| panic!("capturedAt {captured_at:?} not RFC 3339: {e}"));
     }
 
     #[test]
-    fn parse_screen_capture_nonzero_exit_code() {
-        let result = make_output("", "Vision OCR returned empty\n", 1);
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "failure");
-        assert!(outcome.title.contains("exit 1"));
+    fn screenshot_payload_title_skips_blank_lines_and_caps_at_80() {
+        let long_line = "x".repeat(200);
+        let payload = build_screenshot_payload(&format!("\n\n   \n{long_line}\nbody"), "");
+        let title = parse_payload(&payload)
+            .get("title")
+            .and_then(|v| v.as_str())
+            .expect("title is a string");
+        assert_eq!(title.len(), 80);
+        assert!(title.chars().all(|c| c == 'x'));
     }
 
     #[test]
-    fn parse_screen_capture_spawn_error() {
-        let result = Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "binary missing",
-        ));
-        let outcome = parse_screen_capture_outcome(result);
-        assert_eq!(outcome.kind, "failure");
-        assert!(outcome.title.contains("Couldn't spawn"));
+    fn screenshot_payload_handles_all_blank_text() {
+        let payload = build_screenshot_payload("\n\n   \n\t\n", "");
+        assert_eq!(
+            parse_payload(&payload)
+                .get("title")
+                .and_then(|v| v.as_str()),
+            Some("(empty capture)")
+        );
+    }
+
+    #[test]
+    fn screenshot_payload_sourceapp_shape_matches_brief() {
+        // Documents the brief's expectation that `sourceApp` is a bundle ID
+        // (`^([a-z]+\.)+[a-z]+$`) when the NSWorkspace lookup succeeds — and
+        // an empty string when it fails. Both shapes pass the route handler's
+        // coarse-grained validation; the assertion here just pins the values
+        // we expect to flow through.
+        let bundle_id_examples = [
+            "com.microsoft.outlook",
+            "com.tinyspeck.slackmacgap",
+            "com.apple.safari",
+        ];
+        for bundle in &bundle_id_examples {
+            let payload = build_screenshot_payload("body", bundle);
+            assert_eq!(
+                source_metadata(&payload)
+                    .get("sourceApp")
+                    .and_then(|v| v.as_str()),
+                Some(*bundle)
+            );
+        }
+        // Degraded path (NSWorkspace returned None) — sourceApp serializes
+        // as empty string. Brief §0.2 explicit allowance.
+        let degraded = build_screenshot_payload("body", "");
+        assert_eq!(
+            source_metadata(&degraded)
+                .get("sourceApp")
+                .and_then(|v| v.as_str()),
+            Some("")
+        );
     }
 }
