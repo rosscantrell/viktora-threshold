@@ -644,6 +644,14 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
         },
         Ok(result) => {
             // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
+            // Phase 1 spike: surface sourceApp to stdout for S-CUX-03 empirical
+            // verdict. The schema-browser strips sourceMetadata from /api/data,
+            // so the only readable path is the Rust-side capture-time value.
+            // Drop these eprintln!s once the spike's verdict is recorded.
+            eprintln!(
+                "[SPIKE S-CUX-03] sourceApp = {:?}  (empty = filter caught self-reference)",
+                result.source_app
+            );
             let payload = build_screenshot_payload(&result.text, &result.source_app);
             post_payload_to_apolla(
                 payload,
