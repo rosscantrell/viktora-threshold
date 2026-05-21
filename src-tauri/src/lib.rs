@@ -647,8 +647,10 @@ const MENU_EXPAND: &str = "menu.expand";
 const MENU_SETTINGS: &str = "menu.settings";
 const MENU_QUIT: &str = "menu.quit";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
-/// that opens Tauri's devtools for diagnosis. Stripped in release builds
-/// (the menu builder gates it on `cfg!(debug_assertions)`).
+/// that opens Tauri's devtools for diagnosis. Constant + menu builder
+/// branch + event handler arm are all #[cfg(debug_assertions)] gated so
+/// release builds don't carry the dead-code reference.
+#[cfg(debug_assertions)]
 const MENU_DEVTOOLS: &str = "menu.devtools";
 
 /// Build the widget's native right-click context menu. Per D-CUX-15:
@@ -1234,16 +1236,14 @@ pub fn run() {
                         // exiting; the existing close handler covers this.
                         app.exit(0);
                     }
+                    #[cfg(debug_assertions)]
                     MENU_DEVTOOLS => {
-                        // Debug-only — see build_widget_menu's
-                        // cfg!(debug_assertions) gate. Opens the webview's
-                        // devtools (Web Inspector on Mac / Chromium DevTools
-                        // on Windows) for the widget window.
-                        #[cfg(debug_assertions)]
-                        {
-                            window.open_devtools();
-                            log::info!("menu open_devtools");
-                        }
+                        // Debug-only — see build_widget_menu's matching
+                        // cfg-gated branch. Opens the webview's devtools
+                        // (Web Inspector on Mac / Chromium DevTools on
+                        // Windows) for the widget window.
+                        window.open_devtools();
+                        log::info!("menu open_devtools");
                     }
                     other => log::warn!("menu event unhandled: {other}"),
                 }
