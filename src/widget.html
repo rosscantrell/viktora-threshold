@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="widget.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Threshold</title>
+    <script type="module" src="/widget.js" defer></script>
+  </head>
+  <body>
+    <!--
+      WP-Threshold-Compact-UX Phase 1 spike widget.
+      ~100x100 floating widget; click center crosshair to fire run_screen_capture.
+      data-tauri-drag-region on the outer shell enables click-and-drag move
+      (S-CUX-05); the inner Capture button has data-tauri-drag-region="false"
+      so its clicks DON'T get hijacked by the drag handler.
+    -->
+    <div id="widget" data-tauri-drag-region>
+      <button
+        id="capture-btn"
+        type="button"
+        title="Capture region from screen"
+        aria-label="Capture region from screen"
+        data-tauri-drag-region="false"
+      >
+        <svg viewBox="0 0 24 24" width="32" height="32" fill="none"
+             stroke="currentColor" stroke-width="1.75"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"></circle>
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+          <circle cx="12" cy="12" r="1.5" fill="currentColor"></circle>
+        </svg>
+      </button>
+      <div id="status-dot" class="status-unknown" title="Connectivity"></div>
+    </div>
+  </body>
+</html>

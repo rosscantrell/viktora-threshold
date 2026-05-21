@@ -1,0 +1,88 @@
+/* WP-Threshold-Compact-UX Phase 1 spike widget styling.
+ * Goals: 100x100 fits inside the Tauri window (which is 100x100 itself);
+ * transparent background lets Tauri's transparent: true config show through;
+ * dark widget surface stays visible against light + dark wallpapers;
+ * inner Capture button is the only no-drag region (centered hit target). */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  color: #e8eaed;
+}
+
+#widget {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(28, 30, 38, 0.92);
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35),
+              inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  cursor: grab;
+}
+
+#widget:active {
+  cursor: grabbing;
+}
+
+#capture-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease-out, border-color 0.12s ease-out,
+              transform 0.08s ease-out;
+}
+
+#capture-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+#capture-btn:active {
+  transform: scale(0.95);
+}
+
+#capture-btn:focus {
+  outline: none;
+}
+
+/* Connectivity dot — AC-CUX-12 reactive-only.
+ * status-unknown = cold start before any test/POST observed
+ * status-ok      = last test/POST succeeded
+ * status-err     = last test/POST failed */
+#status-dot {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transition: background 0.2s ease-out;
+}
+
+.status-unknown { background: #6b7280; }
+.status-ok      { background: #4ade80; }
+.status-err     { background: #f87171; }
