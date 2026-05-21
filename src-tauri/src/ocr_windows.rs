@@ -338,20 +338,32 @@ fn restore_clipboard(
 /// Best-effort foreground app EXE name (no path, no `.exe`). Returns
 /// `None` on any Win32 lookup failure (no foreground window — locked
 /// screen / boot — or restricted process the user doesn't have query
-/// permissions for). Caller treats `None` as empty string per brief §0.2.
+/// permissions for) AND when the lookup resolves to Threshold's own EXE
+/// (see `is_threshold_own_exe`). Caller treats `None` as empty string
+/// per brief §0.2.
 ///
 /// Path → file stem: e.g. `"C:\\Program Files\\Microsoft Office\\OUTLOOK.EXE"`
-/// → `"OUTLOOK"`. Mirrors the role of Mac's bundle ID (`"com.microsoft.outlook"`)
-/// for downstream cross-surface analytics; the schema-browser side doesn't
-/// care about format symmetry, only presence.
+/// → `"OUTLOOK"`. Mirrors the role of Mac's bundle ID
+/// (`"com.microsoft.outlook"`) for downstream cross-surface analytics; the
+/// schema-browser side doesn't care about format symmetry, only presence.
 ///
-/// NOTE on FN-OCR-13-12: this lookup happens BEFORE we invoke
-/// `ms-screenclip:` precisely because once the snip overlay appears,
-/// `GetForegroundWindow` would return Threshold (the window the click came
-/// from) or the snip overlay itself. The before-invocation snapshot is the
-/// architecturally correct fix; if pilot empirical shows it's still
-/// returning Threshold's EXE on Windows, we fall back to shipping `""`
-/// and defer to the compact-UX workstream.
+/// NOTE on FN-OCR-13-12: the lookup happens BEFORE we invoke
+/// `ms-screenclip:` so the snipping overlay hasn't yet stolen focus.
+/// Pre-invocation is the architecturally cleanest snapshot, but two
+/// scenarios still leak Threshold itself as the answer:
+///   (a) Multi-click — user clicks Capture Screen, finishes capture,
+///       immediately clicks again. Threshold never lost frontmost focus
+///       between the two clicks, so the second call sees Threshold.
+///   (b) Configure-open — user has Threshold's main window open (e.g.,
+///       for Configure), then clicks Capture Screen from it. Threshold
+///       is the frontmost window at the moment of click.
+///
+/// In both cases shipping `sourceApp: "viktora-threshold"` is worse than
+/// shipping `""` — misleading data vs honest "we don't know". Symmetric
+/// with Mac's FN-OCR-13-12 posture (`""` when NSWorkspace returns
+/// Threshold itself). The `is_threshold_own_exe` filter rejects the
+/// self-reference; the compact-UX workstream owns the proper fix
+/// (activation observer cached across Threshold's lifetime).
 fn foreground_app_exe_name() -> Option<String> {
     unsafe {
         let hwnd: HWND = GetForegroundWindow();
@@ -374,11 +386,36 @@ fn foreground_app_exe_name() -> Option<String> {
             return None;
         }
         let path = String::from_utf16_lossy(&buf[..len as usize]);
-        std::path::Path::new(&path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
+        let stem = std::path::Path::new(&path).file_stem().and_then(|s| s.to_str())?;
+        if is_threshold_own_exe(stem) {
+            return None;
+        }
+        Some(stem.to_string())
     }
+}
+
+/// Does this EXE-name stem refer to Threshold itself? Catches the three
+/// canonical bundle-name variants:
+///   - `"viktora-threshold"`  Cargo package name (dev `cargo run`)
+///   - `"viktora_threshold"`  some bundler variants
+///   - `"Viktora Threshold"`  tauri.conf.json productName (MSI install)
+///
+/// Normalization: lowercase + collapse space/underscore/dash → single
+/// dash; compare to canonical `"viktora-threshold"`. Avoids substring
+/// matching so unrelated EXEs like `"viktora-threshold-helper"` would
+/// still ship through (none planned, but future-proofing).
+fn is_threshold_own_exe(stem: &str) -> bool {
+    let normalized: String = stem
+        .chars()
+        .map(|c| {
+            if c == ' ' || c == '_' {
+                '-'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    normalized == "viktora-threshold"
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -509,6 +546,34 @@ mod tests {
     #[test]
     fn foreground_app_exe_name_does_not_panic() {
         let _ = foreground_app_exe_name();
+    }
+
+    /// FN-OCR-13-12 Windows-side self-filter: Threshold's own EXE under any
+    /// of its bundle-name variants must be rejected (mapped to None →
+    /// `sourceApp: ""`). Symmetric with Mac's posture.
+    #[test]
+    fn is_threshold_own_exe_rejects_self_under_all_bundle_names() {
+        // Variants the filter MUST catch
+        assert!(is_threshold_own_exe("viktora-threshold"), "Cargo package name");
+        assert!(is_threshold_own_exe("Viktora Threshold"), "productName (MSI install)");
+        assert!(is_threshold_own_exe("viktora_threshold"), "underscore variant");
+        assert!(is_threshold_own_exe("VIKTORA-THRESHOLD"), "uppercase");
+        assert!(is_threshold_own_exe("Viktora-Threshold"), "title-case");
+        assert!(is_threshold_own_exe("viktora threshold"), "lowercase with space");
+
+        // Variants the filter MUST NOT catch (real third-party apps; not Threshold)
+        assert!(!is_threshold_own_exe("OUTLOOK"), "Outlook is not Threshold");
+        assert!(!is_threshold_own_exe("chrome"), "Chrome is not Threshold");
+        assert!(!is_threshold_own_exe("notepad"), "Notepad is not Threshold");
+        assert!(!is_threshold_own_exe("explorer"), "Explorer is not Threshold");
+        // Edge case: future helper EXE that shares a prefix — should NOT be
+        // filtered. The filter is exact-match-after-normalization, not
+        // substring; this assertion pins that contract.
+        assert!(
+            !is_threshold_own_exe("viktora-threshold-helper"),
+            "helper-EXEs that prefix-match should still ship through"
+        );
+        assert!(!is_threshold_own_exe("viktora"), "partial brand match should NOT filter");
     }
 
     /// AC-7 / D-13-07: snapshot a text clipboard, simulate a "capture" that
