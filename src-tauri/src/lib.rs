@@ -28,6 +28,13 @@ mod ocr_mac;
 #[cfg(target_os = "windows")]
 mod ocr_windows;
 
+// WP-Threshold-Compact-UX Phase 2 — Mac NSPanel-style shim for the floating
+// widget (D-CUX-04 architectural fix; addresses Phase 1 S-CUX-03 PARTIAL
+// finding that the Tauri 2 high-level window config doesn't prevent
+// focus-steal on click).
+#[cfg(target_os = "macos")]
+mod widget_platform_mac;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Globals (D-12-02-AMEND: in-flight ingestion counter)
 // ───────────────────────────────────────────────────────────────────────────
@@ -815,6 +822,39 @@ pub fn run() {
             app.manage(AppState {
                 config: Mutex::new(None),
             });
+
+            // WP-Threshold-Compact-UX Phase 2 D-CUX-04: apply the
+            // non-activating-panel shim to the widget's NSWindow on Mac.
+            // Without this, clicking the widget's Capture button steals
+            // focus → NSWorkspace returns Threshold's own bundle ID →
+            // sourceApp ships empty (filter catches the leak). With it,
+            // sourceApp ships the user's actual target app's bundle ID.
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    match window.ns_window() {
+                        Ok(ns_window) => {
+                            if let Err(e) =
+                                widget_platform_mac::apply_non_activating_widget_style(ns_window)
+                            {
+                                log::warn!(
+                                    "widget_platform_mac shim failed: {e} — \
+                                     falling back to the is_threshold_own_bundle_id filter \
+                                     catching focus-steals; sourceApp may ship empty"
+                                );
+                            } else {
+                                log::info!("widget_platform_mac: non-activating shim applied");
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("could not obtain NSWindow handle: {e}");
+                        }
+                    }
+                } else {
+                    log::warn!("could not find 'main' window during setup");
+                }
+            }
+
             Ok(())
         })
         // D-12-02 + D-12-02-AMEND: quit-on-window-close, waiting for in-flight
