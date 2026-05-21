@@ -125,6 +125,19 @@ fn probe_ocr_capture() -> Option<PathBuf> {
 
 #[tauri::command]
 fn get_ocr_utility_status(state: tauri::State<AppState>) -> OcrUtilityStatus {
+    // WP-OCR-13 v0.2: screen capture is in-process on both Mac (Phase A: Apple
+    // Vision via objc2-vision) and Windows (Phase B: Windows.Media.Ocr via the
+    // `windows` crate). No external `ocr-capture` binary is needed; the
+    // frontend's Capture-Screen gate (`result.installed` in main.js) must
+    // therefore see `installed: true` on every supported platform, regardless
+    // of whether the legacy v0.1 Python utility is present on disk.
+    //
+    // The D-12-19 probe is preserved here only so the surfaced `path` /
+    // `message` can still report the legacy utility's location when present
+    // (useful for power users straddling the v0.1.x → v0.2.0 upgrade); it no
+    // longer gates capability. Phase C (D-13-08) deletes the probe + this
+    // command entirely.
+
     let guard = state.ocr_capture_path.lock().expect("AppState mutex poisoned");
     let platform = if cfg!(target_os = "macos") {
         "macos"
@@ -133,36 +146,50 @@ fn get_ocr_utility_status(state: tauri::State<AppState>) -> OcrUtilityStatus {
     } else {
         "other"
     };
-    let screen_capture_supported = cfg!(target_os = "macos");
+    // In-process OCR ships on Mac (Phase A) + Windows (Phase B); every other
+    // platform falls through to the structured "not supported" toast.
+    let screen_capture_supported = cfg!(any(target_os = "macos", target_os = "windows"));
 
-    match &*guard {
-        Some(p) => OcrUtilityStatus {
-            installed: true,
-            path: Some(p.to_string_lossy().into_owned()),
-            message: None,
-            screen_capture_supported: true,
+    if !screen_capture_supported {
+        return OcrUtilityStatus {
+            installed: false,
+            path: None,
+            message: Some("Screen capture is not supported on this platform.".to_string()),
+            screen_capture_supported: false,
             platform: platform.into(),
-        },
+        };
+    }
+
+    // Supported platform → in-process OCR is "always installed". The legacy
+    // utility's path (if probed) is surfaced for diagnostics only.
+    let (path, message) = match &*guard {
+        Some(p) => (
+            Some(p.to_string_lossy().into_owned()),
+            // Note the legacy utility's presence without implying the user
+            // needs to act on it.
+            Some(format!(
+                "Built-in OCR (legacy utility also present at {}).",
+                p.display()
+            )),
+        ),
         None => {
-            let message = if cfg!(target_os = "macos") {
-                "OCR utility not installed. Run `bash setup.sh` from the viktora-threshold repo \
-                 to install it via pipx, then restart Viktora Threshold."
-                    .to_string()
+            let msg = if cfg!(target_os = "macos") {
+                "Built-in Apple Vision OCR.".to_string()
             } else if cfg!(target_os = "windows") {
-                "Screen capture is coming to Windows in v0.2 (FN-OCR-12-07). \
-                 File upload and drag-drop work normally."
-                    .to_string()
+                "Built-in Windows.Media.Ocr.".to_string()
             } else {
-                "Screen capture is not supported on this platform.".to_string()
+                "Built-in OCR.".to_string()
             };
-            OcrUtilityStatus {
-                installed: false,
-                path: None,
-                message: Some(message),
-                screen_capture_supported,
-                platform: platform.into(),
-            }
+            (None, Some(msg))
         }
+    };
+
+    OcrUtilityStatus {
+        installed: true,
+        path,
+        message,
+        screen_capture_supported: true,
+        platform: platform.into(),
     }
 }
 
