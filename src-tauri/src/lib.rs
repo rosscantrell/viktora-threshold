@@ -646,6 +646,10 @@ const MENU_PICK_FILE: &str = "menu.pick_file";
 const MENU_EXPAND: &str = "menu.expand";
 const MENU_SETTINGS: &str = "menu.settings";
 const MENU_QUIT: &str = "menu.quit";
+/// Debug-only: surfaces a "Open Console" item in the right-click menu
+/// that opens Tauri's devtools for diagnosis. Stripped in release builds
+/// (the menu builder gates it on `cfg!(debug_assertions)`).
+const MENU_DEVTOOLS: &str = "menu.devtools";
 
 /// Build the widget's native right-click context menu. Per D-CUX-15:
 ///   Capture Screen / Pick File… / Expand… / Settings… / Quit Threshold
@@ -661,6 +665,30 @@ fn build_widget_menu(
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
+
+    // Debug-only Open Console item — strip in release builds via
+    // `cfg!(debug_assertions)`. Lets developers (and Ross during pilot)
+    // open the webview's devtools without fighting AppKit/Win32 for the
+    // default "Inspect Element" context-menu option (we override it
+    // wholesale with this menu).
+    if cfg!(debug_assertions) {
+        let devtools = MenuItem::with_id(app, MENU_DEVTOOLS, "Open Console", true, None::<&str>)?;
+        let sep_dev = PredefinedMenuItem::separator(app)?;
+        return Menu::with_items(
+            app,
+            &[
+                &capture,
+                &pick_file,
+                &sep1,
+                &expand,
+                &settings,
+                &sep2,
+                &quit,
+                &sep_dev,
+                &devtools,
+            ],
+        );
+    }
 
     Menu::with_items(
         app,
@@ -1205,6 +1233,17 @@ pub fn run() {
                         // D-12-02-AMEND drains in-flight ingestions before
                         // exiting; the existing close handler covers this.
                         app.exit(0);
+                    }
+                    MENU_DEVTOOLS => {
+                        // Debug-only — see build_widget_menu's
+                        // cfg!(debug_assertions) gate. Opens the webview's
+                        // devtools (Web Inspector on Mac / Chromium DevTools
+                        // on Windows) for the widget window.
+                        #[cfg(debug_assertions)]
+                        {
+                            window.open_devtools();
+                            log::info!("menu open_devtools");
+                        }
                     }
                     other => log::warn!("menu event unhandled: {other}"),
                 }
