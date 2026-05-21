@@ -119,7 +119,7 @@
           <button type="button" class="wizard-prompt" data-action="screenshot">
             <span class="prompt-icon">⌗</span>
             <span class="prompt-title">Capture a region</span>
-            <span class="prompt-detail">OCR a piece of screen</span>
+            <span class="prompt-detail">Native OCR; drag a region</span>
           </button>
         </div>
         <button type="button" id="btn-wizard-finish" class="btn btn-secondary">
@@ -142,7 +142,7 @@
         <button type="button" id="btn-capture-screen" class="capture-button">
           <span class="capture-icon">⌗</span>
           <span class="capture-label">Capture Screen</span>
-          <span class="capture-detail">Region-select OCR via the installed utility</span>
+          <span class="capture-detail">Drag a region to capture text</span>
         </button>
 
         <button type="button" id="btn-upload-file" class="capture-button">
@@ -155,12 +155,6 @@
       <div class="drop-hint" id="drop-hint">
         <span class="drop-icon">⤓</span>
         Or just drag a file anywhere onto this window
-      </div>
-
-      <div class="panel panel-compact">
-        <h2 id="main-ocr-heading">OCR utility</h2>
-        <p id="main-ocr-status">Probing…</p>
-        <p id="main-ocr-path" class="path"></p>
       </div>
     </section>
 

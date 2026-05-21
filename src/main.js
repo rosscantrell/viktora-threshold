@@ -249,57 +249,11 @@ async function enterMainView(cfg) {
     subtitleEl.textContent = "Connected to " + cfg.base_url;
   }
 
-  await renderOcrStatusInMain();
-}
-
-async function renderOcrStatusInMain() {
-  const statusEl = document.getElementById("main-ocr-status");
-  const pathEl = document.getElementById("main-ocr-path");
-  const captureBtn = document.getElementById("btn-capture-screen");
-  const headingEl = document.getElementById("main-ocr-heading");
-  if (!statusEl || !pathEl) return;
-
-  try {
-    const result = await tauri.core.invoke("get_ocr_utility_status");
-
-    // Heading + pill text vary by platform/state for clearer messaging.
-    // Mac + installed:    "OCR utility" + green "Installed" pill + absolute path
-    // Mac + missing:      "OCR utility" + red "Not installed" pill + setup.sh prompt
-    // Windows (v0.1):     "Screen capture" + grey "Coming in v0.2" pill + explanation
-    const platform = result.platform || "unknown";
-    const supported = !!result.screen_capture_supported;
-
-    if (headingEl) {
-      headingEl.textContent = platform === "macos" ? "OCR utility" : "Screen capture";
-    }
-
-    if (result.installed) {
-      statusEl.innerHTML = '<span class="status-pill ok">Installed</span>';
-      pathEl.textContent = result.path;
-      if (captureBtn) {
-        captureBtn.disabled = false;
-        captureBtn.title = "";
-      }
-    } else if (!supported) {
-      // Platform doesn't support screen capture yet (Windows v0.1, Linux, etc.)
-      statusEl.innerHTML = '<span class="status-pill pending">Coming in v0.2</span>';
-      pathEl.textContent = result.message || "";
-      if (captureBtn) {
-        captureBtn.disabled = true;
-        captureBtn.title = result.message || "Not yet supported on this platform";
-      }
-    } else {
-      // Supported platform but OCR utility not installed (Mac without setup.sh)
-      statusEl.innerHTML = '<span class="status-pill fail">Not installed</span>';
-      pathEl.textContent = result.message || "";
-      if (captureBtn) {
-        captureBtn.disabled = true;
-        captureBtn.title = result.message || "Install the OCR utility via setup.sh";
-      }
-    }
-  } catch (err) {
-    statusEl.textContent = "Failed to query OCR utility status: " + String(err);
-  }
+  // WP-OCR-13 v0.2: in-process OCR is always available on supported platforms
+  // (Mac via Apple Vision / Phase A; Windows via Windows.Media.Ocr / Phase B).
+  // No legacy `get_ocr_utility_status` probe, no greyed-out gate — the Capture
+  // Screen button is unconditionally clickable here; per-platform "not
+  // supported" toast (Linux, etc.) is emitted by run_screen_capture itself.
 }
 
 // ───────── Capture flows ─────────
