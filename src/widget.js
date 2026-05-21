@@ -23,6 +23,7 @@ const invoke = tauri.core.invoke;
 const listen = tauri.event.listen;
 
 const captureBtn = document.getElementById("capture-btn");
+const uploadBtn = document.getElementById("upload-btn");
 const statusDot = document.getElementById("status-dot");
 
 function setStatus(state) {
@@ -151,6 +152,25 @@ captureBtn.addEventListener("click", async (e) => {
   }
 });
 
+// Upload button — opens the file picker (native NSOpenPanel via
+// tauri-plugin-dialog). Selected files are then routed through the
+// existing ingest_files IPC. The button also serves as the visual home
+// for the OS-level drag-drop target — `data-dragover` styling reacts to
+// the window's DragDrop events surfaced from Rust (`onDragEnter` etc.).
+uploadBtn.addEventListener("click", async (e) => {
+  if (dragInitiated) return;
+  e.stopPropagation();
+  try {
+    const paths = await invoke("pick_files");
+    if (Array.isArray(paths) && paths.length > 0) {
+      await invoke("ingest_files", { paths });
+    }
+  } catch (err) {
+    console.warn("[widget] upload failed:", err);
+    setStatus("err");
+  }
+});
+
 // Right-click context menu (D-CUX-15, Phase 2D).
 // The Rust IPC builds + popups the native menu. menu_event dispatcher in
 // the Tauri builder handles the chosen item. Bind on the WHOLE widget,
@@ -189,9 +209,20 @@ listen("threshold://toast", (event) => {
 });
 
 // Drag-drop ingestion on the widget surface (D-12-04 inheritance).
-// The Rust side emits this when files are dropped on the widget window;
-// we route them through the existing ingest_files pipeline.
+// Rust emits drag-enter / drag-leave / drop-paths events; we surface
+// the drag-state on the upload-btn via a `data-dragover` attribute that
+// the widget.css responds to with a green highlight, and route dropped
+// files through the existing ingest_files pipeline.
+listen("threshold://drag-enter", () => {
+  uploadBtn.dataset.dragover = "true";
+});
+
+listen("threshold://drag-leave", () => {
+  uploadBtn.dataset.dragover = "false";
+});
+
 listen("threshold://drop-paths", async (event) => {
+  uploadBtn.dataset.dragover = "false";
   const paths = event.payload;
   if (!Array.isArray(paths) || paths.length === 0) return;
   try {

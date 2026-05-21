@@ -777,10 +777,12 @@ fn widget_collapse(
     window
         .set_resizable(false)
         .map_err(|e| format!("set_resizable failed: {e}"))?;
+    // Widget shape — keep in lockstep with tauri.conf.json's window config
+    // (180x80 horizontal pill).
     window
         .set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 100.0,
-            height: 100.0,
+            width: 180.0,
+            height: 80.0,
         }))
         .map_err(|e| format!("set_size failed: {e}"))?;
 
@@ -1114,15 +1116,24 @@ pub fn run() {
                 }
                 // Capture drag-drop events at the window level (D-12-13: paths
                 // delivered to Rust shell, not to the webview JS layer).
-                tauri::WindowEvent::DragDrop(drag_event) => {
-                    if let tauri::DragDropEvent::Drop { paths, .. } = drag_event {
+                // Enter / Leave events surface visual drop-target feedback on
+                // the widget's upload button (Phase 2 UI polish).
+                tauri::WindowEvent::DragDrop(drag_event) => match drag_event {
+                    tauri::DragDropEvent::Enter { .. } => {
+                        let _ = window.emit("threshold://drag-enter", ());
+                    }
+                    tauri::DragDropEvent::Leave => {
+                        let _ = window.emit("threshold://drag-leave", ());
+                    }
+                    tauri::DragDropEvent::Drop { paths, .. } => {
                         let path_strs: Vec<String> = paths
                             .iter()
                             .filter_map(|p| p.to_str().map(String::from))
                             .collect();
                         let _ = window.emit("threshold://drop-paths", path_strs);
                     }
-                }
+                    _ => {}
+                },
                 _ => {}
             }
         })

@@ -1,8 +1,9 @@
-/* WP-Threshold-Compact-UX Phase 1 spike widget styling.
- * Goals: 100x100 fits inside the Tauri window (which is 100x100 itself);
- * transparent background lets Tauri's transparent: true config show through;
- * dark widget surface stays visible against light + dark wallpapers;
- * inner Capture button is the only no-drag region (centered hit target). */
+/* Threshold floating widget — horizontal pill layout, Plaud-inspired.
+ * Window is 180x80; widget fills it as a rounded pill. Two action buttons
+ * side by side (Capture / Upload) with a small connectivity dot at the
+ * bottom-right corner. Transparent body lets Tauri's `transparent: true`
+ * config show through; widget surface itself is dark-translucent so it
+ * stays visible against light + dark wallpapers. */
 
 * {
   margin: 0;
@@ -27,10 +28,14 @@ html, body {
   width: 100vw;
   height: 100vh;
   background: rgba(28, 30, 38, 0.92);
-  border-radius: 22px;
+  /* Pill shape: border-radius = half-height absorbs the curve.
+   * 80px window height → 40px radius. */
+  border-radius: 40px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-evenly;
+  padding: 0 18px;
+  gap: 12px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35),
               inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
   cursor: grab;
@@ -40,9 +45,9 @@ html, body {
   cursor: grabbing;
 }
 
-#capture-btn {
-  width: 56px;
-  height: 56px;
+.action-btn {
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -51,21 +56,32 @@ html, body {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.12s ease-out, border-color 0.12s ease-out,
+  flex-shrink: 0;
+  transition: background 0.12s ease-out,
+              border-color 0.12s ease-out,
               transform 0.08s ease-out;
 }
 
-#capture-btn:hover {
+.action-btn:hover {
   background: rgba(255, 255, 255, 0.14);
   border-color: rgba(255, 255, 255, 0.35);
 }
 
-#capture-btn:active {
+.action-btn:active {
   transform: scale(0.95);
 }
 
-#capture-btn:focus {
+.action-btn:focus {
   outline: none;
+}
+
+/* When the OS-level drag-drop is active on the widget window, the
+ * upload-btn lights up as the visual drop target. Toggled via the
+ * `data-dragover` attribute by widget.js based on Tauri DragDrop events. */
+#upload-btn[data-dragover="true"] {
+  background: rgba(74, 222, 128, 0.22);
+  border-color: rgba(74, 222, 128, 0.7);
+  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
 }
 
 /* Connectivity dot — AC-CUX-12 reactive-only.
@@ -75,9 +91,9 @@ html, body {
 #status-dot {
   position: absolute;
   bottom: 8px;
-  right: 8px;
-  width: 8px;
-  height: 8px;
+  right: 14px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
   transition: background 0.2s ease-out;
