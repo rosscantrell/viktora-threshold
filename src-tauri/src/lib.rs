@@ -634,6 +634,189 @@ fn get_widget_position(state: tauri::State<AppState>) -> Option<(i32, i32)> {
     })
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Menu item IDs (D-CUX-15). String literals shared between the menu
+/// builder and the `on_menu_event` handler so the dispatch stays single
+/// source of truth.
+const MENU_CAPTURE: &str = "menu.capture";
+const MENU_PICK_FILE: &str = "menu.pick_file";
+const MENU_EXPAND: &str = "menu.expand";
+const MENU_SETTINGS: &str = "menu.settings";
+const MENU_QUIT: &str = "menu.quit";
+
+/// Build the widget's native right-click context menu. Per D-CUX-15:
+///   Capture Screen / Pick File… / Expand… / Settings… / Quit Threshold
+fn build_widget_menu(
+    app: &tauri::AppHandle,
+) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+
+    let capture = MenuItem::with_id(app, MENU_CAPTURE, "Capture Screen", true, None::<&str>)?;
+    let pick_file = MenuItem::with_id(app, MENU_PICK_FILE, "Pick File…", true, None::<&str>)?;
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
+
+    Menu::with_items(
+        app,
+        &[
+            &capture,
+            &pick_file,
+            &sep1,
+            &expand,
+            &settings,
+            &sep2,
+            &quit,
+        ],
+    )
+}
+
+/// Show the widget's right-click context menu at the cursor. Called from
+/// widget.js when the user right-clicks the widget.
+#[tauri::command]
+fn show_widget_menu(
+    app_handle: tauri::AppHandle,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    use tauri::menu::ContextMenu;
+    let menu = build_widget_menu(&app_handle).map_err(|e| e.to_string())?;
+    menu.popup(webview_window.as_ref().window().clone())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Expand the widget into the full v0.2 UI (D-CUX-13, AC-CUX-07).
+///
+/// Operations (in order):
+///   1. Save current widget position so collapse can restore it
+///   2. Resize window 100x100 → 800x600
+///   3. Re-enable decorations + disable always-on-top so it behaves like a
+///      regular app window
+///   4. Navigate webview to index.html
+///   5. Bring to front + focus
+///
+/// `target_tab` (currently "main" or "configure") gets stashed in a URL
+/// fragment so the expanded UI's main.js can route to the right initial
+/// view without a separate IPC handshake.
+#[tauri::command]
+fn widget_expand(
+    state: tauri::State<AppState>,
+    webview_window: tauri::WebviewWindow,
+    target_tab: Option<String>,
+) -> Result<(), String> {
+    let window = &webview_window;
+    // Step 1: save widget position before resizing (so collapse can return).
+    if let Ok(pos) = window.outer_position() {
+        let mut cfg_guard = state.config.lock().expect("config mutex poisoned");
+        let mut cfg = cfg_guard.clone().unwrap_or_default();
+        cfg.widget_x = Some(pos.x);
+        cfg.widget_y = Some(pos.y);
+        let _ = save_config_to_disk(&cfg);
+        *cfg_guard = Some(cfg);
+    }
+
+    // Step 2: resize.
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 800.0,
+            height: 600.0,
+        }))
+        .map_err(|e| format!("set_size failed: {e}"))?;
+
+    // Step 3: window chrome.
+    window
+        .set_decorations(true)
+        .map_err(|e| format!("set_decorations failed: {e}"))?;
+    window
+        .set_always_on_top(false)
+        .map_err(|e| format!("set_always_on_top failed: {e}"))?;
+    window
+        .set_resizable(true)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
+
+    // Step 4: navigate to expanded UI. The URL fragment tells main.js
+    // which view to land in. window.eval is the cleanest cross-platform
+    // navigation; window.navigate exists in Tauri 2 but isn't available
+    // on all webview backends.
+    let fragment = target_tab.as_deref().unwrap_or("main");
+    let nav = format!(
+        "window.location.replace('index.html#{}');",
+        fragment.replace('\'', "")
+    );
+    window
+        .eval(&nav)
+        .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+
+    // Step 5: focus.
+    let _ = window.set_focus();
+
+    log::info!("widget expanded → target_tab={}", fragment);
+    Ok(())
+}
+
+/// Collapse the expanded UI back to the floating widget. Restores
+/// widget size, position, chrome, and navigates back to widget.html.
+#[tauri::command]
+fn widget_collapse(
+    state: tauri::State<AppState>,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let window = &webview_window;
+    // Reverse the expand operations.
+    window
+        .set_always_on_top(true)
+        .map_err(|e| format!("set_always_on_top failed: {e}"))?;
+    window
+        .set_decorations(false)
+        .map_err(|e| format!("set_decorations failed: {e}"))?;
+    window
+        .set_resizable(false)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 100.0,
+            height: 100.0,
+        }))
+        .map_err(|e| format!("set_size failed: {e}"))?;
+
+    // Restore widget position from cached config (the value we stashed in
+    // widget_expand). If absent, Tauri keeps the current position.
+    let saved = {
+        let cfg = state.config.lock().expect("config mutex poisoned");
+        cfg.as_ref().and_then(|c| match (c.widget_x, c.widget_y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            _ => None,
+        })
+    };
+    if let Some((x, y)) = saved {
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+    }
+
+    window
+        .eval("window.location.replace('widget.html');")
+        .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+
+    log::info!("widget collapsed");
+    Ok(())
+}
+
+/// Helper for the expand path: persist `cfg` to disk without the
+/// last_used touch. Save failures log but don't propagate.
+fn save_config_to_disk(cfg: &AppConfig) -> Result<(), String> {
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    let json = serde_json::to_string_pretty(cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
 /// Capture a region from the screen and POST the OCR'd text to the configured
 /// Apolla backend. Platform dispatch lives inside; see ocr_mac / ocr_windows
 /// for the per-platform implementations.
@@ -706,14 +889,6 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
         },
         Ok(result) => {
             // AC-19 payload: captureMethod/captureMode/captureTool/sourceApp.
-            // Phase 1 spike: surface sourceApp to stdout for S-CUX-03 empirical
-            // verdict. The schema-browser strips sourceMetadata from /api/data,
-            // so the only readable path is the Rust-side capture-time value.
-            // Drop these eprintln!s once the spike's verdict is recorded.
-            eprintln!(
-                "[SPIKE S-CUX-03] sourceApp = {:?}  (empty = filter caught self-reference)",
-                result.source_app
-            );
             let payload = build_screenshot_payload(&result.text, &result.source_app);
             post_payload_to_apolla(
                 payload,
@@ -951,8 +1126,70 @@ pub fn run() {
             run_screen_capture,
             widget_start_drag,
             save_widget_position,
-            get_widget_position
+            get_widget_position,
+            show_widget_menu,
+            widget_expand,
+            widget_collapse
         ])
+        .on_menu_event(|app, event| {
+            // D-CUX-15 dispatch table. Each ID maps to a deferred action.
+            // The async ones (capture, pick_file) spawn a task because
+            // on_menu_event is sync; window APIs are sync so they can run
+            // inline.
+            let id = event.id().0.clone();
+            log::debug!("menu event: {id}");
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let window = match app.get_webview_window("main") {
+                    Some(w) => w,
+                    None => {
+                        log::warn!("menu event {id}: no 'main' window");
+                        return;
+                    }
+                };
+                let state = app.state::<AppState>();
+                match id.as_str() {
+                    MENU_CAPTURE => {
+                        if let Err(e) = run_screen_capture(app.clone(), state).await {
+                            log::warn!("menu capture failed: {e}");
+                        }
+                    }
+                    MENU_PICK_FILE => match pick_files(app.clone()).await {
+                        paths if !paths.is_empty() => {
+                            if let Err(e) =
+                                ingest_files(app.clone(), app.state::<AppState>(), paths).await
+                            {
+                                log::warn!("menu pick_file ingest failed: {e}");
+                            }
+                        }
+                        _ => log::debug!("menu pick_file: user cancelled"),
+                    },
+                    MENU_EXPAND => {
+                        if let Err(e) =
+                            widget_expand(app.state::<AppState>(), window.clone(), None)
+                        {
+                            log::warn!("menu expand failed: {e}");
+                        }
+                    }
+                    MENU_SETTINGS => {
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("configure".into()),
+                        ) {
+                            log::warn!("menu settings failed: {e}");
+                        }
+                    }
+                    MENU_QUIT => {
+                        log::info!("menu quit");
+                        // D-12-02-AMEND drains in-flight ingestions before
+                        // exiting; the existing close handler covers this.
+                        app.exit(0);
+                    }
+                    other => log::warn!("menu event unhandled: {other}"),
+                }
+            });
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -1097,11 +1334,15 @@ mod tests {
             bearer_token: "test-token-123".to_string(),
             last_used: Some("2026-05-21T16:00:00Z".to_string()),
             mode: "workspace".to_string(),
+            widget_x: Some(1820),
+            widget_y: Some(980),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
         assert_eq!(parsed.base_url, cfg.base_url);
         assert_eq!(parsed.bearer_token, cfg.bearer_token);
+        assert_eq!(parsed.widget_x, cfg.widget_x);
+        assert_eq!(parsed.widget_y, cfg.widget_y);
         assert_eq!(parsed.last_used, cfg.last_used);
         assert_eq!(parsed.mode, cfg.mode);
     }

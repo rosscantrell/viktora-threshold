@@ -9,6 +9,37 @@
   </head>
 
   <body>
+    <!--
+      WP-Threshold-Compact-UX Phase 2E — collapse-to-widget affordance.
+      Fixed-positioned button always visible in expand mode. Invokes the
+      `widget_collapse` Rust IPC which resizes back to 100x100, restores
+      widget chrome, and navigates the webview back to widget.html.
+      Intentionally added OUTSIDE the existing view sections so it
+      survives all main.js view transitions (wizard / configure / main).
+    -->
+    <button
+      id="btn-collapse-to-widget"
+      type="button"
+      title="Collapse to widget"
+      aria-label="Collapse to widget"
+      style="position:fixed;top:8px;right:8px;z-index:10000;
+             background:rgba(255,255,255,0.85);border:1px solid rgba(0,0,0,0.15);
+             border-radius:8px;padding:4px 10px;font-size:12px;font-weight:500;
+             cursor:pointer;line-height:1.2;
+             box-shadow:0 1px 3px rgba(0,0,0,0.1);"
+    >▢ Collapse</button>
+    <script>
+      // Inline collapse-button handler. Kept separate from main.js so the
+      // existing v0.2 UI doesn't need to know about widget mode.
+      document.getElementById("btn-collapse-to-widget").addEventListener("click", async () => {
+        try {
+          await window.__TAURI__.core.invoke("widget_collapse");
+        } catch (err) {
+          console.warn("[expand] collapse failed:", err);
+        }
+      });
+    </script>
+
     <!-- ──────────────────────────────────────────────────────────────────
          Loading view
          ────────────────────────────────────────────────────────────────── -->

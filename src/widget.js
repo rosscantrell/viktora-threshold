@@ -104,51 +104,30 @@ const DRAG_THRESHOLD_PX = 4;
 let mouseDownAt = null;
 let dragInitiated = false;
 
-// Diagnostic — surface what's actually on `window.__TAURI__` for this build.
-console.log("[widget-spike] __TAURI__ keys:", Object.keys(window.__TAURI__ || {}));
-console.log("[widget-spike] __TAURI__.window:", window.__TAURI__?.window);
-
 document.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return; // left button only
   mouseDownAt = { x: e.screenX, y: e.screenY };
   dragInitiated = false;
-  console.log("[widget-spike] mousedown at", mouseDownAt.x, mouseDownAt.y);
 });
 
 document.addEventListener("mousemove", async (e) => {
   if (!mouseDownAt || dragInitiated) return;
   const dx = e.screenX - mouseDownAt.x;
   const dy = e.screenY - mouseDownAt.y;
-  const dist = Math.hypot(dx, dy);
-  if (dist > DRAG_THRESHOLD_PX) {
+  if (Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
     dragInitiated = true;
-    console.log("[widget-spike] mousemove crossed threshold (", dist.toFixed(1), "px) — invoking widget_start_drag");
     try {
       await invoke("widget_start_drag");
-      console.log("[widget-spike] widget_start_drag returned");
     } catch (err) {
-      console.error("[widget-spike] widget_start_drag failed:", err);
-      // Also try the JS API path as a last-ditch — log either way.
-      try {
-        const win = tauri.window?.getCurrentWindow?.();
-        if (win) {
-          await win.startDragging();
-          console.log("[widget-spike] JS startDragging fired (fallback path)");
-        } else {
-          console.warn("[widget-spike] no tauri.window.getCurrentWindow available");
-        }
-      } catch (jsErr) {
-        console.error("[widget-spike] JS startDragging also failed:", jsErr);
-      }
+      console.warn("[widget] widget_start_drag failed:", err);
     }
   }
 });
 
 document.addEventListener("mouseup", () => {
-  if (mouseDownAt) {
-    console.log("[widget-spike] mouseup (drag=", dragInitiated, ")");
-  }
   mouseDownAt = null;
+  // Defer clearing dragInitiated by one tick so the click handler can
+  // check it and bail out (browsers fire mouseup → click in that order).
   setTimeout(() => {
     dragInitiated = false;
   }, 0);
@@ -161,24 +140,29 @@ document.addEventListener("mouseup", () => {
 captureBtn.addEventListener("click", async (e) => {
   if (dragInitiated) {
     // The mousedown→mouseup was actually a drag; suppress the spurious click.
-    console.log("[widget-spike] click suppressed — was a drag");
     return;
   }
   e.stopPropagation();
-  console.log("[widget-spike] capture click — invoking run_screen_capture");
   try {
     await invoke("run_screen_capture");
   } catch (err) {
-    console.error("[widget-spike] capture failed:", err);
+    console.warn("[widget] capture failed:", err);
     setStatus("err");
   }
 });
 
-// Right-click context menu — stub for spike. Phase 2 wires the native
-// Menu API: Capture Screen / Pick File… / Expand… / Settings… / Quit.
-captureBtn.addEventListener("contextmenu", (e) => {
+// Right-click context menu (D-CUX-15, Phase 2D).
+// The Rust IPC builds + popups the native menu. menu_event dispatcher in
+// the Tauri builder handles the chosen item. Bind on the WHOLE widget,
+// not just the Capture button — right-click anywhere on the widget body
+// surfaces the menu.
+document.addEventListener("contextmenu", async (e) => {
   e.preventDefault();
-  console.log("[widget-spike] right-click (menu stub — Phase 2)");
+  try {
+    await invoke("show_widget_menu");
+  } catch (err) {
+    console.warn("[widget] show_widget_menu failed:", err);
+  }
 });
 
 // Observe toast events from the existing run_screen_capture path.
@@ -192,7 +176,6 @@ captureBtn.addEventListener("contextmenu", (e) => {
 // (e.g., cancellation → reset dot to unknown, no flash; real failure → red).
 listen("threshold://toast", (event) => {
   const outcome = event.payload;
-  console.log("[widget-spike] toast event:", outcome);
 
   // Heuristic: cancellation titles use "cancelled" or "timed out" wording.
   // Don't go red on those — they're user actions, not system failures.
@@ -205,11 +188,17 @@ listen("threshold://toast", (event) => {
   setStatus(outcome.kind === "failure" ? "err" : "ok");
 });
 
-// Bind to drop-paths event for parity with the existing UI (drag-drop on
-// the widget window itself — D-12-04 surface). Phase 1 just logs; full
-// ingestion path already exists in main.js for the expand-mode UI.
-listen("threshold://drop-paths", (event) => {
-  console.log("[widget-spike] drop-paths event:", event.payload);
+// Drag-drop ingestion on the widget surface (D-12-04 inheritance).
+// The Rust side emits this when files are dropped on the widget window;
+// we route them through the existing ingest_files pipeline.
+listen("threshold://drop-paths", async (event) => {
+  const paths = event.payload;
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  try {
+    await invoke("ingest_files", { paths });
+  } catch (err) {
+    console.warn("[widget] ingest_files failed:", err);
+  }
 });
 
 init();
