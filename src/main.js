@@ -1,32 +1,27 @@
-// Viktora Threshold — frontend router + wizard + Configure pane logic.
-// WP-OCR-12 v1.2-FINAL Phase B increment 3.
+// Viktora Threshold — frontend router + wizard + Configure + capture flows.
+// WP-OCR-12 v1.2-FINAL Phase B increment 4.
 //
-// Routing model: vanilla DOM view-swapping. Five sections:
-//   #view-loading      → bootstrap
-//   #view-welcome      → wizard step 1 (first-launch only, P-12-05)
-//   #view-configure    → wizard step 2 OR standalone Configure pane
-//   #view-done         → wizard step 3 (first-launch only)
-//   #view-main         → main capture UI
+// Increment 1: D-12-19 probe rendering
+// Increment 2: Configure pane + Test connection
+// Increment 3: 3-screen wizard wrap + base D-12-02 quit-on-close
+// Increment 4: capture flows (file picker + drag-drop) + structured toast
+//              (D-12-18) + lenient response handling (D-12-17, Rust side) +
+//              D-12-02-AMEND wait-for-in-flight (Rust side)
 //
-// Bootstrap flow:
-//   1. invoke load_config
-//   2. None → wizard (Welcome → Configure-in-wizard → Done → Main)
-//   3. Some(cfg) → Main directly (skips wizard per AC-11)
-//
-// Standalone Configure (from Main's "Configure" button) skips wizard chrome
-// and offers a Back button.
+// Capture UX:
+//   • "Upload File" → invoke pick_files → invoke ingest_files
+//   • Drag any file onto the window → Rust WindowEvent::DragDrop fires →
+//     emits "threshold://drop-paths" → JS receives → invoke ingest_files
+//   • Each ingestion result fires a "threshold://toast" event → frontend
+//     renders a structured toast (D-12-18 schema: kind/title/body/cta)
+//   • "Capture Screen" → stub until increment 5 (screenshot subprocess)
 
 const tauri = window.__TAURI__;
 
 // ───────── State ─────────
 
 const state = {
-  // True while we're walking the 3-screen wizard. Determines:
-  //   • Save button label ("Next" vs "Save")
-  //   • Configure form's step-indicator visibility
-  //   • Where Save navigates next (Done vs Main)
   inWizard: false,
-  // Cached after Save so the Done screen can transition to Main with the right cfg.
   lastConfig: null,
 };
 
@@ -54,6 +49,9 @@ async function bootstrap() {
     return;
   }
 
+  // Subscribe to backend events early so we don't miss any
+  await wireBackendEvents();
+
   let cfg = null;
   try {
     cfg = await tauri.core.invoke("load_config");
@@ -63,14 +61,38 @@ async function bootstrap() {
   }
 
   if (cfg) {
-    // Returning user — pre-populate fields in case they hit Configure later
     document.getElementById("config-base-url").value = cfg.base_url || "";
     document.getElementById("config-bearer-token").value = cfg.bearer_token || "";
     enterMainView(cfg);
   } else {
-    // First launch — start the wizard
     enterWizardWelcome();
   }
+}
+
+// ───────── Backend event subscriptions ─────────
+
+async function wireBackendEvents() {
+  // D-12-18 toast events from any ingestion outcome
+  await tauri.event.listen("threshold://toast", (event) => {
+    const payload = event.payload || {};
+    showToast(payload);
+  });
+
+  // Drag-drop paths from WindowEvent::DragDrop in the Rust shell
+  await tauri.event.listen("threshold://drop-paths", async (event) => {
+    const paths = event.payload || [];
+    hideDropOverlay();
+    if (paths.length === 0) return;
+    try {
+      await tauri.core.invoke("ingest_files", { paths });
+    } catch (err) {
+      showToast({
+        kind: "failure",
+        title: "Drag-drop ingestion failed",
+        body: String(err),
+      });
+    }
+  });
 }
 
 // ───────── Wizard chrome ─────────
@@ -82,7 +104,6 @@ function enterWizardWelcome() {
 
 function enterWizardConfigure() {
   state.inWizard = true;
-  // Show step indicator, hide back button, change Save → Next
   document.getElementById("configure-step").removeAttribute("hidden");
   document.getElementById("configure-title").textContent = "Connect to your workspace";
   document.getElementById("configure-subtitle").textContent =
@@ -103,7 +124,7 @@ function finishWizard() {
   enterMainView(state.lastConfig);
 }
 
-// ───────── Standalone Configure (post-onboarding) ─────────
+// ───────── Standalone Configure ─────────
 
 function enterStandaloneConfigure() {
   state.inWizard = false;
@@ -117,7 +138,7 @@ function enterStandaloneConfigure() {
   document.getElementById("config-base-url").focus();
 }
 
-// ───────── Configure form logic (shared between wizard step 2 + standalone) ─────────
+// ───────── Configure form logic ─────────
 
 function showConnectionResult(resultEl, result) {
   resultEl.removeAttribute("hidden");
@@ -128,10 +149,7 @@ function showConnectionResult(resultEl, result) {
 }
 
 function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function handleTestConnection() {
@@ -140,11 +158,7 @@ async function handleTestConnection() {
   const btn = document.getElementById("btn-test-connection");
 
   if (!baseUrl) {
-    showConnectionResult(resultEl, {
-      ok: false,
-      message: "Enter a base URL first.",
-      detail: null,
-    });
+    showConnectionResult(resultEl, { ok: false, message: "Enter a base URL first.", detail: null });
     return;
   }
 
@@ -180,12 +194,7 @@ async function handleSave(e) {
     return;
   }
 
-  const config = {
-    base_url: baseUrl,
-    bearer_token: bearerToken,
-    last_used: null,
-    mode: "workspace",
-  };
+  const config = { base_url: baseUrl, bearer_token: bearerToken, last_used: null, mode: "workspace" };
 
   try {
     await tauri.core.invoke("save_config", { config });
@@ -198,7 +207,6 @@ async function handleSave(e) {
     return;
   }
 
-  // Navigate based on wizard vs standalone mode
   if (state.inWizard) {
     enterWizardDone(config);
   } else {
@@ -223,53 +231,177 @@ async function enterMainView(cfg) {
 async function renderOcrStatusInMain() {
   const statusEl = document.getElementById("main-ocr-status");
   const pathEl = document.getElementById("main-ocr-path");
+  const captureBtn = document.getElementById("btn-capture-screen");
   if (!statusEl || !pathEl) return;
 
   try {
     const result = await tauri.core.invoke("get_ocr_utility_status");
     if (result.installed) {
-      statusEl.innerHTML =
-        '<span class="status-pill ok">Installed</span>';
+      statusEl.innerHTML = '<span class="status-pill ok">Installed</span>';
       pathEl.textContent = result.path;
+      if (captureBtn) {
+        captureBtn.disabled = false;
+        captureBtn.title = "";
+      }
     } else {
-      statusEl.innerHTML =
-        '<span class="status-pill fail">Not installed</span>';
+      statusEl.innerHTML = '<span class="status-pill fail">Not installed</span>';
       pathEl.textContent = result.message || "";
+      if (captureBtn) {
+        captureBtn.disabled = true;
+        captureBtn.title = result.message || "Install the OCR utility via setup.sh";
+      }
     }
   } catch (err) {
     statusEl.textContent = "Failed to query OCR utility status: " + String(err);
   }
 }
 
+// ───────── Capture flows ─────────
+
+async function handleUploadFile() {
+  try {
+    const paths = await tauri.core.invoke("pick_files");
+    if (!paths || paths.length === 0) return; // user cancelled
+    await tauri.core.invoke("ingest_files", { paths });
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "File upload failed",
+      body: String(err),
+    });
+  }
+}
+
+function handleCaptureScreen() {
+  // Stub until increment 5 — the actual screenshot subprocess wiring lands then.
+  showToast({
+    kind: "failure",
+    title: "Capture Screen coming in increment 5",
+    body: "The OCR utility subprocess wiring + cached D-12-19 path will be hooked up next.",
+  });
+}
+
+// ───────── Drag-drop visual overlay ─────────
+
+function showDropOverlay() {
+  document.getElementById("drop-overlay").removeAttribute("hidden");
+}
+
+function hideDropOverlay() {
+  document.getElementById("drop-overlay").setAttribute("hidden", "");
+}
+
+// Track dragenter/dragleave to show/hide the overlay. Tauri's WindowEvent::DragDrop
+// handles the actual paths server-side; these listeners just drive the visual hint.
+function wireDragVisuals() {
+  let dragDepth = 0;
+  window.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    dragDepth++;
+    if (dragDepth === 1) showDropOverlay();
+  });
+  window.addEventListener("dragover", (e) => {
+    e.preventDefault();
+  });
+  window.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) hideDropOverlay();
+  });
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    hideDropOverlay();
+    // The actual ingestion is triggered by the Rust-side WindowEvent::DragDrop
+    // → "threshold://drop-paths" event listener wired in wireBackendEvents().
+  });
+}
+
+// ───────── D-12-18 structured toast component ─────────
+
+const TOAST_AUTO_DISMISS_MS = 5000;
+let toastIdCounter = 0;
+
+function showToast(payload) {
+  const stack = document.getElementById("toast-stack");
+  if (!stack) return;
+
+  const kind = payload.kind || "success";
+  const title = payload.title || "";
+  const body = payload.body || "";
+  const cta = payload.cta || null; // {label, action} — reserved for v2 marker tidbit
+
+  const id = "toast-" + ++toastIdCounter;
+  const toast = document.createElement("div");
+  toast.className = "toast toast-" + kind;
+  toast.id = id;
+
+  const iconChar = kind === "success" ? "✓" : kind === "idempotent" ? "↺" : "✗";
+
+  toast.innerHTML = `
+    <span class="toast-icon">${iconChar}</span>
+    <div class="toast-text">
+      <div class="toast-title">${escapeHtml(title)}</div>
+      ${body ? `<div class="toast-body">${escapeHtml(body)}</div>` : ""}
+      ${
+        cta
+          ? `<button type="button" class="toast-cta" data-action="${escapeHtml(
+              cta.action
+            )}">${escapeHtml(cta.label)}</button>`
+          : ""
+      }
+    </div>
+    <button type="button" class="toast-close" aria-label="Dismiss">✕</button>
+  `;
+
+  toast.querySelector(".toast-close").addEventListener("click", () => dismissToast(id));
+  if (cta) {
+    toast.querySelector(".toast-cta").addEventListener("click", () => {
+      console.log("toast CTA clicked:", cta);
+      // v2: navigate to /marker/:id or wherever cta.action points
+      dismissToast(id);
+    });
+  }
+
+  stack.appendChild(toast);
+
+  // Auto-dismiss after TOAST_AUTO_DISMISS_MS
+  setTimeout(() => dismissToast(id), TOAST_AUTO_DISMISS_MS);
+}
+
+function dismissToast(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.add("toast-leaving");
+  setTimeout(() => el.remove(), 200);
+}
+
 // ───────── Event wiring ─────────
 
 window.addEventListener("DOMContentLoaded", () => {
-  // Wizard step 1 → step 2
+  // Wizard
+  document.getElementById("btn-wizard-start").addEventListener("click", enterWizardConfigure);
   document
-    .getElementById("btn-wizard-start")
-    .addEventListener("click", enterWizardConfigure);
+    .querySelectorAll(".wizard-prompt")
+    .forEach((btn) => btn.addEventListener("click", finishWizard));
+  document.getElementById("btn-wizard-finish").addEventListener("click", finishWizard);
 
-  // Wizard step 3 prompts — for v1, all three nav to Main (capture flows wire up in increment 4)
-  document.querySelectorAll(".wizard-prompt").forEach((btn) => {
-    btn.addEventListener("click", finishWizard);
-  });
-  document
-    .getElementById("btn-wizard-finish")
-    .addEventListener("click", finishWizard);
-
-  // Configure form
+  // Configure
   document
     .getElementById("btn-test-connection")
     .addEventListener("click", handleTestConnection);
   document.getElementById("configure-form").addEventListener("submit", handleSave);
+  document.getElementById("btn-open-configure").addEventListener("click", enterStandaloneConfigure);
+  document
+    .getElementById("btn-back-to-main")
+    .addEventListener("click", () => enterMainView(state.lastConfig));
 
-  // Standalone Configure entry/exit
-  document.getElementById("btn-open-configure").addEventListener("click", () => {
-    enterStandaloneConfigure();
-  });
-  document.getElementById("btn-back-to-main").addEventListener("click", () => {
-    enterMainView(state.lastConfig);
-  });
+  // Capture flows
+  document.getElementById("btn-upload-file").addEventListener("click", handleUploadFile);
+  document.getElementById("btn-capture-screen").addEventListener("click", handleCaptureScreen);
+
+  // Drag-drop visuals (the actual ingestion is wired in wireBackendEvents)
+  wireDragVisuals();
 
   bootstrap();
 });

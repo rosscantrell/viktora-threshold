@@ -10,7 +10,7 @@
 
   <body>
     <!-- ──────────────────────────────────────────────────────────────────
-         Loading view (shown before bootstrap completes)
+         Loading view
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-loading" class="view">
       <div class="spinner-shell">
@@ -19,7 +19,7 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Wizard — Screen 1: Welcome (P-12-05)
+         Wizard Step 1 — Welcome
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-welcome" class="view wizard-view" hidden>
       <div class="wizard-card">
@@ -40,7 +40,7 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Wizard Screen 2 = Configure pane (also reused standalone from Main)
+         Wizard Step 2 = Configure pane (also standalone from Main)
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-configure" class="view" hidden>
       <header class="app-header">
@@ -98,27 +98,25 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Wizard — Screen 3: You're set up (P-12-05)
+         Wizard Step 3 — You're set up
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-done" class="view wizard-view" hidden>
       <div class="wizard-card">
         <p class="wizard-step">Step 3 of 3</p>
         <h1 class="wizard-title">You're set up</h1>
-        <p class="wizard-lede">
-          Try your first capture by doing one of these:
-        </p>
+        <p class="wizard-lede">Try your first capture by doing one of these:</p>
         <div class="wizard-prompts">
-          <button type="button" class="wizard-prompt" id="prompt-drag" data-action="drag">
+          <button type="button" class="wizard-prompt" data-action="drag">
             <span class="prompt-icon">⤓</span>
             <span class="prompt-title">Drag a file</span>
             <span class="prompt-detail">.txt · .md · .vtt · .srt · .html</span>
           </button>
-          <button type="button" class="wizard-prompt" id="prompt-upload" data-action="upload">
+          <button type="button" class="wizard-prompt" data-action="upload">
             <span class="prompt-icon">📂</span>
             <span class="prompt-title">Pick a file</span>
             <span class="prompt-detail">Mac file picker</span>
           </button>
-          <button type="button" class="wizard-prompt" id="prompt-screenshot" data-action="screenshot">
+          <button type="button" class="wizard-prompt" data-action="screenshot">
             <span class="prompt-icon">⌗</span>
             <span class="prompt-title">Capture a region</span>
             <span class="prompt-detail">OCR a piece of screen</span>
@@ -131,7 +129,7 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Main capture UI placeholder (full capture flows in increment 4)
+         Main capture UI (increment 4)
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-main" class="view" hidden>
       <header class="app-header">
@@ -140,17 +138,45 @@
         <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
       </header>
 
-      <div class="panel">
-        <h2>OCR utility status</h2>
+      <div class="capture-controls">
+        <button type="button" id="btn-capture-screen" class="capture-button">
+          <span class="capture-icon">⌗</span>
+          <span class="capture-label">Capture Screen</span>
+          <span class="capture-detail">Region-select OCR via the installed utility</span>
+        </button>
+
+        <button type="button" id="btn-upload-file" class="capture-button">
+          <span class="capture-icon">📂</span>
+          <span class="capture-label">Upload File</span>
+          <span class="capture-detail">.txt · .md · .vtt · .srt · .html</span>
+        </button>
+      </div>
+
+      <div class="drop-hint" id="drop-hint">
+        <span class="drop-icon">⤓</span>
+        Or just drag a file anywhere onto this window
+      </div>
+
+      <div class="panel panel-compact">
+        <h2>OCR utility</h2>
         <p id="main-ocr-status">Probing…</p>
         <p id="main-ocr-path" class="path"></p>
       </div>
-
-      <div class="placeholder">
-        <strong>Increment 3 of 5 complete.</strong> 3-screen onboarding wizard wraps first-launch
-        flow (P-12-05). Next increments add main capture UI (file picker, drag-drop, screenshot
-        subprocess), structured-toast component (D-12-18), and lenient response handling (D-12-17).
-      </div>
     </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Full-window drag-drop overlay — appears while user drags a file
+         ────────────────────────────────────────────────────────────────── -->
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-content">
+        <span class="drop-overlay-icon">⤓</span>
+        <p>Drop to capture</p>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Toast stack (D-12-18 structured-toast component)
+         ────────────────────────────────────────────────────────────────── -->
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
   </body>
 </html>
