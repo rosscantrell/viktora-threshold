@@ -1,49 +1,40 @@
 //! Mac platform shim for the Threshold floating widget (WP-Threshold-Compact-UX
 //! Phase 2; D-CUX-04 root fix).
 //!
-//! Empirical finding from Phase 1 S-CUX-03: Tauri 2's high-level window
-//! config (`decorations: false` + `alwaysOnTop: true` + `transparent: true`
-//! + `focus: false`) does NOT prevent the widget from stealing focus on
-//! click. When the user clicks the Capture button, NSWindow briefly
-//! becomes key + main, NSApp activates Threshold, and
-//! `NSWorkspace.frontmostApplication.bundleIdentifier` returns
-//! `"ai.viktora.threshold"`. The Mac filter in `ocr_mac::is_threshold_own_bundle_id`
-//! catches this (PR #3) and ships `""` rather than misleading data — but
-//! `sourceApp` shipping empty defeats the cross-surface analytics premise.
+//! Empirical finding from Phase 1 S-CUX-03 + Phase 2A first attempt:
 //!
-//! This module is the architectural fix. After Tauri creates the widget's
-//! NSWindow, we:
+//!   - Tauri 2's high-level window config (`decorations: false` + `alwaysOnTop`
+//!     + `transparent: true` + `focus: false`) does NOT prevent the widget
+//!     from stealing focus on click.
+//!   - The first 2A attempt set NSWindowStyleMaskNonactivatingPanel (bit 7,
+//!     0x80) on the styleMask, but AppKit logs a clear error and ignores
+//!     it: `NSWindow does not support nonactivating panel styleMask 0x80`.
+//!     That bit is genuinely panel-class-only.
+//!   - sourceApp shipped `""` (filter caught Threshold's bundle ID) instead
+//!     of the user's target app — exactly the leak the WP exists to fix.
 //!
-//!   1. Set the `NSWindowStyleMaskNonactivatingPanel` bit (bit 7) on the
-//!      window's styleMask. Documented as panel-only, but NSWindow respects
-//!      it in practice when combined with `.borderless` (already set via
-//!      `decorations: false`). Prevents the window from becoming key on
-//!      click → prevents NSApp from activating Threshold.
+//! **Canonical fix (this module):** declare a custom `ThresholdPanel`
+//! ObjC subclass of NSWindow via objc2's `define_class!` macro, with
+//! `canBecomeKeyWindow` + `canBecomeMainWindow` overridden to return NO,
+//! then class-swap Tauri's NSWindow to it via `AnyObject::set_class`.
+//! This is how NSPanel itself prevents key-window activation — we just
+//! borrow the same pattern.
 //!
-//!   2. Set the collectionBehavior to include `.canJoinAllSpaces` +
-//!      `.stationary` + `.fullScreenAuxiliary` so the widget travels across
-//!      spaces with the user (AC-CUX-02 "always-on-top across spaces").
+//! After the class swap, clicking the widget no longer makes Threshold's
+//! window key/main → NSApp doesn't activate Threshold →
+//! `NSWorkspace.frontmostApplication` keeps returning the user's actual
+//! target app → `sourceApp` ships the correct bundle ID.
 //!
-//! After the shim fires, `NSWorkspace.frontmostApplication` keeps returning
-//! the user's actual target app at capture time. The Mac filter still ships
-//! as defense-in-depth for any edge case the shim doesn't catch (e.g.,
-//! brief transition windows during first-launch wizard → widget collapse).
-//!
-//! Called from `lib.rs::run`'s `.setup()` hook, after the main window is
-//! created but before any user interaction.
+//! Called from `lib.rs::run`'s `.setup()` hook, after the widget window is
+//! created.
 
-use objc2::msg_send;
-use objc2::runtime::AnyObject;
-
-/// NSWindowStyleMaskNonactivatingPanel = 1 << 7.
-/// AppKit documents this as panel-only, but NSWindow respects it for
-/// non-activation in practice. Constant value pinned to the AppKit header
-/// definition so future objc2-app-kit version bumps don't drift the
-/// magic-number.
-const NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL: u64 = 1 << 7;
+use objc2::define_class;
+use objc2::runtime::{AnyClass, AnyObject, Bool};
+use objc2::{msg_send, ClassType, MainThreadOnly};
+use objc2_app_kit::NSWindow;
 
 /// NSWindowCollectionBehavior flags for the always-on-top-across-spaces
-/// posture. Bit definitions from AppKit headers:
+/// posture (AC-CUX-02). Bit definitions pinned to AppKit headers:
 ///   - canJoinAllSpaces       = 1 << 0
 ///   - stationary             = 1 << 4
 ///   - fullScreenAuxiliary    = 1 << 8
@@ -51,15 +42,38 @@ const NS_COLLECTION_CAN_JOIN_ALL_SPACES: u64 = 1 << 0;
 const NS_COLLECTION_STATIONARY: u64 = 1 << 4;
 const NS_COLLECTION_FULL_SCREEN_AUXILIARY: u64 = 1 << 8;
 
+define_class!(
+    /// NSWindow subclass overriding `canBecomeKeyWindow` and
+    /// `canBecomeMainWindow` to return NO. AppKit calls these to decide
+    /// whether a window can become key (receive keyboard) / main (receive
+    /// menu commands). Returning NO from both gives us the non-activating
+    /// panel posture without using the NSPanel class hierarchy directly
+    /// (Tauri 2 creates NSWindow instances; we can't change that, but we
+    /// can swap their class to ours after creation).
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "ThresholdPanel"]
+    struct ThresholdPanel;
+
+    impl ThresholdPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key_window(&self) -> Bool {
+            Bool::NO
+        }
+
+        #[unsafe(method(canBecomeMainWindow))]
+        fn can_become_main_window(&self) -> Bool {
+            Bool::NO
+        }
+    }
+);
+
 /// Apply the non-activating + always-on-top-across-spaces posture to a
-/// Tauri-created NSWindow. The window pointer is whatever
-/// `tauri::Window::ns_window()` returns (a raw `*mut c_void` we treat as
-/// an Objective-C object).
+/// Tauri-created NSWindow.
 ///
 /// Returns Ok(()) on success. Returns Err(message) if the pointer is
-/// null. Does NOT panic — the worst case (shim no-ops) is that we fall
-/// back to the Mac filter catching the focus-steal at capture time and
-/// shipping `sourceApp: ""`. That's degraded but not broken.
+/// null. Class registration happens at first call via `ThresholdPanel::class()`
+/// (objc2's `define_class!` machinery handles lazy registration internally).
 ///
 /// # Safety
 /// `ns_window` must be a valid Objective-C NSWindow object pointer that
@@ -70,21 +84,19 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
         return Err("ns_window pointer is null".into());
     }
 
-    // SAFETY: caller guarantees `ns_window` is a valid NSWindow pointer.
-    // All msg_send! calls below operate on well-known AppKit selectors
-    // (`styleMask` / `setStyleMask:` / `collectionBehavior` /
-    // `setCollectionBehavior:`) that exist on NSWindow since Mac OS X 10.5.
+    let cls: &AnyClass = ThresholdPanel::class();
+
+    // SAFETY: caller guarantees `ns_window` is a valid NSWindow object
+    // pointer. AnyObject::set_class is the canonical class-swap operation
+    // (wraps libobjc's `object_setClass`); after the call, `ns_window` is
+    // a ThresholdPanel instance and its `canBecomeKeyWindow` +
+    // `canBecomeMainWindow` selectors return NO.
     unsafe {
         let win = ns_window as *mut AnyObject;
-
-        // Add nonactivating-panel bit to styleMask. Preserves any other
-        // bits Tauri already set (e.g., borderless from decorations:false).
-        let current_style: u64 = msg_send![win, styleMask];
-        let new_style = current_style | NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL;
-        let _: () = msg_send![win, setStyleMask: new_style];
+        let _old: &AnyClass = AnyObject::set_class(&*win, cls);
 
         // Collection behavior: stationary + travels-with-user + tolerates
-        // full-screen-app transitions. AC-CUX-02.
+        // full-screen-app transitions (AC-CUX-02).
         let current_behavior: u64 = msg_send![win, collectionBehavior];
         let new_behavior = current_behavior
             | NS_COLLECTION_CAN_JOIN_ALL_SPACES
@@ -113,12 +125,10 @@ mod tests {
         assert!(result.unwrap_err().contains("null"));
     }
 
-    /// Sanity-check the magic-number constants didn't drift. AppKit's
-    /// NSWindowStyleMaskNonactivatingPanel = 128. Pinned here so any
-    /// accidental edit to the constant gets caught by the test suite.
+    /// Sanity-check the collection-behavior magic-number constants pinned
+    /// against AppKit's NSWindowCollectionBehavior bit definitions.
     #[test]
-    fn nspanel_constants_pin_appkit_values() {
-        assert_eq!(NS_WINDOW_STYLE_MASK_NONACTIVATING_PANEL, 128);
+    fn collection_behavior_constants_pin_appkit_values() {
         assert_eq!(NS_COLLECTION_CAN_JOIN_ALL_SPACES, 1);
         assert_eq!(NS_COLLECTION_STATIONARY, 16);
         assert_eq!(NS_COLLECTION_FULL_SCREEN_AUXILIARY, 256);
