@@ -62,7 +62,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Viktora Threshold ${{ github.ref_name }}"
           releaseBody: |
-            Viktora Threshold ${{ github.ref_name }} — Mac + Windows pilot build.
+            Viktora Threshold ${{ github.ref_name }} — Mac + Windows pilot build with native in-process OCR (WP-OCR-13).
 
             ## Install
 
@@ -71,20 +71,21 @@ jobs:
             **macOS (Apple Silicon):**
             1. Download the `.dmg` below
             2. Drag `Viktora Threshold.app` to `/Applications`
-            3. Right-click → Open (one-time Gatekeeper bypass for unsigned v1)
-            4. If you want screen capture: run `bash setup.sh` from the repo first
+            3. Right-click → Open (one-time Gatekeeper bypass for unsigned v0.2)
+            4. Launch normally on subsequent runs
 
-            **Windows (x86_64, Windows 11 / Windows 10 May 2020 update or later):**
+            **Windows (x86_64, Windows 10 May 2020 update or later):**
             1. Download the `.msi` below
             2. Double-click to install (Windows SmartScreen may warn on unsigned builds — click "More info" → "Run anyway")
             3. Launch from Start menu
-            4. Screen capture is not yet supported on Windows in v0.1 (coming in v0.2). File upload and drag-drop work.
+
+            All three capture gestures — Upload File, drag-drop, and Capture Screen — work on both platforms. Capture Screen uses Apple Vision on Mac and `Windows.Media.Ocr` on Windows; no external utility install required (the v0.1 `setup.sh` ceremony is gone).
 
             ## Known limitations
 
-            - Unsigned binaries — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install
-            - Plain-text formats only: `.txt`, `.md`, `.vtt`, `.srt`, `.html`
-            - Screen capture: Mac only in v0.1; Windows lands in v0.2 (FN-OCR-12-07)
+            - **Unsigned binaries** — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install. Code-signing tracked in v0.3+ (FN-OCR-13-02 + FN-OCR-13-03).
+            - **Plain-text formats only** for file upload + drag-drop: `.txt`, `.md`, `.vtt`, `.srt`, `.html`. Rich formats (`.docx`, `.pdf`, `.pptx`) tracked in FN-OCR-12-02.
+            - **`sourceApp` ships empty on screen captures** (FN-OCR-13-12). The click-driven Capture Screen flow makes Threshold the frontmost app at the moment of capture, so the pre-invocation lookup resolves to Threshold itself; the self-filter then maps it to `""` rather than ship misleading data. Symmetric across Mac + Windows. Architectural fix (NSWorkspace-activation-observer on Mac; equivalent on Windows) tracked in the compact-UX workstream for v0.3+.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}

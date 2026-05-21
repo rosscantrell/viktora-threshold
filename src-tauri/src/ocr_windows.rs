@@ -109,6 +109,17 @@ pub fn capture_and_ocr_windows() -> Result<CaptureResult, CaptureError> {
     // Step 1: CoInitializeEx on the worker thread. WinRT APIs require COM
     // initialized; MTA is the standard apartment for in-process workers.
     // CoInitializeEx returns S_FALSE if already initialized — non-fatal.
+    //
+    // No CoUninitialize pairing: tokio's blocking-pool worker threads survive
+    // across calls, so the per-thread COM-init refcount accumulates with
+    // repeated captures. CoInitializeEx is idempotent on a previously-
+    // initialized thread (returns S_FALSE), so subsequent calls don't fault.
+    // Pairing would require an RAII guard that doesn't quite map to the
+    // sync→async bridge cleanly (CoUninitialize on the LAST init, not every
+    // init). The refcount drift is benign: it doesn't crash, doesn't leak
+    // memory measurably, and tokio worker threads are eventually destroyed.
+    // Documented forward-note for the Phase D AAR — revisit if it ever
+    // becomes load-bearing.
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
@@ -529,9 +540,11 @@ mod tests {
         // (this function doesn't touch clipboard), and the error path is
         // a `CaptureError::OcrFailed`, not some other variant.
         match run_windows_ocr(&img) {
-            Ok(s) => {
-                // Empty text is the expected outcome for a 2x2 solid-color image.
-                assert!(s.is_empty() || !s.is_empty(), "any string is acceptable; got {:?}", s);
+            Ok(_) => {
+                // Empty text is the expected outcome for a 2x2 solid-color
+                // image; non-empty would also be acceptable. The smoke is
+                // that the pipeline returns without panicking, not that the
+                // output has a specific shape.
             }
             Err(CaptureError::OcrFailed(_)) => {
                 // Acceptable on a stripped runner.
