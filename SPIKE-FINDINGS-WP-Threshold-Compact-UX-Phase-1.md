@@ -83,6 +83,38 @@ Procedure:
 
 ---
 
+## Live findings — 2026-05-21 (in flight)
+
+### Pre-flight: Tauri 2 transparent + macos-private-api
+
+First `tauri dev` boot surfaced a warning: `The window is set to be transparent but the macos-private-api is not enabled.` Both fixes required for Mac transparent windows in Tauri 2:
+- `Cargo.toml`: `tauri = { version = "2", features = ["macos-private-api"] }`
+- `tauri.conf.json`: `app.macOSPrivateApi: true`
+
+Applied; warning cleared on re-boot.
+
+### S-CUX-01 — PASS (visual)
+
+Widget rendered as a 100x100 dark-translucent rounded-rect with the centered crosshair button, sitting on top of the editor (alwaysOnTop ✓). Transparency at 92% opacity (`rgba(28, 30, 38, 0.92)`) renders with subtle edge softening; no Tauri rendering bugs.
+
+### S-CUX-05 — FAIL with `data-tauri-drag-region`, PASS pending re-smoke with JS heuristic
+
+Empirical: with `data-tauri-drag-region` on the outer widget div + `data-tauri-drag-region="false"` on the inner Capture button, Ross could NOT drag the widget from any region (button or border ring). Single-click on button → capture fires correctly, so Tauri WAS receiving click events; but mousedown for drag wasn't triggering window relocation.
+
+Hypothesis (untested): Tauri 2's `data-tauri-drag-region` may be incompatible with the combo of `focus: false` + `transparent: true` + `decorations: false` + `alwaysOnTop: true` on Mac. The high-level API silently no-ops.
+
+**Fallback applied (brief's documented S-CUX-05 fallback path — "Custom mouse-event handling in widget HTML"):** Pure-JS movement-threshold heuristic in `widget.js`. Mousedown tracks `screenX`/`screenY`; if mouse moves > 4px before mouseup, invoke `getCurrentWindow().startDragging()` (native Tauri 2 window API). Click handler bails out if drag was initiated. Removed the `data-tauri-drag-region` attributes from `widget.html` to avoid any interference. Pending re-smoke.
+
+### S-CUX-03 — PENDING
+
+Awaiting Ross's first successful (non-cancelled) capture from a known foreground app. Architectural verdict per the three sourceApp outcomes documented in the brief.
+
+### Toast-on-cancel UX adjustment
+
+Phase B's Mac path emits `kind: "failure"` for both real failures AND user cancellation ("Region capture cancelled" toast title). The widget was flipping the status dot red on cancellation. Adjusted heuristic: if toast title contains "cancel" or "timed out", reset dot to gray (unknown) — cancellation is a user action, not a system error.
+
+---
+
 ## What CI is validating (S-CUX-02 / S-CUX-08)
 
 Push of this branch fires the existing CI matrix:

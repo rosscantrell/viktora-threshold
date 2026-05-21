@@ -11,17 +11,17 @@
     <!--
       WP-Threshold-Compact-UX Phase 1 spike widget.
       ~100x100 floating widget; click center crosshair to fire run_screen_capture.
-      data-tauri-drag-region on the outer shell enables click-and-drag move
-      (S-CUX-05); the inner Capture button has data-tauri-drag-region="false"
-      so its clicks DON'T get hijacked by the drag handler.
+      Drag-to-move is implemented in widget.js via the Tauri `startDragging`
+      API + a mousemove threshold heuristic — the `data-tauri-drag-region`
+      attribute didn't fire mousedown reliably on this window config
+      (S-CUX-05 finding 2026-05-21).
     -->
-    <div id="widget" data-tauri-drag-region>
+    <div id="widget">
       <button
         id="capture-btn"
         type="button"
         title="Capture region from screen"
         aria-label="Capture region from screen"
-        data-tauri-drag-region="false"
       >
         <svg viewBox="0 0 24 24" width="32" height="32" fill="none"
              stroke="currentColor" stroke-width="1.75"
