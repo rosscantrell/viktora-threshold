@@ -54,3 +54,35 @@ objc2-foundation = "0.3"
 objc2-app-kit = "0.3"
 objc2-vision = "0.3"
 tempfile = "3"
+
+# WP-OCR-13 Phase B — Windows native in-process OCR via Windows.Media.Ocr (AC-1,
+# D-13-03). Replaces the v0.1.x subprocess to `viktora-ocr-capture` and adds
+# native Windows region UX via `ms-screenclip:` URI (D-13-05). arboard provides
+# clipboard read/snapshot/restore — D-13-06 + P-13-01 (a). `windows` crate
+# features cover the in-process OCR pipeline plus GetForegroundWindow-based
+# sourceApp lookup (P-13-09 (c) orthogonal axis to captureTool):
+#   Media_Ocr / Foundation / Foundation_Collections — OcrEngine + IVectorView
+#   Storage_Streams / Graphics_Imaging              — PNG → SoftwareBitmap
+#   Win32_UI_Shell                                  — ShellExecuteW
+#   Win32_UI_WindowsAndMessaging                    — GetForegroundWindow
+#   Win32_System_Com                                — CoInitializeEx
+#   Win32_System_Threading / Win32_System_ProcessStatus / Win32_Foundation
+#                                                   — process → EXE name
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.59", features = [
+    "Media_Ocr",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+    "Graphics_Imaging",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_Foundation",
+] }
+arboard = "3"
+# Minimal PNG encoder for the RGBA → PNG → SoftwareBitmap (BitmapDecoder)
+# pipeline (brief Phase B step 2). Lighter than the full `image` crate.
+png = "0.17"
