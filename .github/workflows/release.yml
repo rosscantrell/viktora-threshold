@@ -1,0 +1,90 @@
+name: release
+
+# Cross-platform release build for Viktora Threshold.
+#
+# Triggered when a tag matching `v*` is pushed (e.g., `v0.1.1`, `v0.2.0`).
+# Builds Mac DMG (Apple Silicon) + Windows MSI (x86_64) in parallel via two
+# runners, then attaches both as assets to a draft GitHub Release for the tag.
+#
+# After the action completes, you review the draft release on GitHub +
+# publish it. Pilots install from the published release page.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # tauri-action needs this to create/update the release
+
+jobs:
+  build-and-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest      # Apple Silicon runner (M-series)
+            target: aarch64-apple-darwin
+            artifact-name: macos-aarch64
+          - platform: windows-latest    # Windows Server, x86_64
+            target: x86_64-pc-windows-msvc
+            artifact-name: windows-x86_64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build Tauri bundle (DMG / MSI) and attach to release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Viktora Threshold ${{ github.ref_name }}"
+          releaseBody: |
+            Viktora Threshold ${{ github.ref_name }} — Mac + Windows pilot build.
+
+            ## Install
+
+            See [PILOT-INSTALL.md](https://github.com/rosscantrell/viktora-threshold/blob/main/PILOT-INSTALL.md) for the full guide.
+
+            **macOS (Apple Silicon):**
+            1. Download the `.dmg` below
+            2. Drag `Viktora Threshold.app` to `/Applications`
+            3. Right-click → Open (one-time Gatekeeper bypass for unsigned v1)
+            4. If you want screen capture: run `bash setup.sh` from the repo first
+
+            **Windows (x86_64, Windows 11 / Windows 10 May 2020 update or later):**
+            1. Download the `.msi` below
+            2. Double-click to install (Windows SmartScreen may warn on unsigned builds — click "More info" → "Run anyway")
+            3. Launch from Start menu
+            4. Screen capture is not yet supported on Windows in v0.1 (coming in v0.2). File upload and drag-drop work.
+
+            ## Known limitations
+
+            - Unsigned binaries — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install
+            - Plain-text formats only: `.txt`, `.md`, `.vtt`, `.srt`, `.html`
+            - Screen capture: Mac only in v0.1; Windows lands in v0.2 (FN-OCR-12-07)
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
