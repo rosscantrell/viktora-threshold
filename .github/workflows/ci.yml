@@ -1,0 +1,69 @@
+name: ci
+
+# Pre-merge / pre-release environment-independence check for Viktora Threshold.
+#
+# Triggered by:
+#   - pull_request: validates a branch at PR-open + every PR push (catches
+#     mid-Phase A/B/C/D regressions before merge)
+#   - push to main: keeps main always-green; a merge that breaks main fires
+#     this on the next commit
+#   - workflow_dispatch: manual trigger for ad-hoc runs (no PR required)
+#
+# Releases are still produced by release.yml on tag pushes. This workflow
+# does NOT bundle DMG/MSI or attach to releases — it's strictly the
+# "does it build + do tests pass on a clean Mac runner?" check.
+#
+# Matrix is macos-latest only for now. Windows enters the matrix when
+# Phase B's Windows.Media.Ocr code lands (WP-OCR-13 §5 Phase B); adding
+# windows-latest speculatively would just fail-compile against missing
+# platform-specific deps that Phase A hasn't introduced yet.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read  # read-only; no release attach in this workflow
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest      # Apple Silicon runner (M-series)
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build (release profile, lib only)
+        working-directory: src-tauri
+        run: cargo build --release --lib
+
+      - name: Run unit tests
+        working-directory: src-tauri
+        run: cargo test --lib
