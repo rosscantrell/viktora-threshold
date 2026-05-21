@@ -6,67 +6,96 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Viktora Threshold</title>
     <script type="module" src="/main.js" defer></script>
-    <style>
-      body {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
-        background: #f5f5f7;
-        color: #1d1d1f;
-        margin: 0;
-        padding: 40px;
-        min-height: 100vh;
-        box-sizing: border-box;
-      }
-      h1 { font-size: 24px; margin: 0 0 8px 0; }
-      .subtitle { color: #6e6e73; font-size: 13px; margin: 0 0 24px 0; }
-      .panel {
-        background: white;
-        border-radius: 12px;
-        padding: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        margin-bottom: 16px;
-      }
-      .panel h2 { margin: 0 0 8px 0; font-size: 15px; font-weight: 600; }
-      .status {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 12px;
-        font-size: 12px;
-        font-weight: 500;
-      }
-      .status.ok { background: #e6f4ea; color: #137333; }
-      .status.fail { background: #fce8e6; color: #c5221f; }
-      .path {
-        font-family: ui-monospace, SF Mono, monospace;
-        font-size: 12px;
-        margin-top: 8px;
-        color: #6e6e73;
-      }
-      .placeholder {
-        margin-top: 24px;
-        padding: 16px;
-        background: #fffbeb;
-        border-left: 3px solid #f9ab00;
-        border-radius: 6px;
-        font-size: 13px;
-        color: #1d1d1f;
-      }
-    </style>
   </head>
 
   <body>
-    <h1>Viktora Threshold</h1>
-    <p class="subtitle">Phase B Increment 1 — D-12-19 OCR utility probe scaffold</p>
+    <!-- ──────────────────────────────────────────────────────────────────
+         Loading / first-launch detection view (shown before router runs)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-loading" class="view">
+      <div class="spinner-shell">
+        <p class="loading-text">Starting Viktora Threshold…</p>
+      </div>
+    </section>
 
-    <div class="panel">
-      <h2>OCR utility status (D-12-19 absolute-path probe)</h2>
-      <p id="ocr-status">Probing…</p>
-      <p id="ocr-path" class="path"></p>
-    </div>
+    <!-- ──────────────────────────────────────────────────────────────────
+         Configure pane (also reused inside the wizard in increment 3)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-configure" class="view" hidden>
+      <header class="app-header">
+        <h1>Viktora Threshold</h1>
+        <p class="subtitle">Connect to your Apolla workspace</p>
+      </header>
 
-    <div class="placeholder">
-      <strong>Phase B work-in-progress.</strong> Next increments add the 3-screen onboarding wizard (P-12-05),
-      Configure pane (URL + bearer token), main capture UI (drag-drop / file picker / screenshot), and the
-      structured-toast component (D-12-18). See <a href="https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md">WP-OCR-12 v1.2-FINAL</a>.
-    </div>
+      <form id="configure-form" class="configure-form" autocomplete="off">
+        <label class="field">
+          <span class="field-label">Apolla base URL</span>
+          <input
+            type="text"
+            id="config-base-url"
+            placeholder="http://localhost:3001"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+          />
+          <span class="field-help">
+            Where your schema-browser is running. Use <code>http://localhost:3001</code> for local-server
+            (WP-OCR-08), <code>https://localhost:3001</code> if you've enabled local-HTTPS, or your
+            hosted Apolla URL once WP-OCR-09 ships.
+          </span>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Bearer token</span>
+          <input
+            type="password"
+            id="config-bearer-token"
+            placeholder="paste your INGESTION_API_KEY"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+          />
+          <span class="field-help">
+            The <code>INGESTION_API_KEY</code> value the schema-browser was started with (same value
+            the OCR utility and Outlook Add-in use).
+          </span>
+        </label>
+
+        <div class="actions">
+          <button type="button" id="btn-test-connection" class="btn btn-secondary">
+            Test connection
+          </button>
+          <button type="submit" id="btn-save" class="btn btn-primary">
+            Save
+          </button>
+        </div>
+
+        <div id="connection-result" class="result" hidden></div>
+      </form>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Main capture UI placeholder (full UI lands in increment 4)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-main" class="view" hidden>
+      <header class="app-header">
+        <h1>Viktora Threshold</h1>
+        <p class="subtitle" id="main-subtitle">Connected</p>
+        <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
+      </header>
+
+      <div class="panel">
+        <h2>OCR utility status</h2>
+        <p id="main-ocr-status">Probing…</p>
+        <p id="main-ocr-path" class="path"></p>
+      </div>
+
+      <div class="placeholder">
+        <strong>Increment 2 of 5 complete.</strong> Configure pane + Test connection + config
+        persistence wired up. Next increments add the 3-screen onboarding wizard wrapper (P-12-05),
+        main capture UI (file picker / drag-drop / screenshot subprocess), structured-toast
+        component (D-12-18), and lenient response handling (D-12-17).
+      </div>
+    </section>
   </body>
 </html>

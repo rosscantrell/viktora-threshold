@@ -1,48 +1,49 @@
 // Viktora Threshold — Mac desktop capture app for Apolla workspaces.
 // WP-OCR-12 v1.2-FINAL Phase B scaffold.
 //
-// This file provides the Phase B increment 1 foundation:
-//   - App state management (cached OCR utility absolute path)
-//   - D-12-19 startup probe for the `ocr-capture` binary (bypasses launchd PATH)
-//   - get_ocr_utility_status IPC command (for the wizard + main UI to render
-//     enabled/disabled Capture Screen button per AC-7)
+// Increment 1: AppState + D-12-19 OCR utility probe + get_ocr_utility_status IPC
+// Increment 2: AppConfig persistence (D-12-07) + Configure pane IPC (load_config,
+//              save_config, test_connection)
 //
-// Subsequent Phase B increments will add: config load/save, test_connection,
-// file-upload ingestion, drag-drop ingestion, screencapture subprocess,
-// structured-toast emit, lenient response deserialization (D-12-17), and the
-// 3-screen onboarding wizard wiring.
+// Subsequent increments add: 3-screen wizard wrapper, capture flows, structured
+// toast component, lenient response deserialization, window-close lifecycle.
 
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-/// App-wide state. Wrapped in a Mutex because Tauri's IPC commands are async-callable
-/// from multiple windows / handlers concurrently.
+// ───────────────────────────────────────────────────────────────────────────
+// AppState
+// ───────────────────────────────────────────────────────────────────────────
+
+/// App-wide state. Mutex-wrapped because Tauri IPC commands can be invoked
+/// concurrently from multiple webview handlers.
 pub struct AppState {
-    /// Absolute path to the `ocr-capture` binary, resolved at startup via D-12-19 probe.
-    /// `None` means the binary was not found at any of the canonical install locations;
-    /// the Capture Screen button must be disabled in the UI (per AC-7).
+    /// D-12-19: absolute path to `ocr-capture` resolved at startup.
+    /// `None` → binary not installed; Capture Screen button must be disabled.
     pub ocr_capture_path: Mutex<Option<PathBuf>>,
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// D-12-19: OCR utility probe
+// ───────────────────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct OcrUtilityStatus {
     pub installed: bool,
     pub path: Option<String>,
-    /// Human-readable explanation if not installed; suitable for the disabled-button tooltip.
     pub message: Option<String>,
 }
 
-/// D-12-19 — OCR utility absolute-path probe.
-///
-/// macOS GUI-launched .app bundles inherit a minimal launchd PATH
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`) that does NOT include ~/.local/bin,
-/// /opt/homebrew/bin, or /usr/local/bin — confirmed empirically during
-/// Phase A primitive (f) on 2026-05-20. So we probe absolute paths at
-/// startup and cache the result; all subsequent subprocess invocations
-/// use the cached absolute path, bypassing PATH resolution entirely.
+/// D-12-19 — macOS GUI-launched .app bundles inherit launchd PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`) which excludes ~/.local/bin,
+/// /opt/homebrew/bin, and /usr/local/bin. We probe absolute paths at
+/// startup and cache the result; subsequent subprocess invocations
+/// bypass PATH resolution entirely.
 fn probe_ocr_capture() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let candidates = [
@@ -81,6 +82,164 @@ fn get_ocr_utility_status(state: tauri::State<AppState>) -> OcrUtilityStatus {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// D-12-07: AppConfig persistence at ~/Library/Application Support/Viktora Threshold/config.json
+// ───────────────────────────────────────────────────────────────────────────
+
+/// AppConfig schema. `mode` is reserved for v2 (FN-OCR-12-14 free-tier mode)
+/// but always 'workspace' in v1. `serde(default)` on the struct makes loading
+/// forward-compatible: future fields land as defaults rather than errors.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct AppConfig {
+    pub base_url: String,
+    pub bearer_token: String,
+    pub last_used: Option<String>,
+    pub mode: String, // 'workspace' for v1; 'free-tier' reserved for v2
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:3001".into(),
+            bearer_token: String::new(),
+            last_used: None,
+            mode: "workspace".into(),
+        }
+    }
+}
+
+fn config_dir() -> Option<PathBuf> {
+    // dirs::config_dir() on macOS returns ~/Library/Application Support
+    dirs::config_dir().map(|p| p.join("Viktora Threshold"))
+}
+
+fn config_path() -> Option<PathBuf> {
+    config_dir().map(|p| p.join("config.json"))
+}
+
+/// Load config from disk. Returns Ok(None) if the file doesn't exist (first launch);
+/// Ok(Some(_)) if loaded successfully; Err if the file exists but is corrupt.
+#[tauri::command]
+fn load_config() -> Result<Option<AppConfig>, String> {
+    let path = config_path().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| format!("Failed to read config: {}", e))?;
+    let config: AppConfig =
+        serde_json::from_str(&raw).map_err(|e| format!("Config file corrupt: {}", e))?;
+    log::info!("Loaded config from {}", path.display());
+    Ok(Some(config))
+}
+
+#[tauri::command]
+fn save_config(config: AppConfig) -> Result<(), String> {
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    let mut to_write = config;
+    // Stamp last_used on save
+    to_write.last_used = Some(chrono_iso_now());
+    let json = serde_json::to_string_pretty(&to_write)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    log::info!("Saved config to {}", path.display());
+    Ok(())
+}
+
+/// Minimal ISO 8601 UTC timestamp without pulling in chrono crate.
+fn chrono_iso_now() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // ISO 8601 in UTC: gmtime via libc isn't available in std, so emit epoch seconds
+    // formatted in a parseable way. This is a v1 simplification — replace with
+    // chrono::Utc::now().to_rfc3339() if the timestamp needs to be human-readable
+    // in config.json. For now, last_used is informational only.
+    format!("{}Z", now)
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// D-12-14: Test connection (GET /api/health)
+// ───────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct ConnectionTestResult {
+    pub ok: bool,
+    pub status_code: Option<u16>,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
+#[tauri::command]
+async fn test_connection(base_url: String) -> ConnectionTestResult {
+    let url = format!("{}/api/health", base_url.trim_end_matches('/'));
+
+    let client = match reqwest::Client::builder()
+        // Accept locally-trusted certs (mkcert) for WP-OCR-08 local-HTTPS mode
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return ConnectionTestResult {
+                ok: false,
+                status_code: None,
+                message: "Failed to build HTTP client".into(),
+                detail: Some(format!("{}", e)),
+            }
+        }
+    };
+
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                ConnectionTestResult {
+                    ok: true,
+                    status_code: Some(status.as_u16()),
+                    message: format!("Connected to {} (status {}).", url, status.as_u16()),
+                    detail: None,
+                }
+            } else {
+                ConnectionTestResult {
+                    ok: false,
+                    status_code: Some(status.as_u16()),
+                    message: format!("Server returned status {} from {}.", status.as_u16(), url),
+                    detail: Some(
+                        "The server is reachable but the health endpoint didn't return 2xx. \
+                         Verify the schema-browser is running and that the base URL is correct."
+                            .into(),
+                    ),
+                }
+            }
+        }
+        Err(e) => {
+            let detail = if e.is_timeout() {
+                "Connection timed out (10s). The server may be unreachable, or the URL may be wrong."
+                    .to_string()
+            } else if e.is_connect() {
+                "Connection refused. Is the schema-browser running at this URL?".to_string()
+            } else {
+                format!("{}", e)
+            };
+            ConnectionTestResult {
+                ok: false,
+                status_code: None,
+                message: format!("Could not reach {}", url),
+                detail: Some(detail),
+            }
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Tauri builder
+// ───────────────────────────────────────────────────────────────────────────
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
@@ -94,7 +253,12 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_ocr_utility_status])
+        .invoke_handler(tauri::generate_handler![
+            get_ocr_utility_status,
+            load_config,
+            save_config,
+            test_connection
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
