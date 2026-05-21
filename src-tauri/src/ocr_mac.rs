@@ -177,11 +177,81 @@ fn run_vision_ocr_on_file(path: &Path) -> Result<String, CaptureError> {
 ///
 /// Best-effort: returns `None` on any lookup failure (sandbox edge cases,
 /// nil frontmost app on lock-screen wake, missing bundle ID for some
-/// command-line-launched processes). The caller treats `None` as empty
-/// string per brief §0.2 explicit degradation allowance.
+/// command-line-launched processes) AND when the lookup resolves to
+/// Threshold's own bundle ID (see `is_threshold_own_bundle_id`). Caller
+/// treats `None` as empty string per brief §0.2 degradation allowance.
+///
+/// NOTE on FN-OCR-13-12: Phase A's empirically-observed `sourceApp: ""`
+/// outcome was incidental — NSWorkspace happened to return `nil` during
+/// the focus-transition window of the click-driven workflow. There's no
+/// guarantee that always happens: in multi-click sequences (capture →
+/// capture again before focus settles), Configure-open captures, and
+/// first-launch wizard → widget collapse, NSWorkspace can return
+/// Threshold's own bundle. The filter rejects the self-reference so the
+/// corpus never picks up misleading `"ai.viktora.threshold"` attributions
+/// on a screenshot the user took FROM another app. Symmetric with the
+/// Windows-side `is_threshold_own_exe` filter (PR #2 commit e5cb31a).
+/// The proper architectural fix — making Threshold non-focus-stealing —
+/// is owned by WP-Threshold-Compact-UX v0.3; this filter is the v0.2
+/// safety net + v0.3 defense-in-depth.
 fn frontmost_app_bundle_id() -> Option<String> {
     let workspace = NSWorkspace::sharedWorkspace();
     let app = workspace.frontmostApplication()?;
-    let bundle_id = app.bundleIdentifier()?;
-    Some(bundle_id.to_string())
+    let bundle_id = app.bundleIdentifier()?.to_string();
+    if is_threshold_own_bundle_id(&bundle_id) {
+        return None;
+    }
+    Some(bundle_id)
+}
+
+/// Does this bundle ID refer to Threshold itself? Case-insensitive exact
+/// match against the canonical identifier from `tauri.conf.json`
+/// (`ai.viktora.threshold`). Avoids substring matching so a future helper
+/// bundle (e.g., `ai.viktora.threshold.updater`) would still ship through
+/// — the filter is exact-match-after-case-folding, not prefix-match.
+///
+/// Mirror of the Windows-side `is_threshold_own_exe` filter (PR #2 commit
+/// e5cb31a). Same posture: honest empty-string beats misleading
+/// self-attribution.
+fn is_threshold_own_bundle_id(bundle_id: &str) -> bool {
+    bundle_id.eq_ignore_ascii_case("ai.viktora.threshold")
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Tests
+// ───────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FN-OCR-13-12 Mac-side self-filter: Threshold's own bundle ID must be
+    /// rejected (mapped to None → `sourceApp: ""`). Symmetric with the
+    /// Windows-side `is_threshold_own_exe_rejects_self_under_all_bundle_names`
+    /// test.
+    #[test]
+    fn is_threshold_own_bundle_id_rejects_self() {
+        // Canonical bundle ID from tauri.conf.json
+        assert!(is_threshold_own_bundle_id("ai.viktora.threshold"));
+        // Case variants — bundle IDs are conventionally lowercase but spec
+        // doesn't mandate it; macOS itself is case-preserving but
+        // case-insensitive for bundle lookups.
+        assert!(is_threshold_own_bundle_id("AI.VIKTORA.THRESHOLD"));
+        assert!(is_threshold_own_bundle_id("Ai.Viktora.Threshold"));
+
+        // Real third-party bundle IDs must NOT be filtered
+        assert!(!is_threshold_own_bundle_id("com.apple.mail"));
+        assert!(!is_threshold_own_bundle_id("com.apple.safari"));
+        assert!(!is_threshold_own_bundle_id("com.tinyspeck.slackmacgap"));
+        assert!(!is_threshold_own_bundle_id("com.microsoft.outlook"));
+        assert!(!is_threshold_own_bundle_id("com.google.Chrome"));
+        // Prefix-match negative — future helper bundles must ship through.
+        // Pins the exact-match contract; mirrors the Windows-side
+        // `viktora-threshold-helper` pin.
+        assert!(!is_threshold_own_bundle_id("ai.viktora.threshold.updater"));
+        assert!(!is_threshold_own_bundle_id("ai.viktora.threshold.helper"));
+        // Partial brand match must NOT filter
+        assert!(!is_threshold_own_bundle_id("ai.viktora"));
+        assert!(!is_threshold_own_bundle_id("ai.viktora.something-else"));
+    }
 }

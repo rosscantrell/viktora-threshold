@@ -1,8 +1,8 @@
 # Viktora Threshold
 
-Mac desktop capture app for Apolla workspaces. Tauri (Rust shell + webview frontend); produces a small `.app` bundle (~10-15 MB).
+Mac + Windows desktop capture app for Apolla workspaces. Tauri (Rust shell + webview frontend); produces small `.app` (~7 MB on Mac) / `.msi` (~10 MB on Windows) bundles.
 
-**Status:** Pre-development scaffold. Spec lives in [WP-OCR-12 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md).
+**Status:** v0.2.0 — native in-process OCR shipped on both platforms (Apple Vision on Mac via `objc2-vision`; `Windows.Media.Ocr` on Windows via the `windows` crate). Specs: [WP-OCR-12 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md) (original desktop-app scope) + [WP-OCR-13 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-13-Threshold-Cross-Platform-OCR-Brief-v1_2-FINAL.md) (cross-platform OCR).
 
 ## What it does
 
@@ -10,7 +10,7 @@ A single click-driven entry point for the most common ingestion gestures that do
 
 1. **Select a file from disk** — plain-text formats (`.txt`, `.md`, `.vtt`, `.srt`, `.html`)
 2. **Drag-and-drop** a file onto the window
-3. **Capture Screen** — invokes [viktora-ocr-capture](https://github.com/rosscantrell/viktora-ocr-capture) as a subprocess for region-select screenshot OCR
+3. **Capture Screen** — region-select screenshot OCR via native in-process bindings (Apple Vision on Mac; `Windows.Media.Ocr` on Windows). No external utility install required.
 
 All three POST the resulting text to your Apolla workspace via the standard `/api/ingest-document` endpoint with bearer auth.
 
@@ -18,20 +18,19 @@ All three POST the resulting text to your Apolla workspace via the standard `/ap
 
 ## Pairs with
 
-- [viktora-ocr-capture](https://github.com/rosscantrell/viktora-ocr-capture) — the Python OCR utility this app subprocesses out to for screenshot capture. Hard prerequisite for the Capture Screen button; the file picker and drag-drop paths work without it.
 - An Apolla schema-browser deployment — either local-server ([WP-OCR-08](https://github.com/rosscantrell/AI-Light-Prototype)) or hosted (WP-OCR-09, forthcoming).
+- [viktora-ocr-capture](https://github.com/rosscantrell/viktora-ocr-capture) — standalone Mac hotkey-driven OCR utility for power users who want a global-hotkey capture surface outside Threshold's click-driven flow. **No longer a runtime dependency** as of v0.2 (D-13-10); the two artifacts coexist for different use cases.
 
 ## Install
 
-Pre-development. Once v0.1.0 ships, install via:
+Pilot install (Mac or Windows):
 
-1. **One-time setup** — `bash setup.sh` (installs `viktora-ocr-capture` via `pipx`)
-2. Download `Viktora Threshold.dmg` from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
-3. Drag `Viktora Threshold.app` to `/Applications`
-4. Right-click → Open (one-time Gatekeeper bypass for unsigned v1)
-5. 3-screen onboarding wizard → paste Apolla base URL + bearer token → first capture
+1. Download `Viktora Threshold_<version>_aarch64.dmg` (Mac) or `Viktora Threshold_<version>_x64_en-US.msi` (Windows) from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
+2. **Mac:** drag the `.app` to `/Applications`; right-click → Open (one-time Gatekeeper bypass for unsigned v0.2). **Windows:** double-click the `.msi`; SmartScreen → More info → Run anyway (signing tracked in FN-OCR-13-02)
+3. Launch; the 3-screen onboarding wizard prompts for Apolla base URL + bearer token
+4. First capture — Upload File, drag-drop, or Capture Screen
 
-See `PILOT-INSTALL.md` (forthcoming) for the canonical install guide.
+See [PILOT-INSTALL.md](PILOT-INSTALL.md) for the full guide including troubleshooting + known limitations.
 
 ## Architecture
 
