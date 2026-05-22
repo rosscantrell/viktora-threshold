@@ -222,6 +222,45 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-Threshold-Tidbit-Return Phase B — Tidbit panel view
+         ────────────────────────────────────────────────────────────────── -->
+    <!--
+      Rendered when widget_expand was called with target_tab="tidbit"
+      (URL hash "#tidbit"). main.js bootstrap detects the hash, invokes
+      get_pending_tidbit IPC, and populates this view. If no tidbit is
+      pending (e.g., user navigated here without one waiting), the view
+      shows an empty-state message and offers to collapse back to the
+      widget.
+    -->
+    <section id="view-tidbit" class="view view-tidbit" hidden>
+      <header class="tidbit-header">
+        <p class="tidbit-meta" id="tidbit-meta" hidden></p>
+        <h1 class="tidbit-title" id="tidbit-title"></h1>
+      </header>
+
+      <div class="tidbit-body" id="tidbit-body"></div>
+
+      <div class="tidbit-highlights" id="tidbit-highlights" aria-label="Highlights">
+        <!-- TidbitHighlight chips rendered here by main.js. Each chip:
+             <span class="tidbit-chip" data-overlap="true|false">slug · n×</span> -->
+      </div>
+
+      <div class="tidbit-footer">
+        <button type="button" id="btn-tidbit-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+        <a id="btn-tidbit-deeplink" class="btn btn-primary" target="_blank" rel="noopener">
+          View full in Apolla →
+        </a>
+      </div>
+
+      <p class="tidbit-empty" id="tidbit-empty" hidden>
+        No preview available right now. It may have been viewed already or
+        timed out.
+      </p>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->
     <div id="drop-overlay" class="drop-overlay" hidden>

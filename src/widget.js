@@ -276,4 +276,76 @@ listen("threshold://drop-paths", async (event) => {
   }
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-Threshold-Tidbit-Return Phase B — tidbit-arrived event
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Fired by the Rust polling loop (`poll_for_tidbit`) when a capture's marker
+// pipeline completes with status='ready'. The Rust side has already stored
+// the tidbit in AppState via `handle_tidbit_ready` so the expanded UI can
+// retrieve it via `get_pending_tidbit` IPC.
+//
+// Three responses (PB-2 hybrid (c) + best-effort (a)):
+//   1. Show the indicator badge — primary user-facing affordance
+//   2. Pulse the widget — extra attention signal (FN-CUX-05)
+//   3. Fire a native OS notification — best-effort surface; user might not
+//      even be looking at the widget when the tidbit lands
+
+const tidbitIndicator = document.getElementById("tidbit-indicator");
+
+if (tidbitIndicator) {
+  tidbitIndicator.addEventListener("click", async (e) => {
+    if (dragInitiated) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await invoke("widget_expand", { targetTab: "tidbit" });
+    } catch (err) {
+      console.warn("[widget] tidbit expand failed:", err);
+    }
+    // Hide the badge as soon as the user acts on it. The Rust side's
+    // pending_tidbit stays populated until the panel reads it via
+    // get_pending_tidbit — that's intentional so the panel actually has
+    // data after navigation. The panel itself calls clear_pending_tidbit
+    // when the user closes/collapses.
+    tidbitIndicator.hidden = true;
+  });
+}
+
+listen("threshold://tidbit-arrived", async (event) => {
+  const tidbit = event.payload || {};
+  console.log("[widget] tidbit arrived:", tidbit.title);
+
+  // 1. Show indicator badge
+  if (tidbitIndicator) {
+    tidbitIndicator.hidden = false;
+    tidbitIndicator.title = tidbit.title || "Tap to see the latest preview";
+  }
+
+  // 2. Pulse the widget (FN-CUX-05)
+  const widgetEl = document.getElementById("widget");
+  if (widgetEl) {
+    widgetEl.classList.remove("tidbit-pulse"); // restart animation if mid-pulse
+    // Force reflow so re-adding the class actually restarts the animation.
+    void widgetEl.offsetWidth;
+    widgetEl.classList.add("tidbit-pulse");
+    setTimeout(() => widgetEl.classList.remove("tidbit-pulse"), 2200);
+  }
+
+  // 3. Native OS notification (PB-3: title only; body intentionally empty
+  //    so OS surfaces the title prominently and the full preview is reserved
+  //    for the widget panel). Reuses the existing maybeShowNotification
+  //    permission/availability path so the widget's notification logic stays
+  //    single-source-of-truth (matches the capture toast pattern). The
+  //    plugin's plain-body notification click handler is unreliable
+  //    cross-platform; PB-2 hybrid lean is "widget click is the always-works
+  //    path, notification click is best-effort." If a future Tauri plugin
+  //    update makes notification clicks reliable, wire `on_action` back
+  //    through the plugin builder to invoke `widget_expand("tidbit")`.
+  await maybeShowNotification({
+    title: tidbit.title || "Apolla has a preview for you",
+    body: "",
+  });
+});
+
 init();

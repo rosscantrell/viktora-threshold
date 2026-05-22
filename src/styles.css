@@ -501,3 +501,137 @@ code {
   flex-shrink: 0;
 }
 .toast-close:hover { color: #1d1d1f; }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * WP-Threshold-Tidbit-Return Phase B — tidbit panel layout
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * Rendered inside view-tidbit (index.html). Q1 lock: this view lives in
+ * the existing widget-expand 800x600 frame, NOT a separate window — no
+ * focus invariant gymnastics needed.
+ *
+ * Layout philosophy: read-first, click-second. Title + prose dominate;
+ * highlights are secondary; deep-link button is anchored at the bottom so
+ * the user lands on body content without scrolling past CTAs.
+ */
+
+.view-tidbit {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.tidbit-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tidbit-meta {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #86868b;
+  margin: 0;
+}
+
+.tidbit-title {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #1d1d1f;
+  margin: 0;
+}
+
+/* Q4 empirical range: 100-800 chars. max-height + overflow-y keeps the
+ * panel from blowing past the 600px window height on long whyThisMatters. */
+.tidbit-body {
+  font-size: 15px;
+  line-height: 1.55;
+  color: #424245;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 16px 20px;
+  background: #f5f5f7;
+  border-radius: 10px;
+  border: 1px solid #e2e2e6;
+  word-break: break-word;
+}
+
+.tidbit-highlights {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Highlight chip — corpus-overlap chips get a softer-blue treatment to
+ * signal continuity ("you've seen this before"); "new" chips are neutral.
+ * Distinction is via data-overlap so the rendering logic stays declarative. */
+.tidbit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  background: #f0f0f3;
+  border: 1px solid #e2e2e6;
+  color: #1d1d1f;
+}
+
+.tidbit-chip[data-overlap="true"] {
+  background: rgba(10, 132, 255, 0.08);
+  border-color: rgba(10, 132, 255, 0.32);
+  color: #0a3d91;
+}
+
+.tidbit-chip-slug {
+  font-weight: 600;
+}
+
+.tidbit-chip-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6e6e73;
+  padding-left: 4px;
+  border-left: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.tidbit-chip[data-overlap="true"] .tidbit-chip-count {
+  color: #0a3d91;
+  border-left-color: rgba(10, 132, 255, 0.24);
+}
+
+.tidbit-chip-count-new {
+  color: #86868b;
+  font-style: italic;
+}
+
+.tidbit-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+}
+
+/* anchor styled like a button — overrides default link decoration */
+#btn-tidbit-deeplink {
+  text-decoration: none;
+  display: inline-block;
+}
+
+.tidbit-empty {
+  font-size: 14px;
+  color: #6e6e73;
+  text-align: center;
+  margin: 32px 0 0;
+  padding: 24px;
+  background: #f5f5f7;
+  border-radius: 10px;
+}
