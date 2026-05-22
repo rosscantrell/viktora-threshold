@@ -130,6 +130,85 @@ impl Default for AppConfig {
     }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-OCR-09 Phase D — deep-link Configure pre-fill
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Payload emitted to the frontend when an `apolla-threshold://configure`
+/// URL is opened. The frontend listens on `threshold://configure-prefill`
+/// and populates the Configure pane's base URL + bearer token fields.
+///
+/// `tenant` is the slug (e.g., "threshold-eval") if present; `base_url` is
+/// the full reconstructed URL the pane should use. The brief (WP-OCR-09
+/// v1.2-FINAL D-09-08) specifies `?tenant=<slug>&token=...`; we
+/// reconstruct `https://<slug>.viktora.ai` as the base URL. Future
+/// non-viktora.ai hosting would extend the parser to also accept
+/// `?baseUrl=<full-url>` and prefer it over the slug — out of Phase D
+/// scope.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigurePrefill {
+    /// Tenant slug (e.g., "threshold-eval"). May be None for slug-less
+    /// future URLs but currently always populated when the deep link
+    /// matches the canonical shape.
+    pub tenant: Option<String>,
+    /// Reconstructed base URL (`https://<tenant>.viktora.ai`).
+    pub base_url: String,
+    /// Bearer token to populate the Configure pane field. Frontend
+    /// passes this straight into `save_config` — no client-side parsing.
+    pub token: String,
+}
+
+/// Parse an `apolla-threshold://configure?tenant=...&token=...` URL into
+/// a `ConfigurePrefill` event payload. Returns `None` for malformed URLs
+/// (wrong scheme, missing token, etc.) so the deep-link handler can log
+/// + skip without crashing.
+///
+/// Different URL parsers handle custom schemes inconsistently — `tauri::Url`
+/// (via the `url` crate, transitively brought in by tauri-plugin-deep-link)
+/// treats `apolla-threshold://configure?...` as scheme=`apolla-threshold`,
+/// host=`configure`, path=`/`, query=`tenant=...&token=...`. We accept
+/// either `configure` as host OR path to be tolerant of future schema
+/// drift.
+pub fn parse_configure_deep_link(url: &url::Url) -> Option<ConfigurePrefill> {
+    if url.scheme() != "apolla-threshold" {
+        return None;
+    }
+    // Accept "configure" as either host or path's first segment.
+    let host_ok = url.host_str() == Some("configure");
+    let path_ok = url.path().trim_start_matches('/').split('/').next() == Some("configure")
+        && url.host_str().is_none();
+    if !host_ok && !path_ok {
+        return None;
+    }
+    let mut tenant: Option<String> = None;
+    let mut token: Option<String> = None;
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "tenant" => tenant = Some(v.into_owned()),
+            "token" => token = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    let token = token?;
+    if token.is_empty() {
+        return None;
+    }
+    let tenant_slug = tenant.as_deref().unwrap_or("").trim();
+    let base_url = if tenant_slug.is_empty() {
+        // No tenant slug → can't reconstruct a base URL. The brief
+        // requires `?tenant=...`; reject rather than guess.
+        return None;
+    } else {
+        format!("https://{}.viktora.ai", tenant_slug)
+    };
+    Some(ConfigurePrefill {
+        tenant: Some(tenant_slug.to_string()),
+        base_url,
+        token,
+    })
+}
+
 fn config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("Viktora Threshold"))
 }
@@ -1388,7 +1467,65 @@ pub fn run() {
         // in-window toast surface; this plugin gives us the canonical
         // failure/success surface alongside the status-dot color flip.
         .plugin(tauri_plugin_notification::init())
+        // WP-OCR-09 Phase D — custom URL scheme `apolla-threshold://`
+        // for one-click Apolla onboarding. Scheme registration is
+        // declared in tauri.conf.json (`plugins.deep-link.desktop.schemes`);
+        // the plugin bakes the platform-specific config (Info.plist on
+        // Mac, HKEY_CLASSES_ROOT on Windows) into the installer at
+        // bundle time. The setup-time `register_all()` call below
+        // covers dev-mode + Windows-msi-not-yet-installed paths where
+        // the installer registration isn't active yet.
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // WP-OCR-09 Phase D — deep-link handler + dev-mode runtime
+            // registration. Wire the URL listener BEFORE any other setup
+            // work so an at-launch deep-link (e.g., `open
+            // apolla-threshold://configure?...` while Threshold is
+            // closed) is delivered to the new window once it boots.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                // Dev-mode + Windows runtime registration. On macOS the
+                // .app's Info.plist (baked from tauri.conf.json) handles
+                // it; this call is no-op there but defensive. On Linux
+                // (deferred per FN-OCR-13-01) the .desktop file does it.
+                #[cfg(any(windows, target_os = "linux"))]
+                {
+                    if let Err(e) = app.deep_link().register_all() {
+                        log::warn!("deep-link register_all failed: {e}");
+                    }
+                }
+                #[cfg(debug_assertions)]
+                #[cfg(not(any(windows, target_os = "linux")))]
+                {
+                    // Mac dev-mode: register the running executable as
+                    // the scheme handler so `open apolla-threshold://...`
+                    // routes to the cargo-tauri-dev binary instead of
+                    // failing with "no handler". Only in debug_assertions
+                    // — release bundles use the Info.plist registration.
+                    if let Err(e) = app.deep_link().register_all() {
+                        log::warn!("deep-link dev register_all failed: {e}");
+                    }
+                }
+                let app_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        log::info!("deep-link received: scheme={} path={}", url.scheme(), url.path());
+                        if let Some(prefill) = parse_configure_deep_link(&url) {
+                            log::info!(
+                                "deep-link parsed: tenant={} baseUrl={} (token redacted)",
+                                prefill.tenant.as_deref().unwrap_or("(none)"),
+                                prefill.base_url,
+                            );
+                            if let Err(e) = app_handle.emit("threshold://configure-prefill", &prefill) {
+                                log::warn!("emit configure-prefill failed: {e}");
+                            }
+                        } else {
+                            log::warn!("deep-link unrecognized — host={:?} path={}", url.host_str(), url.path());
+                        }
+                    }
+                });
+            }
+
             // WP-OCR-13 v0.2: in-process Vision (Mac) / Windows.Media.Ocr (Windows)
             // replaces the v0.1 D-12-19 startup probe for `~/.local/bin/ocr-capture`.
             // AppState's only remaining field is the cached config — populated on
@@ -2054,5 +2191,85 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("")
         );
+    }
+
+    // ───── WP-OCR-09 Phase D — deep-link Configure pre-fill ─────
+
+    fn parse(s: &str) -> Option<ConfigurePrefill> {
+        let url = url::Url::parse(s).expect("test URL parses");
+        parse_configure_deep_link(&url)
+    }
+
+    #[test]
+    fn deep_link_happy_path() {
+        let prefill =
+            parse("apolla-threshold://configure?tenant=threshold-eval&token=apolla_abc123")
+                .expect("happy path parses");
+        assert_eq!(prefill.tenant.as_deref(), Some("threshold-eval"));
+        assert_eq!(prefill.base_url, "https://threshold-eval.viktora.ai");
+        assert_eq!(prefill.token, "apolla_abc123");
+    }
+
+    #[test]
+    fn deep_link_rejects_wrong_scheme() {
+        assert!(parse("apolla-other://configure?tenant=x&token=apolla_abc").is_none());
+        assert!(parse("https://configure?tenant=x&token=apolla_abc").is_none());
+    }
+
+    #[test]
+    fn deep_link_rejects_wrong_host() {
+        // host="setup" instead of "configure" — reject
+        assert!(parse("apolla-threshold://setup?tenant=x&token=apolla_abc").is_none());
+    }
+
+    #[test]
+    fn deep_link_rejects_missing_token() {
+        assert!(parse("apolla-threshold://configure?tenant=acme").is_none());
+        // Empty-string token also rejected (canonical canary)
+        assert!(parse("apolla-threshold://configure?tenant=acme&token=").is_none());
+    }
+
+    #[test]
+    fn deep_link_rejects_missing_tenant() {
+        // No tenant slug → can't reconstruct base_url → reject. Brief
+        // (WP-OCR-09 D-09-08) requires `?tenant=...`.
+        assert!(parse("apolla-threshold://configure?token=apolla_abc").is_none());
+        assert!(parse("apolla-threshold://configure?tenant=&token=apolla_abc").is_none());
+    }
+
+    #[test]
+    fn deep_link_url_encoded_token_decodes() {
+        // url::Url performs percent-decoding on query_pairs(), so a token
+        // containing % escapes round-trips. Validates we use query_pairs()
+        // rather than raw .query().
+        let prefill = parse(
+            "apolla-threshold://configure?tenant=acme&token=apolla_%2B%2Ftoken%3Dvalue",
+        )
+        .expect("encoded token parses");
+        assert_eq!(prefill.token, "apolla_+/token=value");
+    }
+
+    #[test]
+    fn deep_link_ignores_extra_query_params() {
+        // Brief reserves `?tenant=` and `?token=`; future params should
+        // be silently ignored, not reject the URL.
+        let prefill =
+            parse("apolla-threshold://configure?tenant=acme&token=apolla_abc&future=xyz")
+                .expect("extra params tolerated");
+        assert_eq!(prefill.tenant.as_deref(), Some("acme"));
+        assert_eq!(prefill.token, "apolla_abc");
+    }
+
+    #[test]
+    fn deep_link_tenant_with_hyphens_preserved() {
+        // Multi-hyphen tenant slug (matches the wife-pilot
+        // threshold-eval.viktora.ai pattern). Slug is opaque — no slug
+        // validation in v1.
+        let prefill = parse(
+            "apolla-threshold://configure?tenant=acme-corp-staging&token=apolla_xyz",
+        )
+        .expect("hyphenated tenant parses");
+        assert_eq!(prefill.tenant.as_deref(), Some("acme-corp-staging"));
+        assert_eq!(prefill.base_url, "https://acme-corp-staging.viktora.ai");
     }
 }

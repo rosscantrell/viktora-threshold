@@ -1,6 +1,6 @@
 [package]
 name = "viktora-threshold"
-version = "0.4.0"
+version = "0.4.1"
 description = "Viktora Threshold — Mac + Windows desktop capture app for Apolla workspaces (WP-OCR-12 + WP-OCR-13)"
 authors = ["Ross Cantrell"]
 edition = "2021"
@@ -17,6 +17,16 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# WP-OCR-09 Phase D — custom URL scheme handler for one-click Apolla onboarding.
+# Registers `apolla-threshold://configure?tenant=...&token=...` cross-platform
+# (CFBundleURLTypes on Mac via Info.plist, HKEY_CLASSES_ROOT on Windows via
+# registry). Both bake-ins handled automatically from the
+# `plugins.deep-link.desktop.schemes` config in tauri.conf.json.
+tauri-plugin-deep-link = "2"
+# `url::Url` is the deep-link plugin's event payload type. Pulled in
+# transitively by the plugin too; declared directly so parse_configure_deep_link
+# in lib.rs has stable visibility.
+url = "2"
 # Native OS notifications (Notification Center on Mac, Action Center on
 # Windows). Phase 2's widget mode lacked an in-window toast surface
 # (the 180x80 pill is too small); hover-tooltip on the status dot was
