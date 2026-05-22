@@ -194,17 +194,19 @@ document.addEventListener("contextmenu", async (e) => {
 // kind:'failure' from the existing Phase B Mac path — distinct from a real
 // failure. The widget treats both as "err" for now; Phase 2 will distinguish
 // (e.g., cancellation → reset dot to unknown, no flash; real failure → red).
-listen("threshold://toast", (event) => {
+listen("threshold://toast", async (event) => {
   const outcome = event.payload;
   // Mirror title + body into the status dot's tooltip so hovering the
   // dot reveals the last toast inline. Surfaces failure reasons without
-  // requiring a native notification or a separate toast UI.
+  // requiring devtools or a separate toast UI.
   const tooltip = [outcome.title, outcome.body].filter(Boolean).join(" — ");
   statusDot.title = tooltip || "Connectivity";
   console.log("[widget] toast:", outcome);
 
   // Heuristic: cancellation titles use "cancelled" or "timed out" wording.
   // Don't go red on those — they're user actions, not system failures.
+  // Also don't push a native notification for cancellations (the user
+  // explicitly cancelled; they know).
   const titleLc = (outcome.title || "").toLowerCase();
   if (titleLc.includes("cancel") || titleLc.includes("timed out")) {
     setStatus("unknown");
@@ -212,7 +214,43 @@ listen("threshold://toast", (event) => {
   }
 
   setStatus(outcome.kind === "failure" ? "err" : "ok");
+
+  // FN-CUX-14 — native OS notification alongside the dot-color update.
+  // Fires for both successes (so the user sees "Captured: X — extracted
+  // N terms" appear in Notification Center) and real failures.
+  // Cancellations early-returned above to avoid notification spam.
+  await maybeShowNotification(outcome);
 });
+
+// Native OS notifications via tauri-plugin-notification. The plugin
+// guards behind a one-time permission grant (Notification Center prefs
+// on Mac; Windows Action Center settings on Win11). Falls back silently
+// if the plugin isn't loaded or permission is denied — the status dot
+// + hover tooltip remain as the diagnostic surface.
+async function maybeShowNotification(outcome) {
+  try {
+    const notif = window.__TAURI__?.notification;
+    if (!notif || typeof notif.sendNotification !== "function") {
+      // Plugin not exposed; abort silently.
+      return;
+    }
+    let granted =
+      typeof notif.isPermissionGranted === "function"
+        ? await notif.isPermissionGranted()
+        : true;
+    if (!granted && typeof notif.requestPermission === "function") {
+      const result = await notif.requestPermission();
+      granted = result === "granted";
+    }
+    if (!granted) return;
+    notif.sendNotification({
+      title: outcome.title || "Threshold",
+      body: outcome.body || "",
+    });
+  } catch (err) {
+    console.warn("[widget] notification failed:", err);
+  }
+}
 
 // Drag-drop ingestion on the widget surface (D-12-04 inheritance).
 // Rust emits drag-enter / drag-leave / drop-paths events; we surface

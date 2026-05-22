@@ -38,6 +38,38 @@
           console.warn("[expand] collapse failed:", err);
         }
       });
+
+      // FN-CUX-15 — Settings → auto-route to Configure tab on expand.
+      // When the widget's right-click "Settings…" item fires, lib.rs's
+      // widget_expand IPC navigates here with #configure in the URL hash.
+      // main.js doesn't read the hash (kept untouched per Phase 2's
+      // non-invasive contract); instead this polls for the Configure
+      // button to become available (i.e., main.js has finished its
+      // wizard-or-main routing) and clicks it programmatically.
+      //
+      // Polls every 100ms for up to 3 seconds. Degrades gracefully if
+      // the button never appears (e.g., user is still in the wizard) —
+      // the user lands in the wizard and can navigate to Configure
+      // manually.
+      if (window.location.hash === "#configure") {
+        let attempts = 0;
+        const tick = setInterval(() => {
+          attempts++;
+          const btn = document.getElementById("btn-open-configure");
+          // The Configure button lives inside view-main; we only click
+          // it once main.js has rendered that view (its section parent
+          // must not be hidden).
+          const sectionVisible = btn && !btn.closest("section.view")?.hidden;
+          if (sectionVisible) {
+            btn.click();
+            clearInterval(tick);
+          } else if (attempts > 30) {
+            // ~3 seconds — give up. User likely in wizard; they'll
+            // navigate manually after completing it.
+            clearInterval(tick);
+          }
+        }, 100);
+      }
     </script>
 
     <!-- ──────────────────────────────────────────────────────────────────

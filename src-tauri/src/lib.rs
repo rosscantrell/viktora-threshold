@@ -1097,6 +1097,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // FN-CUX-14 — native OS notifications (Notification Center on
+        // Mac, Action Center on Windows). The widget mode lacks an
+        // in-window toast surface; this plugin gives us the canonical
+        // failure/success surface alongside the status-dot color flip.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // WP-OCR-13 v0.2: in-process Vision (Mac) / Windows.Media.Ocr (Windows)
             // replaces the v0.1 D-12-19 startup probe for `~/.local/bin/ocr-capture`.
