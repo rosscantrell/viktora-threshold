@@ -5,8 +5,9 @@
 **Predecessor:** WP-OCR-13 v1.2-FINAL (cross-platform in-process OCR, shipped as v0.2.0)
 **Successors:** WP-Threshold-Tidbit-Return; WP-Threshold-Embed-And-Filter; Mac-NSPanel-shim follow-up (forward note)
 **Dates:** 2026-05-21 (single working session — spikes + impl + cross-platform smoke)
-**PRs:** [#4](https://github.com/rosscantrell/viktora-threshold/pull/4) (Phase 1+2 — merged) · [#5](https://github.com/rosscantrell/viktora-threshold/pull/5) (Phase 3)
-**Tag:** `v0.3.0-rc1` (release-page draft); `v0.3.0` pending PR #5 merge + version bump
+**PRs:** [#4](https://github.com/rosscantrell/viktora-threshold/pull/4) (Phase 1+2 — merged) · [#5](https://github.com/rosscantrell/viktora-threshold/pull/5) (Phase 3 — merged) · [#6](https://github.com/rosscantrell/viktora-threshold/pull/6) (polish bundle — merged) · [AI-Light-Prototype#199](https://github.com/rosscantrell/AI-Light-Prototype/pull/199) (CLAUDE.md amend — merged)
+**Release:** `v0.3.0` published 2026-05-22 00:17 UTC at https://github.com/rosscantrell/viktora-threshold/releases/tag/v0.3.0
+**Status:** Closed except Mac NSPanel-shim follow-up (FN-CUX-12; tracked, not active). Next workstream: WP-Threshold-Tidbit-Return.
 
 ---
 
@@ -59,6 +60,17 @@ This asymmetry is the central empirical finding of the workstream. Symmetric arc
 - Drag-over visual feedback (Rust DragDropEvent::Enter/Leave → JS data-dragover → green glow on upload-btn)
 - Hover tooltip on status dot mirrors last toast title + body
 - Debug-only "Open Console" menu item (cfg-gated; strips in release)
+
+### Polish bundle (PR #6 + AI-Light-Prototype PR #199 — post-v0.3.0)
+
+Three AC + two FN closed in a single bundle merged 2026-05-22 after the v0.3.0 release tag landed:
+
+- **AC-CUX-14 PILOT-INSTALL.md v0.3.0 rewrite** — added "Widget UX" section (180×80 pill, two buttons, status dot + tooltip, right-click menu, drag-to-move, expand/collapse), pivoted Windows install instructions to `setup.exe` as recommended (MSI documented as IT-deployment alt), Mac/Windows asymmetric sourceApp framing in Known-Limitations + Troubleshooting.
+- **AC-CUX-16 CLAUDE.md §6 update** (AI-Light-Prototype repo): existing Threshold sub-section amended for v0.3 widget UX + asymmetric sourceApp + version-bump-triple empirical lesson + NSIS `setup.exe` preference.
+- **FN-CUX-14 native OS notifications** — `tauri-plugin-notification` + `notification:default` capability; `widget.js` toast listener fires native notifications alongside the dot-color + tooltip update; cancellation toasts skip the notification path to avoid Notification Center spam.
+- **FN-CUX-15 Settings → Configure auto-route** — inline poll in `index.html` for `#btn-open-configure` (max 3s); clicks it when found if URL hash is `#configure` (set by the right-click "Settings…" item via `widget_expand`'s `target_tab` fragment); `main.js` stays untouched.
+
+Versions on main stayed at 0.3.0 — Ross's call to defer the version bump until WP-Threshold-Tidbit-Return ships, then cut a single combined release.
 
 ---
 
@@ -131,8 +143,8 @@ Neither alone suffices. The audit checklist for the v1.1-FINAL brief had `transp
 |---|---|---|
 | **FN-CUX-12** | Mac NSPanel-shim follow-up — three candidate paths sketched: (a) raw FFI `object_setClass` + manual size assertion, (b) Tauri-fork to construct NSPanel directly, (c) AppKit method swizzling (rejected; global side effects) | Cross-surface analytics need on Mac OR objc2 0.7+ ships better class-swap ergonomics |
 | **FN-CUX-13** | `olk.exe` is the modern Outlook for Windows EXE (Microsoft "New Outlook," ~2023+) — not `OUTLOOK.EXE` as older docs suggest. The Windows-side `is_threshold_own_exe` filter pins to "viktora-threshold" only; non-Threshold EXE names ship through. Consider adding a CONTRIBUTORS.md note for Windows EXE-name expectations | Doc-only |
-| **FN-CUX-14** | Tooltip-on-dot is a stopgap for failure visibility in widget mode. Native OS notification path (`tauri-plugin-notification`) is the canonical Phase 2.1 follow-up | Pilot feedback on missed failure signals |
-| **FN-CUX-15** | "Settings…" right-click item passes a `configure` URL fragment but `main.js` doesn't yet route on it. Phase 2.1 polish | Pilot empirical on Configure-tab discoverability |
+| ~~**FN-CUX-14**~~ | ~~Tooltip-on-dot stopgap; tauri-plugin-notification canonical follow-up~~ | **SHIPPED** in PR #6 polish bundle (2026-05-22). Native OS notifications fire alongside the dot-color + tooltip; cancellations skip to avoid Notification Center spam |
+| ~~**FN-CUX-15**~~ | ~~Settings… right-click passes #configure fragment but main.js doesn't yet route on it~~ | **SHIPPED** in PR #6 polish bundle. Inline poll in `index.html` clicks `#btn-open-configure` when found; `main.js` stays untouched |
 | **FN-CUX-16** | NSPanel-style toggle on expand mode — currently the (failed) nonactivating bit stays at default in expand mode, which is the right behavior (expanded UI should activate normally). If Mac NSPanel-shim follow-up lands, the shim must be reverted on expand and re-applied on collapse | Conditional on FN-CUX-12 landing |
 | **FN-CUX-17** | Bundle filenames embed `tauri.conf.json` package version (e.g., `_0.2.0_x64-setup.exe`), not the git tag (`v0.3.0-rc1`). Bumping the config version is required before each release for filename parity | Each release cycle |
 
@@ -193,22 +205,68 @@ What surprised:
 | AC-CUX-11 Widget does NOT gain focus on click | ⚠️ Asymmetric: ✅ Windows / ❌ Mac |
 | AC-CUX-12 Connectivity dot reactive-only | ✅ Phase 2 |
 | AC-CUX-13 Config-presence assertions | ✅ Implicit via tauri.conf.json + Info.plist tests; explicit assertions could land in a polish pass |
-| AC-CUX-14 PILOT-INSTALL.md updated | NOT YET — needs update for v0.3.0 widget UX + setup.exe path |
+| AC-CUX-14 PILOT-INSTALL.md updated | ✅ PR #6 polish bundle |
 | AC-CUX-15 AAR documents sourceApp reversal | **This document** ✅ |
-| AC-CUX-16 CLAUDE.md sub-section amended | NOT YET — v0.3.0 final tag work |
+| AC-CUX-16 CLAUDE.md sub-section amended | ✅ AI-Light-Prototype PR #199 |
 | AC-CUX-17 No regression of WP-OCR-13 ACs | ✅ Cross-platform CI green; 19/19 Mac unit tests; 26→28/28 Windows unit tests (added shim + MSDN-pin tests) |
 
 ---
 
 ## §9 Next workstreams (priority order)
 
-1. **PR #5 → main → v0.3.0 final tag** — version bump, release-notes amend, AAR commit, PR ready-for-review, merge, tag
-2. **PILOT-INSTALL.md + CLAUDE.md updates** — AC-CUX-14 + AC-CUX-16 close-outs; widget UX + setup.exe path
-3. **Mac NSPanel-shim follow-up (FN-CUX-12)** — when cross-surface analytics on Mac becomes load-bearing OR objc2 0.7+ ships
-4. **WP-Threshold-Tidbit-Return** — per-document `whyThisMatters` extraction; rich toast w/ entity highlights
-5. **WP-Threshold-Embed-And-Filter** — embed schema-browser frontend in Threshold w/ "Threshold mode" view filter
-6. **Tauri 2 floating-widget pattern community writeup (FN-CUX-08)** — coordinator task; cross-platform asymmetry findings worth surfacing
+1. **WP-Threshold-Tidbit-Return** — per-document `whyThisMatters` extraction; rich toast w/ entity highlights + "View in Apolla" deep-link. Per Ross's call 2026-05-22, this lands before the next release cut. The widget mode is a natural surface for FN-CUX-05 (pulse-on-rich-extraction).
+2. **v0.3.1 (or v0.4.0) release cut** — after Tidbit-Return ships. Includes the polish-bundle items already on main + Tidbit-Return + version-bump-triple. Wife's Win11 upgrades to that.
+3. **Mac NSPanel-shim follow-up (FN-CUX-12)** — when cross-surface analytics on Mac becomes load-bearing OR objc2 0.7+ ships better class-swap ergonomics. Three candidate paths sketched in §3.1: (a) raw FFI `object_setClass` + manual size assertion, (b) Tauri-fork to construct NSPanel directly, (c) AppKit method swizzling (rejected; global side effects).
+4. **WP-Threshold-Embed-And-Filter** — embed schema-browser frontend in Threshold w/ "Threshold mode" view filter.
+5. **Tauri 2 floating-widget pattern community writeup (FN-CUX-08)** — coordinator task; the cross-platform asymmetry findings + the `data-tauri-drag-region`-broken finding + the `transparent: true` dual-flag-opt-in are all worth surfacing externally.
+
+## §10 Session retrospective — multi-hour Threshold v0.3 push
+
+The Phase 1+2+3 work + v0.3.0 release + polish bundle landed in a single working session 2026-05-21. Half-dozen lessons worth pinning:
+
+### §10.1 Spike-first discipline mattered
+
+Phase 1 spikes ran BEFORE Phase 2 impl per the brief's directive. S-CUX-01/03/05 verdicts came in as PASS / PARTIAL / PASS-via-fallback in that order, which meant:
+- Phase 2A's three failed NSPanel approaches landed in pre-allocated "Mac shim fallback" budget rather than blowing the workstream
+- Phase 2D's right-click menu + 2E's expand mode could ship even with 2A's architectural compromise
+- The brief's documented S-CUX-05 fallback ("Custom mouse-event handling in widget HTML") had a concrete name when the data-tauri-drag-region attribute empirically failed
+
+This is the second time spike-first discipline saved a workstream (per memory `feedback_audit_before_impl`). It earns its budget.
+
+### §10.2 Three NSPanel approaches in one workstream is at the limit
+
+Phase 2A v1 (styleMask), v2 (define_class!), v3 (activation policy) all failed; the workstream shipped the architectural compromise + filter as defense-in-depth. Doing a 4th approach (raw FFI `object_setClass` with size assertion) in the same session would have been thrashing. Right call to defer to FN-CUX-12 follow-up with a fresh session + audit.
+
+Future cross-platform widget patterns should pre-budget for "Mac NSPanel work needs its own focused session" rather than treating it as inline.
+
+### §10.3 Tag-on-wrong-commit incident (v0.3.0)
+
+Sequencing error during the v0.3.0 cut: a multi-line shell command block I gave Ross included a comment header `# After PR #5 merges to main:` followed by the actual `git checkout main && git pull && git tag v0.3.0 && git push origin v0.3.0` sequence. Ross pasted it before PR #5 had merged. Shell comments don't gate commands — the comment was silent, the rest ran, v0.3.0 tag landed at the PR #4 merge commit (missing Phase 3).
+
+Recovery: cancel the wrong release.yml run + delete tag local+remote + re-tag from new main HEAD. ~3 minutes lost; no artifact damage (cancellation hit before bundle upload).
+
+**Future-self hand-off pattern** (per memory `feedback_handoff_naming_for_cross_worktree`): when giving a multi-command block to be run AFTER a precondition, split into two separately-pasteable chunks (pre-condition sequence vs. post-condition sequence), OR include a literal precondition check (e.g., `git log --oneline -1 | grep -q "Merge pull request #5" || { echo "wait for PR #5"; exit 1; }`). Comment headers are not gating instructions.
+
+### §10.4 windows-crate version mismatch between Tauri internal and our pin
+
+PR #5's first Windows CI failure: `windows 0.59` pinned in our Phase B Cargo.toml; Tauri 2 v2.11.x uses `windows 0.61` internally. `tauri::Window::hwnd()` returns the 0.61 HWND; our shim expected 0.59. Same struct layout (`pub *mut c_void`), different type identity, Rust rejected the assignment.
+
+Fix that landed: change the shim API boundary to `*mut c_void` raw pointer; reconstruct the HWND internally with our 0.59 version. Decouples our shim from Tauri's internal windows-crate version choice; future Tauri 2 bumps to 0.62/0.63 won't break us.
+
+**Future-self note:** when two unrelated parts of a Rust project depend on the same crate at different versions (a common Tauri 2 reality), use raw FFI types at the API boundary if struct shapes are identical. Don't try to align versions across the dep graph unless absolutely necessary.
+
+### §10.5 Empirical content extraction is great at "what"; useless at "where from"
+
+The Outlook capture experiment (DESKTOP-eb9407cedf5c4e51) shipped to the corpus with 8 extracted topics + 8 systems + 12 typed entities — every one of them subject-matter (`olympus-aura`, `plaud-pin`, `face-database`, `egd-with-biopsy`, etc.). Zero indicated Outlook. The metadata channel (`sourceApp`) was load-bearing for cross-surface analytics; no amount of content classification recovers it.
+
+This empirically validates the v0.3 architectural-fix premise — and the asymmetric outcome (Windows succeeded; Mac didn't) means the Mac NSPanel-shim follow-up has measurable customer value rather than being a nice-to-have.
+
+### §10.6 Ross's pivot to "horizontal pill, two buttons" came AFTER Phase 2 shipped
+
+The v1.1-FINAL brief had a 100×100 square widget with one button. Ross's UI iteration request — pill shape + upload button + drag-drop visual — came after seeing the working square widget. Shipping the brief-spec'd version first gave him a concrete artifact to react to; the iteration was faster than designing the pill shape up-front would have been.
+
+**Pattern worth pinning:** when a brief locks UX shape, ship the brief's version first as the smoke artifact, then iterate with the user. Don't try to design the iteration in advance of the smoke.
 
 ---
 
-*WP-Threshold-Compact-UX AAR · 2026-05-21 · Phase 1 + 2 + 3 shipped · architectural-fix validated on Windows / deferred on Mac · widget-UX premise empirically proven on both platforms · cross-surface analytics POSSIBLE NOW on Windows captures · `olk` + `msedge` + future EXE names attribute correctly in the corpus*
+*WP-Threshold-Compact-UX AAR · 2026-05-21 + polish-amend 2026-05-22 · Phase 1 + 2 + 3 + polish bundle shipped · v0.3.0 published · architectural-fix validated on Windows / deferred on Mac (FN-CUX-12) · widget-UX premise empirically proven on both platforms · cross-surface analytics POSSIBLE NOW on Windows captures · `olk` + `msedge` + future EXE names attribute correctly in the corpus · next: WP-Threshold-Tidbit-Return → v0.3.1*
