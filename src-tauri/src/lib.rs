@@ -67,6 +67,14 @@ const SHUTDOWN_MAX_WAIT: Duration = Duration::from_secs(60);
 pub struct AppState {
     /// Cached config for capture flows; populated on first load_config call.
     pub config: Mutex<Option<AppConfig>>,
+    /// WP-Threshold-Tidbit-Return Phase B — most recent tidbit returned by
+    /// the post-capture polling loop. Populated by `poll_for_tidbit` on
+    /// `status: 'ready'`; read by the expanded UI via the
+    /// `get_pending_tidbit` IPC command when navigating to `#tidbit`. Cleared
+    /// on explicit `clear_pending_tidbit` (after the user views it) or
+    /// overwritten by a newer capture's tidbit. Single-value (not a queue):
+    /// the wow-loop wants "what just happened," not history.
+    pub pending_tidbit: Mutex<Option<Tidbit>>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -259,6 +267,67 @@ pub struct IngestionOutcome {
     pub title: String,
     pub body: Option<String>,
     pub source_path: Option<String>,
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-Threshold-Tidbit-Return Phase B — tidbit polling types
+// ───────────────────────────────────────────────────────────────────────────
+//
+// JSON contract matches schema-browser/server/ai/tidbit-reshape.ts (Phase A).
+// Field names mirror the camelCase TS types via #[serde(rename = ...)].
+// Optional fields use #[serde(default, skip_serializing_if = "...")] so
+// graceful degradation works both directions (lenient parse + tidy emit).
+//
+// `TidbitStatus` uses `rename_all = "kebab-case"` so `NoMarker` ↔ "no-marker".
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Tidbit {
+    pub title: String,
+    #[serde(rename = "whyThisMatters")]
+    pub why_this_matters: String,
+    pub highlights: Vec<TidbitHighlight>,
+    #[serde(rename = "deepLink")]
+    pub deep_link: String,
+    #[serde(
+        rename = "capturedFromHint",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub captured_from_hint: Option<String>,
+    #[serde(rename = "generatedAt")]
+    pub generated_at: String,
+    #[serde(rename = "markerFingerprint")]
+    pub marker_fingerprint: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TidbitHighlight {
+    pub slug: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(rename = "isCorpusOverlap")]
+    pub is_corpus_overlap: bool,
+    #[serde(
+        rename = "priorCaptureCount",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prior_capture_count: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TidbitStatus {
+    Ready,
+    Pending,
+    NoMarker,
+    Failed,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TidbitPollResponse {
+    pub tidbit: Option<Tidbit>,
+    pub status: TidbitStatus,
 }
 
 fn compute_document_id(content: &str) -> String {
@@ -511,8 +580,201 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
     // Build payload + POST (D-12-13: from Rust shell, no Origin header).
     // WP-OCR-13: POST mechanics live in `post_payload_to_apolla` so the
     // screen-capture path can reuse them with the same client config.
+    //
+    // WP-Threshold-Tidbit-Return Phase B: caller (`ingest_files`) handles
+    // the tidbit polling dispatch after this returns, since it has the
+    // AppHandle in scope. `ingest_one_file` stays focused on file-level
+    // ingestion shape.
     let payload = build_file_payload(&path, &content);
     post_payload_to_apolla(payload, cfg, &display_name, source_path).await
+}
+
+/// WP-Threshold-Tidbit-Return Phase B — spawn `poll_for_tidbit` as a
+/// detached tokio task when this ingestion was a first-time success.
+/// Idempotent captures skip (same tidbit; re-firing the wow-loop
+/// notification on accidental re-capture would be noise). Failures skip
+/// (no doc in the corpus to attach a tidbit to).
+fn dispatch_tidbit_poll_if_success(
+    app_handle: &tauri::AppHandle,
+    outcome: &IngestionOutcome,
+    cfg: &AppConfig,
+    document_id: String,
+) {
+    if outcome.kind != "success" {
+        return;
+    }
+    let cfg_clone = cfg.clone();
+    let handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        poll_for_tidbit(handle_clone, cfg_clone, document_id).await;
+    });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-Threshold-Tidbit-Return Phase B — polling loop + tidbit-ready handler
+// ───────────────────────────────────────────────────────────────────────────
+
+const TIDBIT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const TIDBIT_POLL_MAX_WAIT: Duration = Duration::from_secs(60);
+
+/// Poll `/api/documents/:id/tidbit` for up to 60s until a non-`'pending'`
+/// status lands. On `'ready'`, stores the tidbit in AppState, emits the
+/// `threshold://tidbit-arrived` event for the widget pulse + indicator
+/// badge, and triggers the second OS notification via the frontend's
+/// existing `maybeShowNotification` path (consolidated there so the
+/// Mac/Windows permission flow stays single-source-of-truth).
+///
+/// Failure-safe per D-TIDB-06: `'no-marker'`, `'failed'`, HTTP errors,
+/// parse errors, and timeout all terminate the loop without firing the
+/// second notification. The first capture-success toast remains intact
+/// regardless. Network blips inside the 60s window log + continue (single
+/// transient miss shouldn't kill the wow-loop).
+async fn poll_for_tidbit(app_handle: tauri::AppHandle, cfg: AppConfig, document_id: String) {
+    let url = format!(
+        "{}/api/documents/{}/tidbit",
+        cfg.base_url.trim_end_matches('/'),
+        document_id
+    );
+
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[tidbit-poll] HTTP client init failed: {e}");
+            return;
+        }
+    };
+
+    let start = std::time::Instant::now();
+    log::info!("[tidbit-poll] starting for doc {document_id}");
+
+    loop {
+        if start.elapsed() >= TIDBIT_POLL_MAX_WAIT {
+            log::info!("[tidbit-poll] 60s timeout reached for doc {document_id}; silent omission");
+            return;
+        }
+
+        match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => match resp.json::<TidbitPollResponse>().await
+            {
+                Ok(parsed) => match parsed.status {
+                    TidbitStatus::Ready => {
+                        match parsed.tidbit {
+                            Some(tidbit) => {
+                                handle_tidbit_ready(&app_handle, tidbit).await;
+                            }
+                            None => {
+                                log::warn!(
+                                    "[tidbit-poll] server returned status=ready but tidbit=null \
+                                     for doc {document_id}; treating as silent omission"
+                                );
+                            }
+                        }
+                        return;
+                    }
+                    TidbitStatus::NoMarker => {
+                        log::info!(
+                            "[tidbit-poll] no marker fired for doc {document_id}; \
+                             silent omission per D-TIDB-06"
+                        );
+                        return;
+                    }
+                    TidbitStatus::Failed => {
+                        log::info!(
+                            "[tidbit-poll] server reported 'failed' status for doc \
+                             {document_id}; silent omission"
+                        );
+                        return;
+                    }
+                    TidbitStatus::Pending => {
+                        // Keep polling.
+                    }
+                },
+                Err(e) => {
+                    log::warn!(
+                        "[tidbit-poll] response parse failed for doc {document_id}: {e}; \
+                         silent omission"
+                    );
+                    return;
+                }
+            },
+            Ok(resp) => {
+                log::warn!(
+                    "[tidbit-poll] HTTP {} from {} for doc {document_id}; silent omission",
+                    resp.status().as_u16(),
+                    url
+                );
+                return;
+            }
+            Err(e) => {
+                log::debug!(
+                    "[tidbit-poll] transient request error for doc {document_id}: {e}; \
+                     will retry on next interval"
+                );
+                // Don't return; let the loop retry. One blip in a 60s window
+                // shouldn't kill the wow-loop.
+            }
+        }
+
+        tokio::time::sleep(TIDBIT_POLL_INTERVAL).await;
+    }
+}
+
+/// Called once per successful poll when the server reports `'ready'`.
+/// Stores the tidbit in AppState (so the expanded UI's `get_pending_tidbit`
+/// IPC can retrieve it after `widget_expand("tidbit")` reloads the webview)
+/// and emits a frontend event the widget listens for. The widget JS layer
+/// owns the OS-notification permission dance + the pulse animation +
+/// the indicator-badge visibility — keeping that consolidated avoids two
+/// codepaths for cross-platform notification handling.
+async fn handle_tidbit_ready(app_handle: &tauri::AppHandle, tidbit: Tidbit) {
+    log::info!(
+        "[tidbit] received — title=\"{}\", highlights={}",
+        tidbit.title,
+        tidbit.highlights.len()
+    );
+
+    let state = app_handle.state::<AppState>();
+    *state
+        .pending_tidbit
+        .lock()
+        .expect("pending_tidbit mutex poisoned") = Some(tidbit.clone());
+
+    if let Err(e) = app_handle.emit("threshold://tidbit-arrived", tidbit) {
+        log::warn!("[tidbit] failed to emit tidbit-arrived event: {e}");
+    }
+}
+
+/// Frontend reads this on `index.html#tidbit` mount to populate the panel.
+/// Returns None when no tidbit is pending (e.g., user navigated to `#tidbit`
+/// manually without one waiting, or the panel was already viewed and cleared).
+#[tauri::command]
+fn get_pending_tidbit(state: tauri::State<AppState>) -> Option<Tidbit> {
+    state
+        .pending_tidbit
+        .lock()
+        .expect("pending_tidbit mutex poisoned")
+        .clone()
+}
+
+/// Frontend invokes this when the user collapses the tidbit panel or
+/// dismisses the indicator badge — prevents stale wow-loops from re-firing
+/// when the user expands the widget for an unrelated reason (e.g., to open
+/// Settings).
+#[tauri::command]
+fn clear_pending_tidbit(state: tauri::State<AppState>) {
+    *state
+        .pending_tidbit
+        .lock()
+        .expect("pending_tidbit mutex poisoned") = None;
 }
 
 /// Helper: pull the current config out of AppState; error if not configured.
@@ -539,8 +801,22 @@ async fn ingest_files(
     for path_str in paths {
         let path = PathBuf::from(path_str);
         IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+        // WP-Threshold-Tidbit-Return Phase B — compute the documentId from
+        // file content BEFORE ingest, so the polling dispatch can identify
+        // the doc regardless of how the server's response shapes future
+        // metadata. compute_document_id is content-hashed; matches what
+        // `build_file_payload` (called inside ingest_one_file) puts on the
+        // wire as `documentId`. Skip when the file is unreadable or empty —
+        // those paths return early in `ingest_one_file` with a failure
+        // outcome, and dispatch_tidbit_poll_if_success short-circuits on
+        // non-"success" kinds anyway.
+        let content_for_id = fs::read_to_string(&path).ok();
         let outcome = ingest_one_file(path, &cfg).await;
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+        if let Some(content) = content_for_id.as_deref() {
+            let document_id = compute_document_id(content);
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+        }
         // Emit a structured toast event (D-12-18)
         let _ = app_handle.emit("threshold://toast", outcome);
     }
@@ -943,13 +1219,19 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
             // `widget_platform_mac::apply_non_activating_widget_style`).
             log::debug!("capture sourceApp = {:?}", result.source_app);
             let payload = build_screenshot_payload(&result.text, &result.source_app);
-            post_payload_to_apolla(
+            // WP-Threshold-Tidbit-Return Phase B — content-hash documentId
+            // BEFORE the POST so the polling dispatch matches whatever
+            // build_screenshot_payload sends as documentId on the wire.
+            let document_id = compute_document_id(&result.text);
+            let outcome = post_payload_to_apolla(
                 payload,
                 &cfg,
                 "screen capture",
                 Some("__screen_capture__".into()),
             )
-            .await
+            .await;
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+            outcome
         }
         Err(ocr_mac::CaptureError::CancelledByUser) => IngestionOutcome {
             kind: "failure".into(),
@@ -999,13 +1281,17 @@ async fn run_screen_capture_windows(app_handle: tauri::AppHandle, cfg: AppConfig
             // AC-19 payload literals — same shape + values as the Mac path
             // (build_screenshot_payload is platform-agnostic by design).
             let payload = build_screenshot_payload(&result.text, &result.source_app);
-            post_payload_to_apolla(
+            // WP-Threshold-Tidbit-Return Phase B — see Mac branch above.
+            let document_id = compute_document_id(&result.text);
+            let outcome = post_payload_to_apolla(
                 payload,
                 &cfg,
                 "screen capture",
                 Some("__screen_capture__".into()),
             )
-            .await
+            .await;
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+            outcome
         }
         Err(ocr_windows::CaptureError::Timeout) => IngestionOutcome {
             kind: "failure".into(),
@@ -1109,6 +1395,7 @@ pub fn run() {
             // first `load_config` IPC call, not at startup.
             app.manage(AppState {
                 config: Mutex::new(None),
+                pending_tidbit: Mutex::new(None),
             });
 
             // WP-Threshold-Compact-UX Phase 2 D-CUX-04: apply the
@@ -1236,7 +1523,10 @@ pub fn run() {
             get_widget_position,
             show_widget_menu,
             widget_expand,
-            widget_collapse
+            widget_collapse,
+            // WP-Threshold-Tidbit-Return Phase B
+            get_pending_tidbit,
+            clear_pending_tidbit,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -1556,6 +1846,182 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("(empty capture)")
         );
+    }
+
+    // ───── WP-Threshold-Tidbit-Return Phase B — tidbit parsing ─────
+    //
+    // Round-trips the 4 status states + tidbit field shape against the
+    // Phase A endpoint contract from `tidbit-reshape.ts`. Covers:
+    //   - All 4 TidbitStatus variants parse from kebab-case JSON
+    //   - 'ready' response with populated tidbit deserializes all fields
+    //   - 'no-marker' / 'pending' / 'failed' allow tidbit=null
+    //   - Optional capturedFromHint / priorCaptureCount handled
+    //   - D-12-17 lenient handling — unknown fields silently ignored
+    //
+    // Empirical Q4 coverage: whyThisMatters tested at both 280-char and
+    // 800-char ends of the live-corpus range.
+
+    #[test]
+    fn tidbit_status_parses_all_kebab_case_variants() {
+        let cases: &[(&str, TidbitStatus)] = &[
+            (r#""ready""#, TidbitStatus::Ready),
+            (r#""pending""#, TidbitStatus::Pending),
+            (r#""no-marker""#, TidbitStatus::NoMarker),
+            (r#""failed""#, TidbitStatus::Failed),
+        ];
+        for (json, expected) in cases {
+            let parsed: TidbitStatus = serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("status {json} should parse: {e}"));
+            assert_eq!(&parsed, expected, "status {json} round-trip");
+        }
+    }
+
+    #[test]
+    fn tidbit_status_unknown_value_fails_loud() {
+        let result: Result<TidbitStatus, _> = serde_json::from_str(r#""processing""#);
+        assert!(
+            result.is_err(),
+            "unknown status string should fail to parse (don't silently default)"
+        );
+    }
+
+    #[test]
+    fn tidbit_response_pending_with_null_tidbit() {
+        let json = r#"{"tidbit": null, "status": "pending"}"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        assert!(parsed.tidbit.is_none());
+        assert_eq!(parsed.status, TidbitStatus::Pending);
+    }
+
+    #[test]
+    fn tidbit_response_no_marker_with_null_tidbit() {
+        let json = r#"{"tidbit": null, "status": "no-marker"}"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        assert!(parsed.tidbit.is_none());
+        assert_eq!(parsed.status, TidbitStatus::NoMarker);
+    }
+
+    #[test]
+    fn tidbit_response_failed_with_null_tidbit() {
+        let json = r#"{"tidbit": null, "status": "failed"}"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        assert!(parsed.tidbit.is_none());
+        assert_eq!(parsed.status, TidbitStatus::Failed);
+    }
+
+    #[test]
+    fn tidbit_response_ready_full_shape() {
+        // Realistic Phase A live response from the dispatch's curl demo —
+        // Windows Outlook capture in a mature corpus with 3 highlights
+        // (2 overlap, 1 new) and a populated capturedFromHint.
+        let json = r#"{
+            "tidbit": {
+                "title": "You've been tracking pricing-realignment — a new thread connects",
+                "whyThisMatters": "This capture connects Q3 launch planning to the pricing-realignment work you've been doing. The thread between these two topics has tightened across recent captures.",
+                "highlights": [
+                    { "slug": "pricing-realignment", "type": "topic", "isCorpusOverlap": true, "priorCaptureCount": 7 },
+                    { "slug": "q3-launch-window", "type": "topic", "isCorpusOverlap": true, "priorCaptureCount": 4 },
+                    { "slug": "enterprise-tier-tooling", "type": "topic", "isCorpusOverlap": false }
+                ],
+                "deepLink": "https://threshold-eval.viktora.ai/document/cap-2026-05-22-abc123",
+                "capturedFromHint": "from your Outlook",
+                "generatedAt": "2026-05-22T15:30:42.000Z",
+                "markerFingerprint": "fp-abc123def4567890"
+            },
+            "status": "ready"
+        }"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(parsed.status, TidbitStatus::Ready);
+        let tidbit = parsed.tidbit.expect("ready response must carry a tidbit");
+        assert!(tidbit.title.starts_with("You've been tracking"));
+        assert_eq!(tidbit.highlights.len(), 3);
+        assert_eq!(tidbit.highlights[0].slug, "pricing-realignment");
+        assert!(tidbit.highlights[0].is_corpus_overlap);
+        assert_eq!(tidbit.highlights[0].prior_capture_count, Some(7));
+        assert!(!tidbit.highlights[2].is_corpus_overlap);
+        assert!(tidbit.highlights[2].prior_capture_count.is_none());
+        assert_eq!(tidbit.captured_from_hint.as_deref(), Some("from your Outlook"));
+        assert_eq!(tidbit.marker_fingerprint, "fp-abc123def4567890");
+    }
+
+    #[test]
+    fn tidbit_ready_omits_optional_captured_from_hint() {
+        // Mac cold-start path per the Phase A handoff §2 — capturedFromHint
+        // absent rather than empty-string.
+        let json = r#"{
+            "tidbit": {
+                "title": "revenue-per-rep is new territory in your corpus",
+                "whyThisMatters": "Short rationale.",
+                "highlights": [
+                    { "slug": "revenue-per-rep", "type": "topic", "isCorpusOverlap": false }
+                ],
+                "deepLink": "https://threshold-eval.viktora.ai/document/cap-2026-05-22-def456",
+                "generatedAt": "2026-05-22T15:35:00.000Z",
+                "markerFingerprint": "fp-def456789abc0123"
+            },
+            "status": "ready"
+        }"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        let tidbit = parsed.tidbit.unwrap();
+        assert!(tidbit.captured_from_hint.is_none());
+        assert_eq!(tidbit.highlights.len(), 1);
+    }
+
+    #[test]
+    fn tidbit_ready_empty_highlights_array() {
+        // Edge case: Phase A could theoretically return an empty highlights
+        // array if reshape couldn't synthesize any. The widget panel should
+        // render gracefully.
+        let json = r#"{
+            "tidbit": {
+                "title": "Headline",
+                "whyThisMatters": "Body.",
+                "highlights": [],
+                "deepLink": "http://localhost:3001/document/x",
+                "generatedAt": "2026-05-22T00:00:00.000Z",
+                "markerFingerprint": "fp-x"
+            },
+            "status": "ready"
+        }"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("should parse");
+        assert_eq!(parsed.tidbit.unwrap().highlights.len(), 0);
+    }
+
+    #[test]
+    fn tidbit_ready_handles_long_why_this_matters_q4_range() {
+        // Q4 empirical range: 100-800 chars. Test at 800-char end to
+        // confirm no JSON-string-length limits get triggered.
+        let long_prose = "x".repeat(800);
+        let json = format!(
+            r#"{{
+                "tidbit": {{
+                    "title": "Headline",
+                    "whyThisMatters": "{long_prose}",
+                    "highlights": [],
+                    "deepLink": "http://localhost:3001/document/x",
+                    "generatedAt": "2026-05-22T00:00:00.000Z",
+                    "markerFingerprint": "fp-x"
+                }},
+                "status": "ready"
+            }}"#
+        );
+        let parsed: TidbitPollResponse = serde_json::from_str(&json).expect("800-char body should parse");
+        assert_eq!(parsed.tidbit.unwrap().why_this_matters.len(), 800);
+    }
+
+    #[test]
+    fn tidbit_response_lenient_to_unknown_fields() {
+        // D-12-17 lenient handling extends to tidbit responses — a future
+        // server release adding fields shouldn't break v0.4.0 clients.
+        let json = r#"{
+            "tidbit": null,
+            "status": "pending",
+            "futureField": "ignored",
+            "anotherUnknown": 42
+        }"#;
+        let parsed: TidbitPollResponse = serde_json::from_str(json).expect("lenient parse");
+        assert_eq!(parsed.status, TidbitStatus::Pending);
+        assert!(parsed.tidbit.is_none());
     }
 
     #[test]

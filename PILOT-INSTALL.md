@@ -73,7 +73,7 @@ Subsequent launches skip the wizard and open straight to the widget.
 
 ---
 
-## Widget UX (v0.3)
+## Widget UX (v0.3 → v0.4)
 
 Once configured, Threshold lives as a **small floating widget in a screen corner**:
 
@@ -114,6 +114,31 @@ Right-click → **Expand…** grows the window to 800×600 with normal title bar
 | **Drag-drop** | Drag any plain-text file from Finder (Mac) or Explorer (Windows) onto the widget → upload button glows green → release to ingest |
 
 OS-level native notifications appear when each capture completes (depending on your system preference). The widget's status dot also reflects the last outcome — hover to see the title + body.
+
+---
+
+## Tidbits — the wow-loop (NEW in v0.4)
+
+When you capture something, the corpus does more than just file it away. About 5–30 seconds after the capture-success notification lands, Apolla reads what you captured against everything you've previously captured + extracts a short "why this matters" preview — the **tidbit**.
+
+When the tidbit is ready, three things happen at once:
+
+1. **A second OS notification fires** with the tidbit's headline (e.g., "You've been tracking pricing-realignment — a new thread connects")
+2. **The widget pulses** with a soft yellow ring — visible even if you missed the notification
+3. **A small yellow ●💡 badge** appears in the corner of the widget
+
+**To see the full preview**, tap the badge OR click the OS notification. The widget expands to a panel that shows:
+
+- The tidbit headline
+- The full "why this matters" prose (a few sentences explaining what your capture connected to)
+- Highlight chips — the 1-3 entities Apolla pulled out, with blue chips for entities you've seen before (showing how many prior captures) and gray chips for new entities
+- A **"View full in Apolla →"** button that opens the document in the Apolla browser surface
+
+**If no tidbit appears**, that's intentional — not every capture surfaces a structurally surprising connection. The first capture-success notification still landed; you just didn't get a second one. Captures of content well outside your existing corpus (e.g., a one-off PDF about an unrelated topic) typically fall in this bucket.
+
+**Notification click vs. widget click:** the OS notification's click handler is best-effort. On some platforms / Tauri plugin versions, clicking the notification reliably opens the panel; on others, the click does nothing. **The widget badge always works** — if you don't see the panel after clicking the notification, click the badge directly.
+
+**Mac vs Windows asymmetry:** on Windows captures from Outlook/Edge/etc., the tidbit may include a "from your Outlook" / "from your Edge" framing line above the headline (the corpus knows which app you captured from). On Mac, this framing falls back to "from your screen" — the underlying app-attribution gap from v0.3 (see `AAR-WP-Threshold-Compact-UX.md` §3.2 + §5) is still open.
 
 ---
 

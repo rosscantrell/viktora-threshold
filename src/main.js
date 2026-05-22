@@ -32,7 +32,7 @@ const pendingToasts = new Map();
 
 // ───────── View routing ─────────
 
-const VIEWS = ["view-loading", "view-welcome", "view-configure", "view-done", "view-main"];
+const VIEWS = ["view-loading", "view-welcome", "view-configure", "view-done", "view-main", "view-tidbit"];
 
 function showView(id) {
   for (const v of VIEWS) {
@@ -68,6 +68,24 @@ async function bootstrap() {
   if (cfg) {
     document.getElementById("config-base-url").value = cfg.base_url || "";
     document.getElementById("config-bearer-token").value = cfg.bearer_token || "";
+
+    // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
+    // navigates here with #tidbit in the URL hash. Bootstrap detects it,
+    // fetches the cached tidbit from AppState via IPC, and renders the
+    // tidbit panel view. Falls through to the main view if no tidbit is
+    // available (covers: user opened #tidbit manually with no pending,
+    // pending was cleared by a previous view, IPC failure).
+    if (window.location.hash === "#tidbit") {
+      try {
+        const tidbit = await tauri.core.invoke("get_pending_tidbit");
+        enterTidbitView(tidbit);
+        return;
+      } catch (err) {
+        console.warn("[main] get_pending_tidbit failed:", err);
+        // Fall through to main view; better than a blank screen
+      }
+    }
+
     enterMainView(cfg);
   } else {
     enterWizardWelcome();
@@ -254,6 +272,113 @@ async function enterMainView(cfg) {
   // No legacy `get_ocr_utility_status` probe, no greyed-out gate — the Capture
   // Screen button is unconditionally clickable here; per-platform "not
   // supported" toast (Linux, etc.) is emitted by run_screen_capture itself.
+}
+
+// ───────── Tidbit panel view (WP-Threshold-Tidbit-Return Phase B) ─────────
+
+/**
+ * Render the tidbit panel view.
+ *
+ * Q4 empirical range: whyThisMatters runs 100-800 chars in the Apolla pilot
+ * corpus. The body container caps its height via CSS (max-height + overflow-y
+ * auto) so any prose length scrolls cleanly without overflowing the panel.
+ *
+ * Highlight chips: 1-3 per tidbit (Phase A ships 1 per FN-TIDB-15; future
+ * work increases). Each chip shows the slug; corpus-overlap chips get a
+ * "seen Nx" badge when priorCaptureCount is present.
+ *
+ * Failure-safe: when called with null/undefined (no pending tidbit), shows
+ * an empty-state message instead of a blank panel.
+ *
+ * @param {object|null} tidbit
+ */
+function enterTidbitView(tidbit) {
+  state.inWizard = false;
+  showView("view-tidbit");
+
+  const titleEl = document.getElementById("tidbit-title");
+  const bodyEl = document.getElementById("tidbit-body");
+  const metaEl = document.getElementById("tidbit-meta");
+  const highlightsEl = document.getElementById("tidbit-highlights");
+  const deeplinkEl = document.getElementById("btn-tidbit-deeplink");
+  const emptyEl = document.getElementById("tidbit-empty");
+
+  if (!tidbit || typeof tidbit !== "object") {
+    if (emptyEl) emptyEl.hidden = false;
+    if (titleEl) titleEl.textContent = "";
+    if (bodyEl) bodyEl.textContent = "";
+    if (metaEl) metaEl.hidden = true;
+    if (highlightsEl) highlightsEl.innerHTML = "";
+    if (deeplinkEl) deeplinkEl.style.visibility = "hidden";
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+  if (deeplinkEl) deeplinkEl.style.visibility = "";
+
+  // textContent assignment is intentional — avoids any innerHTML injection
+  // path even though tidbit content comes from our own server.
+  if (titleEl) titleEl.textContent = tidbit.title || "";
+  if (bodyEl) bodyEl.textContent = tidbit.whyThisMatters || "";
+
+  if (metaEl) {
+    if (tidbit.capturedFromHint) {
+      metaEl.textContent = tidbit.capturedFromHint;
+      metaEl.hidden = false;
+    } else {
+      metaEl.hidden = true;
+      metaEl.textContent = "";
+    }
+  }
+
+  if (highlightsEl) {
+    highlightsEl.innerHTML = "";
+    const highlights = Array.isArray(tidbit.highlights) ? tidbit.highlights : [];
+    for (const h of highlights) {
+      const chip = document.createElement("span");
+      chip.className = "tidbit-chip";
+      chip.dataset.overlap = h.isCorpusOverlap ? "true" : "false";
+      const slugSpan = document.createElement("span");
+      slugSpan.className = "tidbit-chip-slug";
+      slugSpan.textContent = h.slug || "";
+      chip.appendChild(slugSpan);
+      if (h.isCorpusOverlap && typeof h.priorCaptureCount === "number") {
+        const countSpan = document.createElement("span");
+        countSpan.className = "tidbit-chip-count";
+        countSpan.textContent = "seen " + h.priorCaptureCount + "×";
+        chip.appendChild(countSpan);
+      } else if (!h.isCorpusOverlap) {
+        const newSpan = document.createElement("span");
+        newSpan.className = "tidbit-chip-count tidbit-chip-count-new";
+        newSpan.textContent = "new";
+        chip.appendChild(newSpan);
+      }
+      highlightsEl.appendChild(chip);
+    }
+  }
+
+  if (deeplinkEl && tidbit.deepLink) {
+    deeplinkEl.href = tidbit.deepLink;
+  }
+}
+
+// Back-to-widget button — collapses the expanded UI back to the floating
+// pill. Also clears the pending tidbit so a stale wow-loop doesn't re-fire
+// the next time the user expands for an unrelated reason (e.g. Settings).
+const tidbitBackBtn = document.getElementById("btn-tidbit-back");
+if (tidbitBackBtn) {
+  tidbitBackBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("clear_pending_tidbit");
+    } catch (err) {
+      console.warn("[main] clear_pending_tidbit failed:", err);
+    }
+    try {
+      await tauri.core.invoke("widget_collapse");
+    } catch (err) {
+      console.warn("[main] widget_collapse failed:", err);
+    }
+  });
 }
 
 // ───────── Capture flows ─────────

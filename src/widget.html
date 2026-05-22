@@ -59,6 +59,29 @@
       </button>
 
       <div id="status-dot" class="status-unknown" title="Connectivity"></div>
+
+      <!--
+        WP-Threshold-Tidbit-Return Phase B (PB-2 hybrid (c) + (a)) — tidbit
+        indicator badge. Hidden by default. When the polling loop on the
+        Rust side reports `status: 'ready'` and emits the
+        `threshold://tidbit-arrived` event, widget.js shows this badge AND
+        triggers the widget-pulse animation AND fires a native OS
+        notification (title-only per PB-3). Clicking the badge invokes
+        `widget_expand("tidbit")` so the user can see the full preview;
+        the notification click path tries the same expansion as
+        best-effort (Tauri 2's plain-body notification click handler is
+        unreliable cross-platform, so the badge is the always-works
+        fallback).
+      -->
+      <button
+        id="tidbit-indicator"
+        type="button"
+        title="Tap to see the latest preview"
+        aria-label="Open tidbit preview"
+        hidden
+      >
+        💡
+      </button>
     </div>
   </body>
 </html>
