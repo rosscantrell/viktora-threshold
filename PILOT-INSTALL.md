@@ -1,6 +1,6 @@
 # Viktora Threshold — Pilot Install Guide
 
-Two-step install on Mac or Windows. ~2-3 minutes from download to first capture. No external utility setup; OCR is built in.
+Two-step install on Mac or Windows. ~2 minutes from download to first capture. No external utility setup; OCR is built in.
 
 ## What you'll need
 
@@ -14,55 +14,94 @@ Two-step install on Mac or Windows. ~2-3 minutes from download to first capture.
 
 ### Step 1 — Install the `.app`
 
-1. Download `Viktora Threshold_<version>_aarch64.dmg` (Apple Silicon) or the Intel variant from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
+1. Download `Viktora Threshold_<version>_aarch64.dmg` (Apple Silicon) from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
 2. Double-click the `.dmg` to mount it
 3. Drag `Viktora Threshold.app` into `/Applications`
 4. Eject the disk image
 
 ### Step 2 — First launch (right-click Open ceremony)
 
-Because v0.2 ships unsigned (signing tracked in FN-OCR-13-03), macOS Gatekeeper refuses to open it on a regular double-click. **One-time bypass:**
+Because Threshold ships unsigned (signing tracked in FN-OCR-13-03), macOS Gatekeeper refuses to open it on a regular double-click. **One-time bypass:**
 
 1. Open `/Applications` in Finder
 2. **Right-click** (or Ctrl-click) on `Viktora Threshold.app` → **Open**
 3. macOS warns: *"Viktora Threshold can't be opened because Apple cannot check it for malicious software"*
 4. Click **Open** in the warning dialog (the right-click path makes this button available; a normal double-click does not)
-5. The 3-screen onboarding wizard appears
+5. The onboarding wizard appears in expanded-window mode
 
-Subsequent launches via Spotlight or the Dock work normally — Gatekeeper remembers the exemption per-app.
+Subsequent launches via Spotlight work normally — Gatekeeper remembers the exemption per-app. **Note:** v0.3 sets `LSUIElement = YES` so Threshold does NOT appear in the Dock or `Cmd-Tab`. To find a running Threshold, look for the floating widget in a screen corner (see "Widget UX" below).
 
 ---
 
 ## Windows install
 
-### Step 1 — Install the `.msi`
+### Step 1 — Install via `setup.exe` (recommended) or `.msi`
 
-1. Download `Viktora Threshold_<version>_x64_en-US.msi` from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
-2. Double-click the `.msi`
-3. Windows SmartScreen warns: *"Microsoft Defender SmartScreen prevented an unrecognized app from starting"* (because v0.2 ships unsigned; Authenticode signing tracked in FN-OCR-13-02)
+Two installer variants are attached to each release. Use **`setup.exe`** unless your environment specifically requires MSI:
+
+| File | Format | Notes |
+|---|---|---|
+| `Viktora Threshold_<version>_x64-setup.exe` | NSIS | **Recommended.** Smaller (~3.5 MB), simpler wizard, friendlier for individual users |
+| `Viktora Threshold_<version>_x64_en-US.msi` | Windows Installer | For corporate IT deployment scenarios |
+
+1. Download the chosen installer from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
+2. Double-click
+3. Windows SmartScreen warns: *"Microsoft Defender SmartScreen prevented an unrecognized app from starting"* (Threshold ships unsigned; Authenticode signing tracked in FN-OCR-13-02)
 4. Click **More info** → **Run anyway**
-5. Step through the Wix installer (Next → Next → Install → Finish)
+5. Step through the installer (Next → Install → Finish)
 
 ### Step 2 — First launch
 
 1. Open the Start menu → search **Viktora Threshold** → click
-2. The 3-screen onboarding wizard appears
+2. The onboarding wizard appears in expanded-window mode
 
-Subsequent launches via Start menu or the desktop shortcut work normally.
+**Note:** v0.3 sets `skipTaskbar: true` so Threshold does NOT appear in the Windows Taskbar. To find a running Threshold, look for the floating widget in a screen corner.
 
 ---
 
-## Step 3 (both platforms) — Onboarding wizard (~30-60s)
+## Step 3 (both platforms) — Onboarding wizard (~30s)
 
-The wizard walks you through 3 screens:
+The wizard runs in **expanded window mode** (800×600). When it finishes, the window collapses to the floating widget (~180×80 pill in a screen corner).
 
 | Screen | What you do |
 |---|---|
 | **Welcome** | Read the intro + click "Get started" |
-| **Connect to your workspace** | Paste your Apolla base URL (`http://localhost:3001` for local, or your hosted URL) + paste the bearer token; click "Test connection" — should turn green; click "Next" |
-| **You're set up** | Click any of the three action tiles (or "Take me to the app") to enter the main UI |
+| **Connect to your workspace** | Paste your Apolla base URL (`http://localhost:3001` for local) + paste the bearer token; click "Test connection" — should turn green; click "Next" |
+| **You're set up** | Click "Take me to the app" — wizard finishes, window collapses to the floating widget |
 
-Subsequent launches skip the wizard and open straight to the main view.
+Subsequent launches skip the wizard and open straight to the widget.
+
+---
+
+## Widget UX (v0.3)
+
+Once configured, Threshold lives as a **small floating widget in a screen corner**:
+
+- **Size:** ~180×80 pill shape, always-on-top, drag-to-move
+- **Two action buttons:**
+  - **Capture (crosshair icon)** — single-click → region-select overlay → OCR + ingest
+  - **Upload (file icon)** — single-click → native file picker. Also accepts OS-level drag-drop: drop a `.txt` / `.md` / `.vtt` / `.srt` / `.html` directly onto the widget; the button glows green during drag-over
+- **Status dot** (bottom-right corner): gray = unknown, green = last capture/POST succeeded, red = last capture/POST failed. **Hover the dot** to see the last toast's title + body inline (useful for diagnosing red-state failures)
+
+### Right-click menu
+
+| Item | What it does |
+|---|---|
+| **Capture Screen** | Same as clicking the crosshair button |
+| **Pick File…** | Same as clicking the upload button |
+| **Expand…** | Resizes window to 800×600 + restores chrome + loads the full v0.2-style UI (Configure tab, wizard re-entry, etc.) |
+| **Settings…** | Same as Expand, but routes directly to the Configure tab |
+| **Quit Threshold** | Drains any in-flight POSTs (D-12-02-AMEND) then exits |
+
+**Cmd+Q does NOT quit on Mac** because `LSUIElement = YES` removes Threshold from the focused-app list. Quit via the right-click menu.
+
+### Drag-to-move
+
+Click-and-hold anywhere on the widget body (button area or surrounding pill), then drag. The position persists to `config.json` and is restored on next launch.
+
+### Expand / collapse
+
+Right-click → **Expand…** grows the window to 800×600 with normal title bar + close button, loading the v0.2-style full UI. To return to the widget, click the **▢ Collapse** button at the top-right of the expanded UI.
 
 ---
 
@@ -70,16 +109,11 @@ Subsequent launches skip the wizard and open straight to the main view.
 
 | Gesture | How |
 |---|---|
-| **Upload File** | Click the "Upload File" button → native file picker → select a `.txt` / `.md` / `.vtt` / `.srt` / `.html` |
-| **Drag-drop** | Drag any plain-text file from Finder (Mac) or Explorer (Windows) onto the Threshold window → blue overlay confirms the drop zone → release |
-| **Capture Screen** | Click "Capture Screen" → region-select overlay appears (macOS native crosshair / Windows Snipping Tool from `ms-screenclip:`) → drag a region (or press Esc / wait 60s on Windows to cancel) → OCR + ingest fires |
+| **Capture Screen** | Click the Capture button on the widget (or use the right-click menu's "Capture Screen" item) → region-select overlay appears (macOS native crosshair / Windows Snipping Tool from `ms-screenclip:`) → drag a region (or press Esc / wait 60s on Windows to cancel) → OCR + ingest fires |
+| **Upload File** | Click the Upload button on the widget (or right-click → "Pick File…") → native file picker → select a `.txt` / `.md` / `.vtt` / `.srt` / `.html` |
+| **Drag-drop** | Drag any plain-text file from Finder (Mac) or Explorer (Windows) onto the widget → upload button glows green → release to ingest |
 
-A toast appears top-right when each capture completes:
-
-- **Green ✓** — new capture sent to Apolla (with extracted term count)
-- **Yellow ↺** — duplicate content (server returned `alreadyExisted: true`)
-- **Red ✗** — capture failed (wrong file type, connection refused, server returned an error, etc. — the body explains what)
-- **Blue ⟳** — pre-flight pending; appears while the LLM extracts terms (~10-15s), disappears when the response arrives
+OS-level native notifications appear when each capture completes (depending on your system preference). The widget's status dot also reflects the last outcome — hover to see the title + body.
 
 ---
 
@@ -87,13 +121,15 @@ A toast appears top-right when each capture completes:
 
 | Symptom | Fix |
 |---|---|
-| Test connection fails with "Connection refused" | Schema-browser isn't running at the URL you entered. Start it (`cd schema-browser && npm run dev`) or update the URL in Configure. |
-| Ingest fails with HTTP 401 toast | Bearer token doesn't match what the schema-browser was started with. Re-paste in Configure pane. |
+| I can't find Threshold after launching it | v0.3 has no Dock icon (Mac) / no Taskbar entry (Windows). Look for the small ~180×80 floating widget in a screen corner. If it's off-screen (e.g., last position was on an unplugged monitor), delete `~/Library/Application Support/Viktora Threshold/config.json` (Mac) or `%APPDATA%\Viktora Threshold\config.json` (Windows) — Threshold will re-center on next launch. |
+| Test connection fails with "Connection refused" | Schema-browser isn't running at the URL you entered. Start it (`cd schema-browser && npm run dev`) or update the URL in Configure (right-click widget → Settings…). |
+| Ingest fails with HTTP 401 toast | Bearer token doesn't match what the schema-browser was started with. Re-paste in Configure pane (right-click → Settings…). |
 | Capture Screen on Windows: "Couldn't open the Snipping Tool" | Your Windows version is below the v0.2 floor. Capture Screen requires Windows 10 May 2020 update (build 19041) or later for the `ms-screenclip:` URI. Update Windows; file upload + drag-drop still work in the meantime. |
 | Capture Screen on Windows: "Capture timed out — did you cancel?" | The snip didn't complete within 60s, OR you pressed Esc. Try again. |
 | `.app` won't open on Mac even after right-click → Open | The quarantine attribute may be stuck. In Terminal: `xattr -d com.apple.quarantine "/Applications/Viktora Threshold.app"` then try again. |
-| The window vanishes immediately after I close it during a capture | That's intentional (D-12-02-AMEND). The process keeps running in the background until in-flight ingestions finish (or 60s timeout), then exits cleanly. |
-| Wizard appears again on every launch | Config isn't being persisted. On Mac, check `~/Library/Application Support/Viktora Threshold/` exists and is writable. On Windows, check `%APPDATA%\Viktora Threshold\`. |
+| Can't quit Threshold on Mac (Cmd+Q does nothing) | By design — `LSUIElement = YES` removes Threshold from the focused-app list. Right-click the widget → **Quit Threshold**. |
+| Widget vanishes the moment I close the expanded window | That's the collapse path. The widget is still running; look in the screen corner. The widget process keeps running in the background and waits up to 60s for in-flight ingestions before exit (D-12-02-AMEND). |
+| `sourceApp` shows empty on my Mac captures | Known limitation — see "Known limitations" below. Filter ships honest empty-string rather than the misleading self-attribution. |
 
 ---
 
@@ -101,13 +137,13 @@ A toast appears top-right when each capture completes:
 
 | Limitation | Workstream |
 |---|---|
-| Unsigned binaries (Gatekeeper / SmartScreen ceremony per install) | FN-OCR-13-02 (Windows Authenticode) + FN-OCR-13-03 (Apple Developer ID); v0.3+ |
+| Unsigned binaries (Gatekeeper / SmartScreen ceremony per install) | FN-OCR-13-02 (Windows Authenticode) + FN-OCR-13-03 (Apple Developer ID) |
 | Auto-update (manual download from GitHub Releases) | FN-OCR-13-09 (Sparkle + WinSparkle; requires signing first) |
 | Rich file formats (`.docx`, `.pdf`, `.pptx`) | FN-OCR-12-02; use inbox-watcher or plain-text exports |
-| `sourceApp` ships empty on screen captures (FN-OCR-13-12) | Click-driven Capture Screen makes Threshold the frontmost app at capture time; the pre-invocation lookup resolves to Threshold itself, and the self-filter maps to `""` rather than ship misleading data. **Symmetric across Mac + Windows** — confirmed empirically in pilots. Architectural fix (NSWorkspace-activation-observer on Mac, equivalent on Windows) tracked in the compact-UX workstream for v0.3+. |
+| `sourceApp` ships empty on **Mac** screen captures (asymmetric finding from v0.3 widget rollout) | The Mac widget click activates Threshold momentarily despite the v0.3 widget UX; the Mac `is_threshold_own_bundle_id` filter maps the self-reference to `""` rather than ship misleading data. **Windows captures DO attribute correctly** via `WS_EX_NOACTIVATE` shim (Phase 3) — empirically validated with `olk` (Outlook), `msedge` (Edge), etc. landing as the real `sourceApp` values. Mac NSPanel-style shim follow-up tracked as **FN-CUX-12** in the WP-Threshold-Compact-UX AAR. |
 | Mac Keychain / Windows Credential Manager token storage (currently plain JSON in user config dir) | FN-OCR-12-05 |
 | Deep-link Configure UX (`viktora-threshold://configure?token=...`) | FN-OCR-12-06; depends on WP-OCR-09 hosted Apolla |
 | Marker-tidbit-return on capture (the GTM wow loop) | FN-OCR-12-12 + WP-OCR-09 free tier |
 | Linux port | FN-OCR-13-01 |
 
-See [WP-OCR-13 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-13-Threshold-Cross-Platform-OCR-Brief-v1_2-FINAL.md) for the cross-platform OCR spec and [WP-OCR-12 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md) for the original desktop-app spec.
+See [WP-OCR-13 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-13-Threshold-Cross-Platform-OCR-Brief-v1_2-FINAL.md) for the cross-platform OCR spec, [WP-Threshold-Compact-UX v1.1-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-Threshold-Compact-UX-Brief-v1_1-FINAL.md) for the v0.3 widget direction, and [WP-OCR-12 v1.2-FINAL](https://github.com/rosscantrell/AI-Light-Prototype/blob/main/WP-OCR-12-Desktop-Capture-App-Brief-v1_2-FINAL.md) for the original desktop-app spec.
