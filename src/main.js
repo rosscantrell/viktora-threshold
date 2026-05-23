@@ -108,6 +108,44 @@ async function wireBackendEvents() {
     showToast(payload);
   });
 
+  // WP-OCR-09 Phase D — one-click Configure pre-fill from the Apolla
+  // Onboarding nav surface. The user clicks an
+  // `apolla-threshold://configure?tenant=...&token=...` link in the
+  // browser; the Rust shell parses the URL + emits this event with
+  // {tenant, baseUrl, token}. Populate the Configure pane fields,
+  // navigate to it if we're elsewhere, and pre-select Save.
+  await tauri.event.listen("threshold://configure-prefill", async (event) => {
+    const { baseUrl, token, tenant } = event.payload || {};
+    if (!baseUrl || !token) {
+      console.warn("[configure-prefill] payload missing baseUrl or token", event.payload);
+      return;
+    }
+    // Populate fields. Inputs auto-resolve even if the Configure view
+    // isn't currently visible — DOM elements exist independent of
+    // showView state.
+    const baseEl = document.getElementById("config-base-url");
+    const tokenEl = document.getElementById("config-bearer-token");
+    if (baseEl) baseEl.value = baseUrl;
+    if (tokenEl) tokenEl.value = token;
+    // Navigate to the Standalone Configure surface so the user sees the
+    // pre-filled fields immediately. enterStandaloneConfigure() handles
+    // the case where we're currently on widget / main / tidbit.
+    try {
+      // Coming from widget (the 180x80 floating shell)? Expand first
+      // so the Configure UI has room to render.
+      await tauri.core.invoke("widget_expand", { targetTab: "configure" }).catch(() => {});
+    } catch (_e) {
+      // Non-widget contexts don't have widget_expand; ignore.
+    }
+    enterStandaloneConfigure();
+    // Toast the user so the source of the pre-fill is unambiguous.
+    showToast({
+      kind: "success",
+      title: tenant ? `Apolla: ${tenant}` : "Apolla onboarding",
+      body: "Pre-filled from your onboarding link. Click Save to connect.",
+    });
+  });
+
   // Drag-drop paths from WindowEvent::DragDrop in the Rust shell.
   // Emit a pre-flight toast per dropped path, then kick off ingestion.
   await tauri.event.listen("threshold://drop-paths", async (event) => {
