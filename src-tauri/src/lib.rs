@@ -998,6 +998,253 @@ fn get_widget_position(state: tauri::State<AppState>) -> Option<(i32, i32)> {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-PLAUD-04a — Plaud Sync Queue IPC commands
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Four IPC commands proxy the schema-browser's /api/plaud/* endpoints:
+//   - plaud_discover         POST /api/plaud/discover
+//   - plaud_get_inbox        GET  /api/plaud/inbox
+//   - plaud_decide(id, act)  POST /api/plaud/inbox/{id}/decide
+//   - plaud_ingest(id)       POST /api/plaud/ingest
+//
+// All four reuse the bearer-auth + reqwest pattern from post_payload_to_apolla.
+// Per WP-PLAUD-02, server-side handles dedup + sequential ingest mutex; the
+// adapter returns idempotent results on already-ingested recordings.
+
+/// WP-PLAUD-01 §3.4 discover-pass result envelope.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaudDiscoverResult {
+    new_items: u32,
+    pages_scanned: u32,
+    #[serde(default)]
+    errors: u32,
+    completed: bool,
+}
+
+/// WP-PLAUD-01 §3.4 inbox item. Mirrors PlaudInboxItem on the server side
+/// (schema-browser/server/ingest/plaud-state.ts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaudInboxItem {
+    id: String,
+    name: String,
+    created_at: String,
+    start_at: String,
+    duration_ms: i64,
+    serial_number: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    summary_preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    speaker_count: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    speaker_named_count: Option<u32>,
+    state: String, // 'pending' | 'ingested' | 'skipped'
+    discovered_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decided_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user_decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decision_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apolla_document_id: Option<String>,
+}
+
+/// Server response wrapper: `GET /api/plaud/inbox` returns `{items: [...]}`.
+#[derive(Debug, Deserialize)]
+struct PlaudInboxResponse {
+    items: Vec<PlaudInboxItem>,
+}
+
+/// WP-PLAUD-02 ingest result envelope.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaudIngestResult {
+    apolla_document_id: String,
+    ingested_at: String,
+}
+
+/// Build a reqwest client with the same TLS posture used by
+/// `post_payload_to_apolla` (accepts local mkcert CA per WP-OCR-08). Timeout
+/// of 30s — Plaud discover walks pages but the server side single-flights
+/// concurrent calls, so even worst-case discovers complete well under 30s.
+fn build_plaud_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {}", e))
+}
+
+/// Map a non-success status code to a human-readable error. Mirrors the
+/// shape used by `post_payload_to_apolla`.
+fn plaud_status_error(status: reqwest::StatusCode, url: &str, body: &str) -> String {
+    if status.as_u16() == 401 {
+        "Server rejected the bearer token. Check your Apolla token in Configure.".into()
+    } else if status.as_u16() == 503 {
+        "Plaud sync is disabled on the Apolla server (PLAUD_ENABLED is not set).".into()
+    } else if status.as_u16() == 429 {
+        "Rate-limited by the server. Wait a moment and retry.".into()
+    } else {
+        format!("HTTP {} from {}: {}", status.as_u16(), url, body)
+    }
+}
+
+#[tauri::command]
+async fn plaud_discover(
+    state: tauri::State<'_, AppState>,
+) -> Result<PlaudDiscoverResult, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/plaud/discover",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        // The server endpoint ignores body content but expects a JSON
+        // content-type for symmetry with the other POSTs.
+        .body("{}")
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+
+    resp.json::<PlaudDiscoverResult>()
+        .await
+        .map_err(|e| format!("plaud_discover: parse response failed: {}", e))
+}
+
+#[tauri::command]
+async fn plaud_get_inbox(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<PlaudInboxItem>, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/plaud/inbox",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+
+    let parsed: PlaudInboxResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("plaud_get_inbox: parse response failed: {}", e))?;
+    Ok(parsed.items)
+}
+
+#[tauri::command]
+async fn plaud_decide(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    action: String,
+) -> Result<(), String> {
+    let cfg = current_config(&state)?;
+    // Validate `action` client-side as a defense-in-depth check — the
+    // server-side validator does the authoritative check, but a typo here
+    // would surface as a 400 with a less obvious message.
+    if !matches!(action.as_str(), "import" | "skip" | "clear") {
+        return Err(format!(
+            "plaud_decide: invalid action {:?}; expected one of import|skip|clear",
+            action
+        ));
+    }
+    let url = format!(
+        "{}/api/plaud/inbox/{}/decide",
+        cfg.base_url.trim_end_matches('/'),
+        urlencoding_minimal(&id)
+    );
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .body(format!("{{\"action\":\"{}\"}}", action))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn plaud_ingest(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<PlaudIngestResult, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/plaud/ingest",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = build_plaud_http_client()?;
+    // Ingest can take ~10-30s end-to-end (Plaud getFile + LLM extraction).
+    // Override the default 30s timeout for this one path.
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {}", e))
+        .unwrap_or(client);
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .body(format!("{{\"id\":\"{}\"}}", id.replace('"', "\\\"")))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+
+    resp.json::<PlaudIngestResult>()
+        .await
+        .map_err(|e| format!("plaud_ingest: parse response failed: {}", e))
+}
+
+/// Minimal path-segment encoding for Plaud recording IDs (32-char hex on the
+/// happy path; defensively encodes anything that's not URL-safe). Reaching
+/// for a full `url`-crate dependency just for this would be overkill.
+fn urlencoding_minimal(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            _ => format!("%{:02X}", c as u32),
+        })
+        .collect()
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -1009,6 +1256,9 @@ const MENU_PICK_FILE: &str = "menu.pick_file";
 const MENU_EXPAND: &str = "menu.expand";
 const MENU_SETTINGS: &str = "menu.settings";
 const MENU_QUIT: &str = "menu.quit";
+/// WP-PLAUD-04a — Plaud Sync Queue menu item ID. Right-clicking the widget
+/// surfaces this option; selecting it expands the widget into the queue view.
+const MENU_PLAUD_QUEUE: &str = "menu.plaud_queue";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
 /// that opens Tauri's devtools for diagnosis. Constant + menu builder
 /// branch + event handler arm are all #[cfg(debug_assertions)] gated so
@@ -1026,6 +1276,9 @@ fn build_widget_menu(
     let capture = MenuItem::with_id(app, MENU_CAPTURE, "Capture Screen", true, None::<&str>)?;
     let pick_file = MenuItem::with_id(app, MENU_PICK_FILE, "Pick File…", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
+    // WP-PLAUD-04a — sits between Pick File and Expand so the high-frequency
+    // capture surfaces stay at the top of the menu.
+    let plaud_queue = MenuItem::with_id(app, MENU_PLAUD_QUEUE, "Plaud Sync Queue", true, None::<&str>)?;
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -1048,6 +1301,7 @@ fn build_widget_menu(
                 &capture,
                 &pick_file,
                 &sep1,
+                &plaud_queue,
                 &expand,
                 &settings,
                 &sep2,
@@ -1065,6 +1319,7 @@ fn build_widget_menu(
             &capture,
             &pick_file,
             &sep1,
+            &plaud_queue,
             &expand,
             &settings,
             &sep2,
@@ -1664,6 +1919,11 @@ pub fn run() {
             // WP-Threshold-Tidbit-Return Phase B
             get_pending_tidbit,
             clear_pending_tidbit,
+            // WP-PLAUD-04a — Plaud Sync Queue
+            plaud_discover,
+            plaud_get_inbox,
+            plaud_decide,
+            plaud_ingest,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -1712,6 +1972,19 @@ pub fn run() {
                             Some("configure".into()),
                         ) {
                             log::warn!("menu settings failed: {e}");
+                        }
+                    }
+                    MENU_PLAUD_QUEUE => {
+                        // WP-PLAUD-04a — expand into the Plaud Sync Queue view.
+                        // The "plaud-queue" target_tab flows through to main.js
+                        // as a URL fragment; main.js's bootstrap hash-router
+                        // calls enterPlaudQueueView() on match.
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("plaud-queue".into()),
+                        ) {
+                            log::warn!("menu plaud_queue failed: {e}");
                         }
                     }
                     MENU_QUIT => {
@@ -2271,5 +2544,92 @@ mod tests {
         .expect("hyphenated tenant parses");
         assert_eq!(prefill.tenant.as_deref(), Some("acme-corp-staging"));
         assert_eq!(prefill.base_url, "https://acme-corp-staging.viktora.ai");
+    }
+
+    // ───── WP-PLAUD-04a — Plaud Sync Queue helpers ─────
+
+    #[test]
+    fn plaud_urlencoding_minimal_preserves_safe_chars() {
+        // Plaud recording IDs are 32-char hex on the happy path. All safe
+        // characters must pass through unchanged.
+        let hex = "21e4df37eb5bb3d189b95ac7cfff8520";
+        assert_eq!(urlencoding_minimal(hex), hex);
+
+        // Tilde, hyphen, underscore, dot are unreserved per RFC 3986.
+        assert_eq!(urlencoding_minimal("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn plaud_urlencoding_minimal_encodes_unsafe_chars() {
+        // Defense-in-depth: if Plaud ever returns an ID with characters
+        // outside the unreserved set, we must not corrupt the URL.
+        assert_eq!(urlencoding_minimal("a/b"), "a%2Fb");
+        assert_eq!(urlencoding_minimal("a b"), "a%20b");
+        assert_eq!(urlencoding_minimal("a?b#c"), "a%3Fb%23c");
+    }
+
+    #[test]
+    fn plaud_inbox_item_deserializes_minimum_required_fields() {
+        // Server may omit optional fields (summaryPreview, speakerCount,
+        // etc.) on items that haven't been enriched. Minimum-required shape
+        // must round-trip cleanly.
+        let json = r#"{
+            "id": "abc123",
+            "name": "Test recording",
+            "createdAt": "2026-05-25T12:00:00Z",
+            "startAt": "2026-05-25T11:00:00Z",
+            "durationMs": 60000,
+            "serialNumber": "PLAUD-001",
+            "state": "pending",
+            "discoveredAt": "2026-05-25T12:01:00Z"
+        }"#;
+        let item: PlaudInboxItem = serde_json::from_str(json).expect("minimum item parses");
+        assert_eq!(item.id, "abc123");
+        assert_eq!(item.state, "pending");
+        assert!(item.summary_preview.is_none());
+        assert!(item.speaker_count.is_none());
+        assert!(item.apolla_document_id.is_none());
+    }
+
+    #[test]
+    fn plaud_inbox_item_deserializes_full_shape() {
+        // Verify optional-field round-trip when all fields are present.
+        let json = r#"{
+            "id": "abc123",
+            "name": "SteerCo Preparation",
+            "createdAt": "2026-05-25T12:00:00Z",
+            "startAt": "2026-05-25T11:00:00Z",
+            "durationMs": 3180000,
+            "serialNumber": "PLAUD-1779361230180",
+            "summaryPreview": "Discussion of Frontiers strategy.",
+            "speakerCount": 7,
+            "speakerNamedCount": 3,
+            "state": "pending",
+            "discoveredAt": "2026-05-25T12:01:00Z"
+        }"#;
+        let item: PlaudInboxItem = serde_json::from_str(json).expect("full item parses");
+        assert_eq!(item.duration_ms, 3_180_000);
+        assert_eq!(item.speaker_count, Some(7));
+        assert_eq!(item.speaker_named_count, Some(3));
+        assert_eq!(item.summary_preview.as_deref(), Some("Discussion of Frontiers strategy."));
+    }
+
+    #[test]
+    fn plaud_discover_result_deserializes() {
+        // Server's DiscoverResult shape per WP-PLAUD-01 §3.4.
+        let json = r#"{"newItems": 3, "pagesScanned": 2, "errors": 0, "completed": true}"#;
+        let res: PlaudDiscoverResult = serde_json::from_str(json).expect("discover result parses");
+        assert_eq!(res.new_items, 3);
+        assert_eq!(res.pages_scanned, 2);
+        assert!(res.completed);
+    }
+
+    #[test]
+    fn plaud_ingest_result_deserializes() {
+        // Server's ingest result shape per WP-PLAUD-02.
+        let json = r#"{"apollaDocumentId": "DOC-abc123", "ingestedAt": "2026-05-25T12:05:00Z"}"#;
+        let res: PlaudIngestResult = serde_json::from_str(json).expect("ingest result parses");
+        assert_eq!(res.apolla_document_id, "DOC-abc123");
+        assert_eq!(res.ingested_at, "2026-05-25T12:05:00Z");
     }
 }

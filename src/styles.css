@@ -635,3 +635,132 @@ code {
   background: #f5f5f7;
   border-radius: 10px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * WP-PLAUD-04a — Plaud Sync Queue view.
+ * Visual rhythm parallels .tidbit-* (max-width container, card hierarchy,
+ * scrollable body list capped by max-height). No emojis — text labels only.
+ * ───────────────────────────────────────────────────────────────────── */
+
+.view-plaud-queue {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.plaud-queue-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title sync"
+    "meta sync";
+  gap: 4px 16px;
+  align-items: center;
+}
+
+.plaud-queue-title {
+  grid-area: title;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #1d1d1f;
+  margin: 0;
+}
+
+.plaud-queue-meta {
+  grid-area: meta;
+  font-size: 13px;
+  font-weight: 500;
+  color: #86868b;
+  margin: 0;
+}
+
+#btn-plaud-sync-now {
+  grid-area: sync;
+  white-space: nowrap;
+}
+
+.plaud-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.plaud-queue-card {
+  border: 1px solid #e2e2e6;
+  border-radius: 10px;
+  padding: 16px 18px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: opacity 0.18s ease;
+}
+
+.plaud-queue-card-busy {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.plaud-queue-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.plaud-queue-card-meta {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6e6e73;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.plaud-queue-card-summary {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #424245;
+  background: #f5f5f7;
+  border-radius: 8px;
+  padding: 10px 12px;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.plaud-queue-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.plaud-queue-action {
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
+.plaud-queue-empty {
+  font-size: 14px;
+  color: #6e6e73;
+  text-align: center;
+  margin: 32px 0 0;
+  padding: 24px;
+  background: #f5f5f7;
+  border-radius: 10px;
+}
+
+.plaud-queue-footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
