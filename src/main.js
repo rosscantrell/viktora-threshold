@@ -32,7 +32,16 @@ const pendingToasts = new Map();
 
 // ───────── View routing ─────────
 
-const VIEWS = ["view-loading", "view-welcome", "view-configure", "view-done", "view-main", "view-tidbit"];
+const VIEWS = [
+  "view-loading",
+  "view-welcome",
+  "view-configure",
+  "view-done",
+  "view-main",
+  "view-tidbit",
+  // WP-PLAUD-04a — Plaud Sync Queue
+  "view-plaud-queue",
+];
 
 function showView(id) {
   for (const v of VIEWS) {
@@ -84,6 +93,14 @@ async function bootstrap() {
         console.warn("[main] get_pending_tidbit failed:", err);
         // Fall through to main view; better than a blank screen
       }
+    }
+
+    // WP-PLAUD-04a — when widget_expand was invoked with
+    // target_tab="plaud-queue" (from the right-click menu's "Plaud Sync
+    // Queue" item), land in the queue view.
+    if (window.location.hash === "#plaud-queue") {
+      enterPlaudQueueView();
+      return;
     }
 
     enterMainView(cfg);
@@ -419,6 +436,379 @@ if (tidbitBackBtn) {
   });
 }
 
+// ───────── Plaud Sync Queue (WP-PLAUD-04a) ─────────
+
+/**
+ * Render the Plaud Sync Queue view. Loads pending items via the
+ * `plaud_get_inbox` IPC and renders one card per item.
+ *
+ * Per WP-PLAUD-04a:
+ *   - Item card shows: name, date+time, duration, speaker count + named-count,
+ *     summary preview (truncated server-side to ~500 chars; we render verbatim)
+ *   - Action buttons per card: Import / Skip / Always sync from this device /
+ *     Always skip from this device
+ *   - "Sync now" button → plaud_discover IPC → re-fetch + re-render
+ *   - "Back" button → widget_collapse
+ *
+ * Failure-safe: if the IPC errors (e.g., server unreachable, PLAUD_ENABLED
+ * unset and server returned 503), surface via showToast + leave the empty
+ * state visible.
+ */
+async function enterPlaudQueueView() {
+  state.inWizard = false;
+  showView("view-plaud-queue");
+  await refreshPlaudQueue();
+}
+
+/**
+ * Re-fetch the inbox + re-render. Called on view-enter and after every
+ * action that mutates inbox state (decide, ingest, sync-now).
+ */
+async function refreshPlaudQueue() {
+  const listEl = document.getElementById("plaud-queue-list");
+  const emptyEl = document.getElementById("plaud-queue-empty");
+  const metaEl = document.getElementById("plaud-queue-meta");
+  if (!listEl || !emptyEl || !metaEl) return;
+
+  // Clear prior cards
+  listEl.innerHTML = "";
+
+  let items;
+  try {
+    items = await tauri.core.invoke("plaud_get_inbox");
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Couldn't load Plaud queue",
+      body: String(err),
+    });
+    emptyEl.hidden = false;
+    metaEl.textContent = "";
+    return;
+  }
+
+  // Only pending items belong on the queue. 'ingested' and 'skipped' items
+  // are terminal (per WP-PLAUD-01) and don't re-surface.
+  const pending = Array.isArray(items)
+    ? items.filter((it) => it && it.state === "pending")
+    : [];
+
+  if (pending.length === 0) {
+    emptyEl.hidden = false;
+    metaEl.textContent = "";
+    return;
+  }
+
+  emptyEl.hidden = true;
+  metaEl.textContent = pending.length === 1 ? "1 new" : `${pending.length} new`;
+
+  for (const item of pending) {
+    listEl.appendChild(renderPlaudCard(item));
+  }
+}
+
+/**
+ * Build a single inbox-item card. Uses createElement + textContent throughout
+ * (matches enterTidbitView's pattern — no innerHTML for user-supplied
+ * strings).
+ */
+function renderPlaudCard(item) {
+  const card = document.createElement("div");
+  card.className = "plaud-queue-card";
+  card.dataset.id = item.id;
+  card.dataset.serial = item.serialNumber || "";
+
+  const title = document.createElement("div");
+  title.className = "plaud-queue-card-title";
+  title.textContent = item.name || "Untitled recording";
+  card.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.className = "plaud-queue-card-meta";
+  meta.textContent = formatPlaudMeta(item);
+  card.appendChild(meta);
+
+  if (item.summaryPreview) {
+    const summary = document.createElement("div");
+    summary.className = "plaud-queue-card-summary";
+    summary.textContent = item.summaryPreview;
+    card.appendChild(summary);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "plaud-queue-card-actions";
+
+  const importBtn = document.createElement("button");
+  importBtn.type = "button";
+  importBtn.className = "btn btn-primary plaud-queue-action";
+  importBtn.textContent = "Import";
+  importBtn.addEventListener("click", () => handlePlaudImport(item, card));
+  actions.appendChild(importBtn);
+
+  const skipBtn = document.createElement("button");
+  skipBtn.type = "button";
+  skipBtn.className = "btn btn-secondary plaud-queue-action";
+  skipBtn.textContent = "Skip";
+  skipBtn.addEventListener("click", () => handlePlaudSkip(item, card));
+  actions.appendChild(skipBtn);
+
+  const alwaysSyncBtn = document.createElement("button");
+  alwaysSyncBtn.type = "button";
+  alwaysSyncBtn.className = "btn btn-secondary plaud-queue-action";
+  alwaysSyncBtn.textContent = "Always sync from this device";
+  alwaysSyncBtn.addEventListener("click", () =>
+    handlePlaudAlwaysFromDevice(item, card, "import"),
+  );
+  actions.appendChild(alwaysSyncBtn);
+
+  const alwaysSkipBtn = document.createElement("button");
+  alwaysSkipBtn.type = "button";
+  alwaysSkipBtn.className = "btn btn-secondary plaud-queue-action";
+  alwaysSkipBtn.textContent = "Always skip from this device";
+  alwaysSkipBtn.addEventListener("click", () =>
+    handlePlaudAlwaysFromDevice(item, card, "skip"),
+  );
+  actions.appendChild(alwaysSkipBtn);
+
+  card.appendChild(actions);
+  return card;
+}
+
+/**
+ * Compose the meta line: "Tue 2:14 PM · 53min · 7 speakers (3 named)"
+ * The brief's UI mockup uses the short weekday name; we use the system
+ * locale for both date and time so the user sees what their OS would
+ * naturally render. Speaker count + named is only appended when present.
+ */
+function formatPlaudMeta(item) {
+  const parts = [];
+
+  const startAt = item.startAt ? new Date(item.startAt) : null;
+  if (startAt && !isNaN(startAt.getTime())) {
+    const dt = startAt.toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    parts.push(dt);
+  }
+
+  if (typeof item.durationMs === "number" && item.durationMs > 0) {
+    parts.push(formatPlaudDuration(item.durationMs));
+  }
+
+  if (typeof item.speakerCount === "number" && item.speakerCount > 0) {
+    const named = item.speakerNamedCount || 0;
+    const noun = item.speakerCount === 1 ? "speaker" : "speakers";
+    parts.push(
+      named > 0
+        ? `${item.speakerCount} ${noun} (${named} named)`
+        : `${item.speakerCount} ${noun}`,
+    );
+  }
+
+  return parts.join(" · ");
+}
+
+/**
+ * Render a duration in human-friendly form.
+ *   < 1 min  → "Ns"
+ *   < 1 hour → "Mm" (drops trailing seconds for readability)
+ *   ≥ 1 hour → "Hh Mm"
+ */
+function formatPlaudDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}min`;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+/**
+ * Import: persist the decision, then run the ingest. On success, remove the
+ * card from view (optimistically). On any failure, leave the card and toast.
+ */
+async function handlePlaudImport(item, cardEl) {
+  setCardBusy(cardEl, true);
+  try {
+    await tauri.core.invoke("plaud_decide", { id: item.id, action: "import" });
+    const result = await tauri.core.invoke("plaud_ingest", { id: item.id });
+    removePlaudCard(cardEl);
+    showToast({
+      kind: "success",
+      title: `Imported: ${item.name || "recording"}`,
+      body: result?.apollaDocumentId
+        ? `Apolla document: ${result.apollaDocumentId}`
+        : undefined,
+    });
+    refreshPlaudQueueMeta();
+  } catch (err) {
+    setCardBusy(cardEl, false);
+    showToast({
+      kind: "failure",
+      title: "Import failed",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Skip: persist the decision; card removed.
+ */
+async function handlePlaudSkip(item, cardEl) {
+  setCardBusy(cardEl, true);
+  try {
+    await tauri.core.invoke("plaud_decide", { id: item.id, action: "skip" });
+    removePlaudCard(cardEl);
+    showToast({
+      kind: "success",
+      title: `Skipped: ${item.name || "recording"}`,
+    });
+    refreshPlaudQueueMeta();
+  } catch (err) {
+    setCardBusy(cardEl, false);
+    showToast({
+      kind: "failure",
+      title: "Skip failed",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * "Always sync/skip from this device" — handle this specific card, then
+ * optimistically remove other pending cards from the same device.
+ *
+ * For v1, this does NOT post a rule to a rules-engine endpoint — that's
+ * WP-PLAUD-03 (Sprint 2). When that lands, this function will also POST to
+ * `/api/plaud/rules` with a new device rule.
+ */
+async function handlePlaudAlwaysFromDevice(item, cardEl, action) {
+  setCardBusy(cardEl, true);
+  try {
+    await tauri.core.invoke("plaud_decide", { id: item.id, action });
+    if (action === "import") {
+      await tauri.core.invoke("plaud_ingest", { id: item.id });
+    }
+
+    // TODO(WP-PLAUD-03): also POST /api/plaud/rules with a new device rule
+    // { kind: 'device', serialNumber: item.serialNumber, action } so future
+    // recordings from this device auto-route without surfacing in the queue.
+
+    removePlaudCard(cardEl);
+
+    // Optimistically remove other pending cards from the same device.
+    // Server-side, those cards stay in 'pending' for now; once the rules
+    // engine ships (WP-PLAUD-03), the next sync pass will re-evaluate them
+    // against the rule and either auto-ingest or auto-skip on the server.
+    if (item.serialNumber) {
+      const listEl = document.getElementById("plaud-queue-list");
+      if (listEl) {
+        const siblings = listEl.querySelectorAll(
+          `.plaud-queue-card[data-serial="${cssEscape(item.serialNumber)}"]`,
+        );
+        siblings.forEach((sib) => removePlaudCard(sib));
+      }
+    }
+
+    showToast({
+      kind: "success",
+      title:
+        action === "import"
+          ? `Always syncing recordings from this device`
+          : `Always skipping recordings from this device`,
+      body: "Other pending recordings from this device cleared from queue.",
+    });
+    refreshPlaudQueueMeta();
+  } catch (err) {
+    setCardBusy(cardEl, false);
+    showToast({
+      kind: "failure",
+      title: action === "import" ? "Always-sync failed" : "Always-skip failed",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Minimal CSS.escape polyfill — Threshold has no bundled CSSEscape lib and
+ * Plaud serial numbers don't usually contain special chars, but be safe.
+ */
+function cssEscape(s) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(s);
+  }
+  return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) =>
+    "\\" + c.charCodeAt(0).toString(16) + " ",
+  );
+}
+
+function setCardBusy(cardEl, busy) {
+  if (!cardEl) return;
+  cardEl.classList.toggle("plaud-queue-card-busy", !!busy);
+  cardEl
+    .querySelectorAll(".plaud-queue-action")
+    .forEach((btn) => (btn.disabled = !!busy));
+}
+
+function removePlaudCard(cardEl) {
+  if (!cardEl) return;
+  cardEl.remove();
+  // If we just removed the last card, show the empty state.
+  const listEl = document.getElementById("plaud-queue-list");
+  const emptyEl = document.getElementById("plaud-queue-empty");
+  if (listEl && emptyEl && listEl.children.length === 0) {
+    emptyEl.hidden = false;
+  }
+}
+
+/**
+ * Update the header "N new" count to reflect the current rendered list.
+ * Called after card removal/render so the meta line stays in sync.
+ */
+function refreshPlaudQueueMeta() {
+  const listEl = document.getElementById("plaud-queue-list");
+  const metaEl = document.getElementById("plaud-queue-meta");
+  if (!listEl || !metaEl) return;
+  const n = listEl.children.length;
+  metaEl.textContent = n === 0 ? "" : n === 1 ? "1 new" : `${n} new`;
+}
+
+/**
+ * "Sync now" button handler — manually trigger a discover pass, then refresh.
+ */
+async function handlePlaudSyncNow() {
+  const btn = document.getElementById("btn-plaud-sync-now");
+  if (btn) btn.disabled = true;
+  try {
+    const result = await tauri.core.invoke("plaud_discover");
+    await refreshPlaudQueue();
+    const summary =
+      result && typeof result.newItems === "number"
+        ? result.newItems === 0
+          ? "No new recordings found."
+          : `Found ${result.newItems} new recording${result.newItems === 1 ? "" : "s"}.`
+        : "Sync complete.";
+    showToast({
+      kind: "success",
+      title: "Plaud sync complete",
+      body: summary,
+    });
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Plaud sync failed",
+      body: String(err),
+    });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // ───────── Capture flows ─────────
 
 async function handleUploadFile() {
@@ -629,6 +1019,25 @@ window.addEventListener("DOMContentLoaded", () => {
   // Capture flows
   document.getElementById("btn-upload-file").addEventListener("click", handleUploadFile);
   document.getElementById("btn-capture-screen").addEventListener("click", handleCaptureScreen);
+
+  // WP-PLAUD-04a — Plaud Sync Queue buttons. Use optional chaining since
+  // older index.html builds (pre-PLAUD-04a) won't have these elements; this
+  // keeps the rest of bootstrap functional even if the queue section is
+  // somehow missing (defensive — same posture as the tidbit button block).
+  const plaudSyncBtn = document.getElementById("btn-plaud-sync-now");
+  if (plaudSyncBtn) {
+    plaudSyncBtn.addEventListener("click", handlePlaudSyncNow);
+  }
+  const plaudBackBtn = document.getElementById("btn-plaud-back");
+  if (plaudBackBtn) {
+    plaudBackBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("widget_collapse");
+      } catch (err) {
+        console.warn("[main] widget_collapse (plaud-back) failed:", err);
+      }
+    });
+  }
 
   // Drag-drop visuals (the actual ingestion is wired in wireBackendEvents)
   wireDragVisuals();

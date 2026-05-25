@@ -261,6 +261,44 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-PLAUD-04a — Plaud Sync Queue view.
+         Reached via right-click menu → "Plaud Sync Queue" (fires
+         widget_expand with target_tab="plaud-queue"). main.js's bootstrap
+         hash-router detects #plaud-queue and calls enterPlaudQueueView(),
+         which loads pending items via the plaud_get_inbox IPC and renders
+         one card per item.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-plaud-queue" class="view view-plaud-queue" hidden>
+      <header class="plaud-queue-header">
+        <h1 class="plaud-queue-title">Plaud Sync Queue</h1>
+        <p class="plaud-queue-meta" id="plaud-queue-meta"></p>
+        <button type="button" id="btn-plaud-sync-now" class="btn btn-secondary">
+          Sync now
+        </button>
+      </header>
+
+      <div class="plaud-queue-list" id="plaud-queue-list">
+        <!-- Per-item cards rendered by enterPlaudQueueView in main.js.
+             Card shape:
+               .plaud-queue-card
+                 .plaud-queue-card-title
+                 .plaud-queue-card-meta
+                 .plaud-queue-card-summary
+                 .plaud-queue-card-actions (Import / Skip / Always sync / Always skip) -->
+      </div>
+
+      <p class="plaud-queue-empty" id="plaud-queue-empty" hidden>
+        All caught up — no new recordings from Plaud.
+      </p>
+
+      <div class="plaud-queue-footer">
+        <button type="button" id="btn-plaud-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->
     <div id="drop-overlay" class="drop-overlay" hidden>
