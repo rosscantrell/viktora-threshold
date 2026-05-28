@@ -3458,6 +3458,7 @@ fn build_widget_menu(
             &onenote_autowatch_counter,
             &expand,
             &settings,
+            &connections,
             &sep2,
             &quit,
         ],
