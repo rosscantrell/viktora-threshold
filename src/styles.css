@@ -811,3 +811,222 @@ code {
   gap: 12px;
   padding-top: 8px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * WP-ONENOTE-EXPORT-04 — OneNote browse view.
+ * Visual rhythm parallels .view-plaud-queue (max-width container,
+ * scrollable list capped by max-height). Tree affords notebook → section
+ * indentation; each section row carries a "Send all N pages" button.
+ * Progress UI lives in the footer band, hidden until a bulk-send fires.
+ * ───────────────────────────────────────────────────────────────────── */
+
+.view-onenote-browse {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.onenote-browse-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title refresh"
+    "meta refresh";
+  gap: 4px 16px;
+  align-items: center;
+}
+
+.onenote-browse-title {
+  grid-area: title;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #1d1d1f;
+  margin: 0;
+}
+
+.onenote-browse-meta {
+  grid-area: meta;
+  font-size: 13px;
+  font-weight: 500;
+  color: #86868b;
+  margin: 0;
+}
+
+#btn-onenote-browse-refresh {
+  grid-area: refresh;
+  white-space: nowrap;
+}
+
+.onenote-browse-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.onenote-browse-notebook {
+  border: 1px solid #e2e2e6;
+  border-radius: 10px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.onenote-browse-notebook-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #fbfbfd;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d1d1f;
+  border: none;
+  width: 100%;
+  text-align: left;
+}
+
+.onenote-browse-notebook-header:hover {
+  background: #f0f0f3;
+}
+
+.onenote-browse-notebook-chevron {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: #6e6e73;
+  transition: transform 0.12s ease;
+}
+
+.onenote-browse-notebook[data-expanded="true"] .onenote-browse-notebook-chevron {
+  transform: rotate(90deg);
+}
+
+.onenote-browse-notebook-name {
+  flex: 1;
+  word-break: break-word;
+}
+
+.onenote-browse-notebook-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6e6e73;
+}
+
+.onenote-browse-sections {
+  display: none;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.onenote-browse-notebook[data-expanded="true"] .onenote-browse-sections {
+  display: flex;
+}
+
+.onenote-browse-section {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 10px 32px;
+  border-top: 1px solid #f0f0f3;
+}
+
+.onenote-browse-section:first-child {
+  border-top: none;
+}
+
+.onenote-browse-section-name {
+  font-size: 13px;
+  color: #1d1d1f;
+  word-break: break-word;
+}
+
+.onenote-browse-section-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6e6e73;
+  white-space: nowrap;
+}
+
+.onenote-browse-section-send {
+  font-size: 12px;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.onenote-browse-section-send:disabled {
+  background: white;
+  color: #b8b8be;
+  border-color: #e2e2e6;
+  cursor: not-allowed;
+}
+
+.onenote-browse-empty {
+  font-size: 14px;
+  color: #6e6e73;
+  text-align: center;
+  margin: 32px 0 0;
+  padding: 24px;
+  background: #f5f5f7;
+  border-radius: 10px;
+}
+
+.onenote-browse-progress {
+  border: 1px solid #d2d2d7;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fbfbfd;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.onenote-browse-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.onenote-browse-progress-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.onenote-browse-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #e2e2e6;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.onenote-browse-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: #0071e3;
+  transition: width 0.2s ease;
+}
+
+.onenote-browse-progress-detail {
+  font-size: 12px;
+  color: #6e6e73;
+  margin: 0;
+  word-break: break-word;
+}
+
+.onenote-browse-footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
