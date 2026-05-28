@@ -941,6 +941,86 @@ impl AutoWatchTracker {
         // they're calendar / process-lifetime scoped, not "session"
         // scoped per the brief.
     }
+
+    /// Read-only accessor for the IPC status report (sibling to
+    /// `sent_today` / `sent_total_session`). Returns the page id the
+    /// tracker is currently debouncing, or `None` when no notebook is
+    /// observed. Useful for the Configure pane's diagnostic display.
+    pub fn last_observed_page_id(&self) -> Option<&str> {
+        self.last_observed_page_id.as_deref()
+    }
+
+    /// Read-only accessor for the IPC status report. Returns the number
+    /// of distinct pages observed-and-sent in this process lifetime
+    /// (sum of `sent_this_session.len()` across the whole loop).
+    /// Sibling of `sent_today` (calendar-day-scoped) and
+    /// `sent_total_session` (process-lifetime, total-sends).
+    pub fn sent_this_session_count(&self) -> usize {
+        self.sent_this_session.len()
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-05 — IPC status payload + active-page polling helpers
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `AutoWatchStatus` is the serde-payload returned from
+// `onenote_auto_watch_status` IPC (consumed by the Configure pane and
+// the right-click menu counter). camelCase rename so the frontend can
+// read fields as JS conventions.
+//
+// `pollActiveOnce` wraps `get_active_page` + `enrich_page_metadata` for
+// the loop's per-tick work — the loop calls it once per
+// `AUTO_WATCH_POLL_INTERVAL` and feeds the result into the tracker.
+
+/// WP-ONENOTE-EXPORT-05 — payload returned from
+/// `onenote_auto_watch_status` IPC. Consumed by Configure-pane status
+/// line + right-click menu counter.
+///
+/// Fields renamed to camelCase via `serde(rename_all = "camelCase")` so
+/// the JS side reads `status.sentToday` not `status.sent_today`.
+/// Additive-only schema delta — fields can grow but existing fields
+/// stay byte-compatible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoWatchStatus {
+    /// Is the polling loop currently running? Mirrors `AppConfig.auto_watch`
+    /// at steady state but can drift transiently while a toggle is
+    /// being applied. Source of truth is the AtomicBool the lib.rs
+    /// loop polls (see `lib.rs::ONENOTE_AUTO_WATCH_ACTIVE`).
+    pub enabled: bool,
+    /// Number of auto-sends fired today (resets at midnight local time
+    /// via `AutoWatchTracker::mark_sent`).
+    pub sent_today: usize,
+    /// Number of auto-sends fired since the process started (does not
+    /// reset on midnight rollover; only on app restart). Useful for
+    /// "Sent this session: N" diagnostic.
+    pub sent_total_session: usize,
+    /// Number of distinct pages auto-sent this session (≤ `sent_total_session`
+    /// in v1 because dedup blocks re-sends; the two values are equal in v1
+    /// but split for future-feature-flexibility if dedup is relaxed).
+    pub distinct_pages_sent: usize,
+    /// Page id the tracker is currently debouncing (the page the user
+    /// is dwelling on). `None` when no notebook is open. Useful for
+    /// diagnosing "why isn't auto-send firing" UX issues.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debouncing_page_id: Option<String>,
+}
+
+impl AutoWatchStatus {
+    /// Compose a status payload from the tracker + the loop's enable
+    /// flag. The `enabled` flag is sourced separately (from the loop's
+    /// AtomicBool) because the tracker itself doesn't know whether the
+    /// loop is running.
+    pub fn from_tracker(tracker: &AutoWatchTracker, enabled: bool) -> Self {
+        Self {
+            enabled,
+            sent_today: tracker.sent_today(),
+            sent_total_session: tracker.sent_total_session(),
+            distinct_pages_sent: tracker.sent_this_session_count(),
+            debouncing_page_id: tracker.last_observed_page_id().map(String::from),
+        }
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1489,5 +1569,148 @@ mod tests {
             t.observe(Some("{PG-1}"), t0 + Duration::from_secs(30)),
             AutoWatchAction::FireSend("{PG-1}".to_string())
         );
+    }
+
+    // ───── WP-ONENOTE-EXPORT-05 — AutoWatchStatus IPC payload ─────
+    //
+    // The status payload is what the Configure pane + right-click menu
+    // counter read. The serde round-trip is camelCase-renamed (frontend
+    // reads `status.sentToday`, not `status.sent_today`); these tests
+    // pin the wire shape so a future refactor can't silently break the
+    // JS consumers without flipping a test.
+
+    #[test]
+    fn auto_watch_status_serializes_with_camel_case_field_names() {
+        // Construct a status with every field populated so the serde
+        // assertion exercises every rename. Companion to the
+        // `BulkSendReport` drift-guard pattern from WP-EXPORT-04.
+        let status = AutoWatchStatus {
+            enabled: true,
+            sent_today: 3,
+            sent_total_session: 5,
+            distinct_pages_sent: 5,
+            debouncing_page_id: Some("{PG-CURRENT}".to_string()),
+        };
+        let json = serde_json::to_string(&status).expect("should serialize");
+        // camelCase-renamed field names must appear verbatim in the
+        // serialized JSON. snake_case forms must NOT appear.
+        assert!(json.contains("\"enabled\":true"), "got: {}", json);
+        assert!(json.contains("\"sentToday\":3"), "got: {}", json);
+        assert!(json.contains("\"sentTotalSession\":5"), "got: {}", json);
+        assert!(json.contains("\"distinctPagesSent\":5"), "got: {}", json);
+        assert!(json.contains("\"debouncingPageId\":\"{PG-CURRENT}\""), "got: {}", json);
+        assert!(!json.contains("sent_today"), "snake_case leak: {}", json);
+        assert!(!json.contains("debouncing_page_id"), "snake_case leak: {}", json);
+    }
+
+    #[test]
+    fn auto_watch_status_omits_debouncing_page_when_none() {
+        // `debouncing_page_id` uses `#[serde(skip_serializing_if = "Option::is_none")]`
+        // so the JS side can `if (status.debouncingPageId) { ... }` without
+        // worrying about a literal "null" being present in the payload.
+        let status = AutoWatchStatus {
+            enabled: false,
+            sent_today: 0,
+            sent_total_session: 0,
+            distinct_pages_sent: 0,
+            debouncing_page_id: None,
+        };
+        let json = serde_json::to_string(&status).expect("should serialize");
+        assert!(!json.contains("debouncingPageId"), "got: {}", json);
+        assert!(!json.contains("null"), "got: {}", json);
+    }
+
+    #[test]
+    fn auto_watch_status_round_trips_through_json() {
+        let original = AutoWatchStatus {
+            enabled: true,
+            sent_today: 7,
+            sent_total_session: 12,
+            distinct_pages_sent: 11,
+            debouncing_page_id: Some("{PG-X}".to_string()),
+        };
+        let json = serde_json::to_string(&original).expect("should serialize");
+        let parsed: AutoWatchStatus =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn auto_watch_status_from_tracker_reads_all_fields() {
+        let mut tracker = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        let today = date(2026, 5, 28);
+        // Fire + mark two distinct pages.
+        tracker.observe(Some("{PG-1}"), t0);
+        tracker.observe(Some("{PG-1}"), t0 + Duration::from_secs(10));
+        tracker.mark_sent("{PG-1}", today);
+        tracker.observe(Some("{PG-2}"), t0 + Duration::from_secs(15));
+        tracker.observe(Some("{PG-2}"), t0 + Duration::from_secs(25));
+        tracker.mark_sent("{PG-2}", today);
+        // Now observing a third page — it should show up as the
+        // debouncing_page_id (currently dwelling on but not yet sent).
+        tracker.observe(Some("{PG-3}"), t0 + Duration::from_secs(30));
+
+        let status = AutoWatchStatus::from_tracker(&tracker, true);
+        assert!(status.enabled);
+        assert_eq!(status.sent_today, 2);
+        assert_eq!(status.sent_total_session, 2);
+        assert_eq!(status.distinct_pages_sent, 2);
+        assert_eq!(status.debouncing_page_id, Some("{PG-3}".to_string()));
+    }
+
+    #[test]
+    fn auto_watch_status_from_tracker_reports_enabled_false_when_loop_off() {
+        // The loop's enable flag is the source of truth for `enabled`;
+        // the tracker itself doesn't know whether the loop is running.
+        // Even with a populated tracker (e.g., user just toggled off
+        // mid-session), `from_tracker(..., false)` should report
+        // `enabled: false`.
+        let mut tracker = AutoWatchTracker::new();
+        tracker.mark_sent("{PG-1}", date(2026, 5, 28));
+        let status = AutoWatchStatus::from_tracker(&tracker, false);
+        assert!(!status.enabled);
+        // Counters preserved across the toggle — UX should still show
+        // "Sent today: 1" even after toggling off.
+        assert_eq!(status.sent_today, 1);
+    }
+
+    #[test]
+    fn auto_watch_last_observed_page_id_tracks_observation() {
+        // last_observed_page_id is the new IPC-facing accessor (sibling
+        // of sent_today / sent_total_session). Test the observable
+        // contract: returns Some(id) while debouncing, None when reset.
+        let mut t = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        assert_eq!(t.last_observed_page_id(), None);
+        t.observe(Some("{PG-A}"), t0);
+        assert_eq!(t.last_observed_page_id(), Some("{PG-A}"));
+        // Empty-string observation resets the tracker.
+        t.observe(Some(""), t0 + Duration::from_secs(1));
+        assert_eq!(t.last_observed_page_id(), None);
+        // None observation also resets.
+        t.observe(Some("{PG-B}"), t0 + Duration::from_secs(2));
+        assert_eq!(t.last_observed_page_id(), Some("{PG-B}"));
+        t.observe(None, t0 + Duration::from_secs(3));
+        assert_eq!(t.last_observed_page_id(), None);
+    }
+
+    #[test]
+    fn auto_watch_sent_this_session_count_tracks_distinct_pages() {
+        let mut t = AutoWatchTracker::new();
+        let today = date(2026, 5, 28);
+        assert_eq!(t.sent_this_session_count(), 0);
+        t.mark_sent("{PG-1}", today);
+        assert_eq!(t.sent_this_session_count(), 1);
+        t.mark_sent("{PG-2}", today);
+        assert_eq!(t.sent_this_session_count(), 2);
+        // Duplicate insertion no-ops (dedup).
+        t.mark_sent("{PG-1}", today);
+        assert_eq!(t.sent_this_session_count(), 2);
+        // Reset session clears the count.
+        t.reset_session();
+        assert_eq!(t.sent_this_session_count(), 0);
+        // But the calendar-day counter is preserved.
+        assert_eq!(t.sent_today(), 2);
     }
 }
