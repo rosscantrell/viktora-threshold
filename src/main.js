@@ -88,6 +88,8 @@ const VIEWS = [
   "view-plaud-queue",
   // WP-ONENOTE-EXPORT-04 — OneNote Browse
   "view-onenote-browse",
+  // WP-PLAUD-07b — Settings → Connections (Connect Plaud)
+  "view-connections",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -196,6 +198,14 @@ async function bootstrap() {
     // OneNote…" item), land in the browse view.
     if (window.location.hash === "#onenote-browse") {
       enterOneNoteBrowseView();
+      return;
+    }
+
+    // WP-PLAUD-07b — when widget_expand was invoked with
+    // target_tab="connections" (from the right-click menu's
+    // "Connections…" item), land in the Settings → Connections pane.
+    if (window.location.hash === "#connections") {
+      enterConnectionsView();
       return;
     }
 
@@ -1643,6 +1653,207 @@ function dismissToast(id) {
   setTimeout(() => el.remove(), 200);
 }
 
+// ───────── WP-PLAUD-07b — Settings → Connections (Connect Plaud) ─────────
+
+/**
+ * Render the Plaud connection card from the cached local status (which is
+ * a UX hint only; the droplet's tokens.json is authoritative).
+ */
+async function enterConnectionsView() {
+  state.inWizard = false;
+  showView("view-connections");
+
+  let cached = null;
+  try {
+    cached = await tauri.core.invoke("plaud_connect_status");
+  } catch (err) {
+    console.warn("[connections] plaud_connect_status failed:", err);
+  }
+  renderPlaudConnectionCard(cached, { busy: false });
+}
+
+function formatConnectedTimestamp(iso) {
+  if (!iso) return "";
+  try {
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return iso;
+    return dt.toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch (_e) {
+    return iso;
+  }
+}
+
+function formatExpiresAt(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
+  const remainingMin = Math.round((ms - Date.now()) / 60000);
+  if (remainingMin <= 0) return "expired (server-side will refresh on next call)";
+  if (remainingMin < 60) return `expires in ~${remainingMin} min (auto-refreshes server-side)`;
+  const h = Math.floor(remainingMin / 60);
+  const m = remainingMin % 60;
+  return m > 0
+    ? `expires in ~${h}h ${m}m (auto-refreshes server-side)`
+    : `expires in ~${h}h (auto-refreshes server-side)`;
+}
+
+/**
+ * Update the Plaud card chrome based on the connection status + the busy
+ * flag (true while a Connect attempt is in-flight). When busy, Connect is
+ * disabled and Cancel becomes visible; the progress line shows phase
+ * updates emitted by the Rust orchestrator.
+ */
+function renderPlaudConnectionCard(status, { busy = false } = {}) {
+  const statusEl = document.getElementById("plaud-status");
+  const connectBtn = document.getElementById("btn-plaud-connect");
+  const cancelBtn = document.getElementById("btn-plaud-cancel");
+  const disconnectBtn = document.getElementById("btn-plaud-disconnect");
+  const progressEl = document.getElementById("plaud-progress");
+  const bannerEl = document.getElementById("plaud-disconnect-banner");
+  if (!statusEl || !connectBtn || !cancelBtn || !disconnectBtn) return;
+
+  // Banner is sticky once shown until the user reconnects.
+  if (status) {
+    bannerEl.hidden = true;
+  }
+
+  if (busy) {
+    statusEl.textContent = "Status: Connecting…";
+    statusEl.dataset.state = "connecting";
+    connectBtn.disabled = true;
+    connectBtn.hidden = false;
+    disconnectBtn.hidden = true;
+    cancelBtn.hidden = false;
+    cancelBtn.disabled = false;
+    return;
+  }
+
+  // Not busy: either show "Connected" (with Reconnect + Disconnect) or
+  // "Not connected" (Connect only).
+  connectBtn.disabled = false;
+  cancelBtn.hidden = true;
+  progressEl.hidden = true;
+  progressEl.textContent = "";
+
+  if (status && status.connectedAt) {
+    const when = formatConnectedTimestamp(status.connectedAt);
+    const exp = formatExpiresAt(status.expiresAt);
+    const parts = ["Status: Connected"];
+    if (when) parts.push("·");
+    if (when) parts.push(`last connected ${when}`);
+    if (exp) parts.push(`· ${exp}`);
+    statusEl.textContent = parts.join(" ");
+    statusEl.dataset.state = "connected";
+    connectBtn.textContent = "Reconnect";
+    disconnectBtn.hidden = false;
+  } else {
+    statusEl.textContent = "Status: Not connected";
+    statusEl.dataset.state = "disconnected";
+    connectBtn.textContent = "Connect Plaud";
+    disconnectBtn.hidden = true;
+  }
+}
+
+async function handlePlaudConnectClick() {
+  const progressEl = document.getElementById("plaud-progress");
+  const statusEl = document.getElementById("plaud-status");
+  if (progressEl) {
+    progressEl.hidden = false;
+    progressEl.textContent = "Starting…";
+  }
+  renderPlaudConnectionCard(null, { busy: true });
+
+  try {
+    const result = await tauri.core.invoke("plaud_connect_start");
+    renderPlaudConnectionCard(result && result.status ? result.status : null, {
+      busy: false,
+    });
+    showToast({
+      kind: "success",
+      title: "Plaud connected",
+      body: "Recordings will appear in your Apolla inbox within ~30 min.",
+    });
+  } catch (err) {
+    const msg = String(err);
+    if (statusEl) {
+      statusEl.textContent = `Status: ${msg}`;
+      statusEl.dataset.state = "error";
+    }
+    if (progressEl) {
+      progressEl.hidden = true;
+    }
+    // Re-fetch cached status so the buttons reflect whatever happened
+    // (e.g., a prior Connect still on record).
+    let cached = null;
+    try {
+      cached = await tauri.core.invoke("plaud_connect_status");
+    } catch (_e) {
+      cached = null;
+    }
+    // Don't overwrite the error line — render with busy=false but skip
+    // the status-line update by restoring the error text after.
+    renderPlaudConnectionCard(cached, { busy: false });
+    if (statusEl) {
+      statusEl.textContent = `Status: ${msg}`;
+      statusEl.dataset.state = "error";
+    }
+    showToast({
+      kind: "failure",
+      title: "Connect Plaud failed",
+      body: msg,
+    });
+  }
+}
+
+async function handlePlaudCancelClick() {
+  try {
+    await tauri.core.invoke("plaud_connect_cancel");
+  } catch (err) {
+    console.warn("[connections] plaud_connect_cancel failed:", err);
+  }
+}
+
+async function handlePlaudDisconnectClick() {
+  const confirmed = window.confirm(
+    "Disconnect Plaud locally?\n\n" +
+      "This clears Threshold's cached connection status. " +
+      "Plaud tokens remain on the droplet — SSH in and delete " +
+      "/home/deploy/.plaud/tokens.json to fully revoke."
+  );
+  if (!confirmed) return;
+  try {
+    await tauri.core.invoke("plaud_disconnect_soft_clear");
+    renderPlaudConnectionCard(null, { busy: false });
+    const bannerEl = document.getElementById("plaud-disconnect-banner");
+    if (bannerEl) bannerEl.hidden = false;
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Disconnect failed",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Wire the `plaud-connect://status` event listener once, at bootstrap.
+ * Updates the progress line for every phase the Rust orchestrator emits.
+ */
+async function wirePlaudConnectStatusListener() {
+  if (!tauri || !tauri.event) return;
+  await tauri.event.listen("plaud-connect://status", (event) => {
+    const payload = event.payload || {};
+    const progressEl = document.getElementById("plaud-progress");
+    if (!progressEl) return;
+    progressEl.hidden = false;
+    progressEl.textContent = payload.message || payload.phase || "Working…";
+  });
+}
+
 // ───────── Event wiring ─────────
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -1715,6 +1926,39 @@ window.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  // WP-PLAUD-07b — Settings → Connections buttons + status event
+  // subscription. Defensive optional chaining mirrors the Plaud-queue /
+  // OneNote-browse blocks above.
+  const plaudConnectBtn = document.getElementById("btn-plaud-connect");
+  if (plaudConnectBtn) {
+    plaudConnectBtn.addEventListener("click", handlePlaudConnectClick);
+  }
+  const plaudConnectCancelBtn = document.getElementById("btn-plaud-cancel");
+  if (plaudConnectCancelBtn) {
+    plaudConnectCancelBtn.addEventListener("click", handlePlaudCancelClick);
+  }
+  const plaudDisconnectBtn = document.getElementById("btn-plaud-disconnect");
+  if (plaudDisconnectBtn) {
+    plaudDisconnectBtn.addEventListener("click", handlePlaudDisconnectClick);
+  }
+  const connectionsBackBtn = document.getElementById("btn-connections-back");
+  if (connectionsBackBtn) {
+    connectionsBackBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("widget_collapse");
+      } catch (err) {
+        console.warn("[main] widget_collapse (connections-back) failed:", err);
+      }
+    });
+  }
+  // Phase-progress events fire from the Rust orchestrator; listener is
+  // process-wide (no view-bound teardown needed — the progress element is
+  // hidden by enterConnectionsView when status updates land while the
+  // user is on a different view).
+  wirePlaudConnectStatusListener().catch((err) => {
+    console.warn("[main] wirePlaudConnectStatusListener failed:", err);
+  });
 
   // Drag-drop visuals (the actual ingestion is wired in wireBackendEvents)
   wireDragVisuals();

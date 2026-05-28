@@ -1030,3 +1030,135 @@ code {
   gap: 12px;
   padding-top: 8px;
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * WP-PLAUD-07b — Settings → Connections pane.
+ * Visual rhythm parallels .view-plaud-queue (max-width container,
+ * card hierarchy). Each card represents one Connected Recorder; v1.0
+ * ships only Plaud.
+ * ───────────────────────────────────────────────────────────────────── */
+
+.view-connections {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.connections-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connections-title {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #1d1d1f;
+  margin: 0;
+}
+
+.connections-subtitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: #86868b;
+  margin: 0;
+}
+
+.connections-card {
+  border: 1px solid #e2e2e6;
+  border-radius: 10px;
+  padding: 18px 20px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connections-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.connections-card-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d1d1f;
+  margin: 0;
+}
+
+.connections-card-tag {
+  font-size: 11px;
+  font-weight: 500;
+  color: #6e6e73;
+  background: #f5f5f7;
+  border-radius: 4px;
+  padding: 2px 6px;
+  letter-spacing: 0.02em;
+}
+
+.connections-card-status {
+  font-size: 13px;
+  color: #424245;
+  margin: 0;
+}
+
+.connections-card-status[data-state="connected"] {
+  color: #1d6b3a;
+  font-weight: 500;
+}
+
+.connections-card-status[data-state="error"] {
+  color: #b32020;
+  font-weight: 500;
+}
+
+.connections-card-progress {
+  font-size: 12px;
+  color: #6e6e73;
+  font-style: italic;
+  margin: 0;
+}
+
+.connections-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connections-card-help {
+  font-size: 12px;
+  color: #6e6e73;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.connections-card-banner {
+  font-size: 12px;
+  color: #424245;
+  background: #fff3cd;
+  border: 1px solid #ffe69c;
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.connections-card-banner code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: #fff8e1;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.connections-footer {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
