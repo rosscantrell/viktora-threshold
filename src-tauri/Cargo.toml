@@ -58,6 +58,16 @@ thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
 
+# WP-ONENOTE-EXPORT-01 — PDF text extraction for the OneNote export-watch
+# fallback path. `pdf-extract` is pure-Rust (~3MB binary impact; acceptable
+# per brief §6.1 — current bundle is ~7MB Mac / ~10MB Windows). `lopdf` is
+# already a transitive dep of pdf-extract; declared explicitly to use
+# `Document::get_pages()` for accurate page count (pdf-extract's
+# form-feed-delimited output is unreliable for the <50-chars/page
+# handwriting heuristic). Cross-platform — works on Mac, Windows, Linux.
+pdf-extract = "0.10"
+lopdf = "0.38"
+
 # WP-OCR-13 Phase A — Mac native in-process OCR via Apple Vision framework.
 # Replaces the v0.1.x subprocess to `viktora-ocr-capture`. See AC-1, D-13-02.
 # objc2-app-kit gives us NSWorkspace.frontmostApplication for sourceApp lookup

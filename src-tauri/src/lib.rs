@@ -20,6 +20,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 
+// WP-ONENOTE-EXPORT-01 — PDF text extraction for the OneNote export-watch
+// fallback path. Cross-platform (pure-Rust crates: pdf-extract + lopdf).
+mod pdf_extract;
+
 // WP-OCR-13 Phase A — Mac in-process Vision OCR (D-13-02, AC-2).
 #[cfg(target_os = "macos")]
 mod ocr_mac;
@@ -81,7 +85,10 @@ pub struct AppState {
 // Allowed plain-text extensions (D-12-05)
 // ───────────────────────────────────────────────────────────────────────────
 
-const ALLOWED_EXTENSIONS: &[&str] = &["txt", "md", "vtt", "srt", "html"];
+// WP-ONENOTE-EXPORT-01: "pdf" added for the OneNote export-watch fallback
+// path. PDFs are routed through pdf_extract::extract_pdf_text() rather than
+// `fs::read_to_string` in `ingest_one_file` because they're binary.
+const ALLOWED_EXTENSIONS: &[&str] = &["txt", "md", "vtt", "srt", "html", "pdf"];
 
 fn extension_lower(path: &Path) -> Option<String> {
     path.extension()
@@ -452,6 +459,54 @@ fn build_file_payload(path: &Path, content: &str) -> serde_json::Value {
 ///
 /// Title = first non-empty OCR line, capped at 80 chars (parallels WP-OCR-01
 /// D-OCR-11 title-derivation convention).
+/// WP-ONENOTE-EXPORT-01: Build the JSON payload for OneNote-exported PDFs
+/// ingested through the export-watch fallback path (drag-drop or Pick File).
+///
+/// Contract (per WP-OneNote-Export brief §2.4 + v1.1 patch §1.2):
+/// - `captureTool: 'onenote'` — NEW convention slug for OneNote lane
+/// - `captureMethod: 'export-import'` — distinguishes from COM-capture path
+///   (which lands in WP-EXPORT-02 as `'com-capture'`)
+/// - `sourceApp: 'onenote'` — best-effort; we don't have COM-side metadata
+///   in this path
+/// - `documentId: 'onenote-pdf-${sha8(pdf_bytes)}'` — content-hashed on the
+///   PDF bytes (NOT the extracted text) so re-saves of the same export
+///   deduplicate deterministically
+///
+/// Title = file stem (mirrors `build_file_payload`). OneNote's export
+/// preserves the page title in the PDF metadata, but we keep the simpler
+/// filename-derived path for v1 — operator can supply a better title by
+/// renaming the file before drag.
+fn build_onenote_pdf_payload(path: &Path, pdf_bytes: &[u8], text: &str) -> serde_json::Value {
+    let title = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("untitled")
+        .to_string();
+
+    // Content-hash the PDF bytes (not the extracted text) for documentId
+    // stability across pdf-extract version bumps — the user's mental model
+    // is "this exact file is one document," and bytes are the canonical
+    // identity. sha8 (first 16 hex chars) matches the prefix-+-16-hex
+    // convention from `compute_document_id` (DESKTOP-xxxxxxxxxxxxxxxx).
+    let mut hasher = Sha256::new();
+    hasher.update(pdf_bytes);
+    let result = hasher.finalize();
+    let hex_str = hex::encode(result);
+    let document_id = format!("onenote-pdf-{}", &hex_str[..16]);
+
+    serde_json::json!({
+        "documentId": document_id,
+        "title": title,
+        "content": text,
+        "sourceMetadata": {
+            "captureTool": "onenote",
+            "captureMethod": "export-import",
+            "sourceApp": "onenote",
+            "capturedAt": Utc::now().to_rfc3339()
+        }
+    })
+}
+
 fn build_screenshot_payload(text: &str, source_app: &str) -> serde_json::Value {
     let title = text
         .lines()
@@ -619,14 +674,14 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
         .unwrap_or("file")
         .to_string();
 
-    // Extension allow-list (D-12-05)
+    // Extension allow-list (D-12-05; WP-ONENOTE-EXPORT-01 added "pdf")
     if !is_allowed_extension(&path) {
         let ext = extension_lower(&path).unwrap_or_else(|| "(none)".to_string());
         return IngestionOutcome {
             kind: "failure".into(),
             title: format!("Unsupported file type: .{}", ext),
             body: Some(format!(
-                "Threshold v1 ingests plain-text formats only ({}). Skipped: {}",
+                "Threshold ingests these formats only ({}). Skipped: {}",
                 ALLOWED_EXTENSIONS.join(", "),
                 display_name
             )),
@@ -634,7 +689,14 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
         };
     }
 
-    // Read the file
+    // WP-ONENOTE-EXPORT-01: PDF lane (OneNote export-watch fallback path).
+    // Branches BEFORE `fs::read_to_string` because PDFs are binary —
+    // `read_to_string` would fail with InvalidData on the byte stream.
+    if extension_lower(&path).as_deref() == Some("pdf") {
+        return ingest_one_pdf(path, cfg, source_path, display_name).await;
+    }
+
+    // Plain-text lane (existing path; .txt/.md/.vtt/.srt/.html).
     let content = match fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => {
@@ -665,6 +727,94 @@ async fn ingest_one_file(path: PathBuf, cfg: &AppConfig) -> IngestionOutcome {
     // AppHandle in scope. `ingest_one_file` stays focused on file-level
     // ingestion shape.
     let payload = build_file_payload(&path, &content);
+    post_payload_to_apolla(payload, cfg, &display_name, source_path).await
+}
+
+/// WP-ONENOTE-EXPORT-01: PDF ingestion path (OneNote export-watch fallback).
+///
+/// Reads PDF bytes, extracts text via the pure-Rust `pdf_extract` module,
+/// and routes the result based on extraction outcome:
+/// - Extraction error → user-visible failure toast (per `PdfExtractError`
+///   variant; no Apolla side effect)
+/// - Likely handwriting (chars/page < threshold) → user-visible "skipped"
+///   toast as `failure` kind so the user knows the file did NOT land in
+///   Apolla. v1 explicitly chooses skip-with-note over send-empty-content
+///   per brief §1.3 ("do NOT silently send empty content to Apolla").
+/// - Clean extraction → POST via `build_onenote_pdf_payload`
+///   (`captureTool: 'onenote'`, `captureMethod: 'export-import'`)
+async fn ingest_one_pdf(
+    path: PathBuf,
+    cfg: &AppConfig,
+    source_path: Option<String>,
+    display_name: String,
+) -> IngestionOutcome {
+    // Read raw bytes (binary; not UTF-8).
+    let bytes = match fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("Couldn't read {}", display_name),
+                body: Some(format!("{}", e)),
+                source_path,
+            };
+        }
+    };
+
+    if bytes.is_empty() {
+        return IngestionOutcome {
+            kind: "failure".into(),
+            title: format!("Empty file: {}", display_name),
+            body: Some("File contains no bytes.".into()),
+            source_path,
+        };
+    }
+
+    // Pure-Rust extraction (pdf-extract + lopdf). See pdf_extract.rs for
+    // error taxonomy + handwriting heuristic.
+    let extraction = match pdf_extract::extract_pdf_text(&bytes) {
+        Ok(e) => e,
+        Err(err) => {
+            log::warn!(
+                "[onenote-pdf] extraction failed for {}: {}",
+                display_name,
+                err
+            );
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: err.user_message().to_string(),
+                body: Some(format!("File: {}\n\n{}", display_name, err)),
+                source_path,
+            };
+        }
+    };
+
+    // Handwriting / image-only PDFs: surface to user instead of posting
+    // empty content. v2 polish (per brief §1.3) is a Vision-OCR override
+    // toggle — not in WP-EXPORT-01 scope.
+    if extraction.is_likely_handwriting {
+        log::info!(
+            "[onenote-pdf] flagged as likely handwriting (chars/page={}, pages={}): {}",
+            extraction.chars_per_page,
+            extraction.page_count,
+            display_name
+        );
+        return IngestionOutcome {
+            kind: "failure".into(),
+            title: format!("Skipped: {} contains handwriting/images", display_name),
+            body: Some(format!(
+                "PDF appears to be mostly handwriting or images ({} chars across {} page(s)). \
+                Threshold v1 does not OCR handwriting; the file was not sent to Apolla. \
+                For typed pages, re-export from OneNote with text content; for handwriting, \
+                Vision-OCR support is planned for a future release.",
+                extraction.text.len(),
+                extraction.page_count
+            )),
+            source_path,
+        };
+    }
+
+    let payload = build_onenote_pdf_payload(&path, &bytes, &extraction.text);
     post_payload_to_apolla(payload, cfg, &display_name, source_path).await
 }
 
@@ -913,7 +1063,13 @@ async fn pick_files(app_handle: tauri::AppHandle) -> Vec<String> {
     app_handle
         .dialog()
         .file()
-        .add_filter("Plain-text formats", &["txt", "md", "vtt", "srt", "html"])
+        // WP-ONENOTE-EXPORT-01: "pdf" appended to allow drag/pick of
+        // OneNote-exported PDFs through the file picker. PDFs route through
+        // `ingest_one_pdf` for text extraction.
+        .add_filter(
+            "Supported formats",
+            &["txt", "md", "vtt", "srt", "html", "pdf"],
+        )
         .pick_files(move |paths| {
             let _ = tx.send(paths);
         });
@@ -2049,7 +2205,8 @@ mod tests {
 
     #[test]
     fn allowed_extensions_accept_lowercase() {
-        for ext in &["txt", "md", "vtt", "srt", "html"] {
+        // WP-ONENOTE-EXPORT-01: "pdf" added to support OneNote export-watch.
+        for ext in &["txt", "md", "vtt", "srt", "html", "pdf"] {
             let path = format!("test.{}", ext);
             assert!(
                 is_allowed_extension(Path::new(&path)),
@@ -2061,7 +2218,7 @@ mod tests {
 
     #[test]
     fn allowed_extensions_accept_uppercase() {
-        for ext in &["TXT", "MD", "VTT", "SRT", "HTML"] {
+        for ext in &["TXT", "MD", "VTT", "SRT", "HTML", "PDF"] {
             let path = format!("test.{}", ext);
             assert!(
                 is_allowed_extension(Path::new(&path)),
@@ -2073,7 +2230,9 @@ mod tests {
 
     #[test]
     fn allowed_extensions_reject_unsupported() {
-        for ext in &["docx", "pdf", "jpg", "png", "xlsx", "pptx"] {
+        // WP-ONENOTE-EXPORT-01: "pdf" removed from rejection list. Other
+        // binary formats remain rejected at v1.
+        for ext in &["docx", "jpg", "png", "xlsx", "pptx"] {
             let path = format!("test.{}", ext);
             assert!(
                 !is_allowed_extension(Path::new(&path)),
@@ -2087,6 +2246,90 @@ mod tests {
     fn allowed_extensions_reject_no_extension() {
         assert!(!is_allowed_extension(Path::new("README")));
         assert!(!is_allowed_extension(Path::new("path/to/file")));
+    }
+
+    // ───── WP-ONENOTE-EXPORT-01 — OneNote PDF payload shape ─────
+
+    #[test]
+    fn onenote_pdf_payload_has_correct_capture_metadata() {
+        let path = PathBuf::from("/tmp/Meeting Notes.pdf");
+        let pdf_bytes = b"%PDF-fake-bytes-for-test";
+        let text = "extracted page content";
+        let payload = build_onenote_pdf_payload(&path, pdf_bytes, text);
+
+        let meta = &payload["sourceMetadata"];
+        assert_eq!(meta["captureTool"], "onenote");
+        assert_eq!(meta["captureMethod"], "export-import");
+        assert_eq!(meta["sourceApp"], "onenote");
+        assert!(meta["capturedAt"].is_string());
+
+        assert_eq!(payload["title"], "Meeting Notes");
+        assert_eq!(payload["content"], text);
+    }
+
+    #[test]
+    fn onenote_pdf_payload_document_id_uses_bytes_not_text() {
+        // documentId is content-hashed on PDF bytes (not extracted text) so
+        // bumping pdf-extract or tweaking the extractor doesn't shift the
+        // document identity for the user.
+        let path = PathBuf::from("/tmp/page.pdf");
+        let bytes_a = b"%PDF-bytes-version-A";
+        let bytes_b = b"%PDF-bytes-version-B";
+        let same_text = "same extracted text";
+
+        let payload_a = build_onenote_pdf_payload(&path, bytes_a, same_text);
+        let payload_b = build_onenote_pdf_payload(&path, bytes_b, same_text);
+
+        assert_ne!(
+            payload_a["documentId"], payload_b["documentId"],
+            "Different bytes must produce different documentIds even with same extracted text"
+        );
+    }
+
+    #[test]
+    fn onenote_pdf_payload_document_id_is_deterministic() {
+        // Same bytes → same documentId across calls (idempotency invariant
+        // per brief §2.4 + §6.3).
+        let path = PathBuf::from("/tmp/page.pdf");
+        let bytes = b"%PDF-deterministic-bytes";
+        let p1 = build_onenote_pdf_payload(&path, bytes, "text1");
+        let p2 = build_onenote_pdf_payload(&path, bytes, "text2-differs");
+        assert_eq!(p1["documentId"], p2["documentId"]);
+    }
+
+    #[test]
+    fn onenote_pdf_payload_document_id_has_correct_prefix_and_length() {
+        let path = PathBuf::from("/tmp/page.pdf");
+        let bytes = b"%PDF-bytes";
+        let payload = build_onenote_pdf_payload(&path, bytes, "text");
+        let id = payload["documentId"].as_str().expect("string id");
+
+        assert!(
+            id.starts_with("onenote-pdf-"),
+            "expected onenote-pdf- prefix, got: {}",
+            id
+        );
+        assert_eq!(
+            id.len(),
+            "onenote-pdf-".len() + 16,
+            "expected 16 hex chars after prefix"
+        );
+        let suffix = &id["onenote-pdf-".len()..];
+        assert!(
+            suffix.chars().all(|c| c.is_ascii_hexdigit()),
+            "non-hex chars in id suffix: {}",
+            suffix
+        );
+    }
+
+    #[test]
+    fn onenote_pdf_payload_falls_back_to_untitled_for_pathless_input() {
+        // Edge case: path with no file stem. Should not panic; should emit
+        // "untitled" so the toast renders cleanly.
+        let path = PathBuf::from("/");
+        let bytes = b"%PDF-tiny";
+        let payload = build_onenote_pdf_payload(&path, bytes, "text");
+        assert_eq!(payload["title"], "untitled");
     }
 
     // ───── D-12-17 lenient response deserialization (AC-14) ─────
