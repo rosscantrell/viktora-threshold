@@ -24,6 +24,12 @@ use tauri::{Emitter, Manager};
 // fallback path. Cross-platform (pure-Rust crates: pdf-extract + lopdf).
 mod pdf_extract;
 
+// WP-ONENOTE-EXPORT-02 — Windows COM client for OneNote (GetHierarchy +
+// CurrentPageId + Publish). Cross-platform compile: the module also
+// provides a Mac/Linux stub via `#[cfg(not(target_os = "windows"))]`
+// returning `OneNoteError::PlatformUnsupported` from every function.
+mod onenote_windows;
+
 // WP-OCR-13 Phase A — Mac in-process Vision OCR (D-13-02, AC-2).
 #[cfg(target_os = "macos")]
 mod ocr_mac;
@@ -503,6 +509,58 @@ fn build_onenote_pdf_payload(path: &Path, pdf_bytes: &[u8], text: &str) -> serde
             "captureMethod": "export-import",
             "sourceApp": "onenote",
             "capturedAt": Utc::now().to_rfc3339()
+        }
+    })
+}
+
+/// WP-ONENOTE-EXPORT-02: Build the JSON payload for OneNote pages captured
+/// via the Windows COM path (`Application.Publish` → PDF → text extraction).
+///
+/// Sibling of `build_onenote_pdf_payload` (WP-EXPORT-01) — both ship
+/// `captureTool: "onenote"` so the docs-list pill renders uniformly, but
+/// the two paths use **distinct documentId keyspaces** so the same OneNote
+/// page captured both ways doesn't accidentally dedup against itself:
+///
+/// - COM path (this fn): `documentId: "onenote-${pageId}"` (deterministic
+///   per page; the GUID is stable across re-captures of the same page).
+/// - PDF path (build_onenote_pdf_payload): `documentId: "onenote-pdf-${sha8 of bytes}"`.
+///
+/// `captureMethod: "com-capture"` distinguishes from the PDF path's
+/// `"export-import"`. Per brief §2.4, the COM path additionally carries
+/// `notebookId`, `sectionId`, `pageId`, `notebookPath` so the docs-list
+/// tooltip can surface "Work / Engineering Notes" context.
+///
+/// Title comes from the OneNote page name (returned by `GetHierarchy`),
+/// NOT from a PDF file stem — the COM path has the real page title in
+/// hand and shouldn't degrade to filename-derived.
+fn build_onenote_com_payload(
+    page_meta: &onenote_windows::PageMetadata,
+    pdf_bytes: &[u8],
+    text: &str,
+) -> serde_json::Value {
+    // `pdf_bytes` is intentionally unused in the payload body itself — we
+    // POST the extracted text. The argument is kept for symmetry with
+    // `build_onenote_pdf_payload` (same call shape) and so future audit
+    // could embed a byte-hash sidecar without rewiring the caller. Marked
+    // intentionally to silence clippy without forcing an `_` rename that
+    // would obscure the symmetry.
+    let _ = pdf_bytes;
+
+    serde_json::json!({
+        "documentId": format!("onenote-{}", page_meta.page_id),
+        "title": page_meta.title,
+        "content": text,
+        "sourceMetadata": {
+            "captureTool": "onenote",
+            "captureMethod": "com-capture",
+            "sourceApp": "onenote",
+            "capturedAt": Utc::now().to_rfc3339(),
+            "notebookId": page_meta.notebook_id,
+            "notebookName": page_meta.notebook_name,
+            "sectionId": page_meta.section_id,
+            "sectionName": page_meta.section_name,
+            "pageId": page_meta.page_id,
+            "notebookPath": page_meta.notebook_path,
         }
     })
 }
@@ -1401,6 +1459,263 @@ fn urlencoding_minimal(s: &str) -> String {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-02 — OneNote COM IPC commands
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Three Tauri commands exposing the `onenote_windows` COM client to the
+// frontend + downstream WPs:
+//
+//   - `onenote_enumerate_hierarchy()`     — for WP-EXPORT-04 browse UI
+//   - `onenote_get_active_page()`         — for WP-EXPORT-03 hotkey
+//   - `onenote_export_and_ingest_page()`  — the full send flow
+//                                           (composes get_active_page +
+//                                           export_page + pdf_extract +
+//                                           build_onenote_com_payload +
+//                                           post_payload_to_apolla into
+//                                           one IPC call so WP-03/04/05
+//                                           don't each re-implement it)
+//
+// Cross-platform: each function falls through to `onenote_windows`'s
+// platform stub on Mac/Linux; the resulting `OneNoteError::PlatformUnsupported`
+// surfaces to the frontend as a structured failure outcome. Mac compile
+// stays clean.
+
+/// `onenote_get_active_page` returns this enriched envelope rather than a
+/// bare page id so the hotkey UX (WP-EXPORT-03) can show "Sending: <title>"
+/// before the send completes. The COM read for active page id is cheap; the
+/// hierarchy enrichment is cached-once-per-call.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivePageReport {
+    /// `Some` when OneNote has a page selected; `None` when no notebook is
+    /// open (caller renders "Open a OneNote notebook first" toast).
+    pub metadata: Option<onenote_windows::PageMetadata>,
+}
+
+#[tauri::command]
+async fn onenote_enumerate_hierarchy() -> Result<onenote_windows::NotebookTree, String> {
+    // COM calls are blocking; spawn off the async runtime so we don't stall
+    // the IPC executor while powershell.exe is launching.
+    tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy)
+        .await
+        .map_err(|e| format!("join error: {}", e))?
+        .map_err(|e| format!("{}", e))
+}
+
+#[tauri::command]
+async fn onenote_get_active_page() -> Result<ActivePageReport, String> {
+    let (page_id_opt, tree) = tauri::async_runtime::spawn_blocking(|| {
+        // Two sequential COM calls: cheap active-page lookup + the heavier
+        // hierarchy enumeration. We do both up-front because the UX wants
+        // the page title (which only the hierarchy carries) for the
+        // pre-send toast. The hierarchy is small enough that a single
+        // call per IPC tick is fine — WP-EXPORT-04 can layer a 15-min
+        // cache on top when bulk-browse needs it.
+        let page_id_res = onenote_windows::get_active_page();
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (page_id_res, tree_res)
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?;
+
+    let page_id = match page_id_opt {
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(ActivePageReport { metadata: None }),
+        Err(e) => return Err(format!("{}", e)),
+    };
+
+    let tree = tree.map_err(|e| format!("{}", e))?;
+    Ok(ActivePageReport {
+        metadata: onenote_windows::enrich_page_metadata(&tree, &page_id),
+    })
+}
+
+/// Full per-page capture flow: resolve `pageId` (via `get_active_page` if
+/// not supplied) → enrich via `enumerate_hierarchy` → `Application.Publish`
+/// to a temp PDF → `pdf_extract::extract_pdf_text` → POST to Apolla. WP-03
+/// (hotkey), WP-04 (bulk-send iteration), WP-05 (auto-watch) all reduce to
+/// "call this command."
+///
+/// Returns an `IngestionOutcome` so the frontend can render the same
+/// structured toast format already wired for file-upload + screen-capture.
+#[tauri::command]
+async fn onenote_export_and_ingest_page(
+    state: tauri::State<'_, AppState>,
+    page_id: Option<String>,
+) -> Result<IngestionOutcome, String> {
+    let cfg = current_config(&state)?;
+
+    // ── 1. Resolve page id + enriched metadata via COM ──────────────────
+    //
+    // Both the resolve path (no page_id supplied) and the supplied-id path
+    // need the hierarchy for `enrich_page_metadata`. Single spawn_blocking
+    // batches the COM round-trips.
+    let supplied = page_id.clone();
+    let (resolved_id, tree) = tauri::async_runtime::spawn_blocking(move || {
+        let id_res = match supplied {
+            Some(id) => Ok(Some(id)),
+            None => onenote_windows::get_active_page(),
+        };
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (id_res, tree_res)
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?;
+
+    let resolved_id = match resolved_id {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: onenote_windows::OneNoteError::NoNotebookOpen
+                    .user_message()
+                    .to_string(),
+                body: Some(
+                    "Open a OneNote notebook and select the page you want to send, then retry."
+                        .into(),
+                ),
+                source_path: None,
+            });
+        }
+        Err(e) => {
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}", e)),
+                source_path: None,
+            });
+        }
+    };
+
+    let tree = match tree {
+        Ok(t) => t,
+        Err(e) => {
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}", e)),
+                source_path: None,
+            });
+        }
+    };
+
+    let page_meta = match onenote_windows::enrich_page_metadata(&tree, &resolved_id) {
+        Some(m) => m,
+        None => {
+            // Page id wasn't in the hierarchy — most likely the page was
+            // just created or just deleted; OneNote needs a sync round-trip
+            // before it shows up. Don't fail loudly; emit a structured
+            // outcome the toast can render. v2 polish: retry after
+            // `SyncHierarchy` per the Not-Chur-Architect pattern (research
+            // §1 Claim 6).
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("OneNote page {} not found in hierarchy", resolved_id),
+                body: Some(
+                    "The page may have just been created or moved. \
+                    OneNote may need a sync round-trip before it appears."
+                        .into(),
+                ),
+                source_path: None,
+            });
+        }
+    };
+
+    // ── 2. Publish page → temp PDF on disk ──────────────────────────────
+    let tmp_dir = std::env::temp_dir();
+    let resolved_id_for_export = resolved_id.clone();
+    let tmp_dir_for_export = tmp_dir.clone();
+    let pdf_path = match tauri::async_runtime::spawn_blocking(move || {
+        onenote_windows::export_page(&resolved_id_for_export, &tmp_dir_for_export)
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}\n\nPage: {}", e, page_meta.title)),
+                source_path: None,
+            });
+        }
+    };
+
+    // ── 3. Read PDF bytes + extract text (WP-01's pdf_extract module) ────
+    //
+    // Use a struct-level guard so the temp PDF gets deleted whether
+    // extraction succeeds or fails — we've already read the bytes into
+    // memory by the time we get past `fs::read`, and the file's only
+    // useful for diagnostics from this point on.
+    let bytes = match fs::read(&pdf_path) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = fs::remove_file(&pdf_path);
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("Couldn't read exported PDF for {}", page_meta.title),
+                body: Some(format!("{}: {}", pdf_path.display(), e)),
+                source_path: None,
+            });
+        }
+    };
+
+    // Best-effort cleanup; if `remove_file` fails the temp file persists
+    // until OS-side temp cleanup. Not a correctness issue.
+    let _ = fs::remove_file(&pdf_path);
+
+    let extraction = match pdf_extract::extract_pdf_text(&bytes) {
+        Ok(e) => e,
+        Err(err) => {
+            log::warn!(
+                "[onenote-com] pdf-extract failed for page {}: {}",
+                page_meta.title,
+                err
+            );
+            return Ok(IngestionOutcome {
+                kind: "failure".into(),
+                title: err.user_message().to_string(),
+                body: Some(format!(
+                    "Page: {}\nNotebook: {}\n\n{}",
+                    page_meta.title, page_meta.notebook_path, err
+                )),
+                source_path: None,
+            });
+        }
+    };
+
+    // Handwriting / image-only pages: surface to user (same posture as the
+    // export-watch path in `ingest_one_pdf`). Vision-OCR override is v2
+    // polish per brief §1.3.
+    if extraction.is_likely_handwriting {
+        log::info!(
+            "[onenote-com] flagged as likely handwriting (chars/page={}, pages={}): {}",
+            extraction.chars_per_page,
+            extraction.page_count,
+            page_meta.title
+        );
+        return Ok(IngestionOutcome {
+            kind: "failure".into(),
+            title: format!("Skipped: {} contains handwriting/images", page_meta.title),
+            body: Some(format!(
+                "OneNote page appears to be mostly handwriting or images \
+                ({} chars across {} page(s)). Threshold v1 does not OCR \
+                handwriting; the page was not sent to Apolla.",
+                extraction.text.len(),
+                extraction.page_count
+            )),
+            source_path: None,
+        });
+    }
+
+    // ── 4. Build COM payload + POST to Apolla ───────────────────────────
+    let payload = build_onenote_com_payload(&page_meta, &bytes, &extraction.text);
+    let display_name = format!("{} ({})", page_meta.title, page_meta.notebook_path);
+    Ok(post_payload_to_apolla(payload, &cfg, &display_name, None).await)
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -2080,6 +2395,10 @@ pub fn run() {
             plaud_get_inbox,
             plaud_decide,
             plaud_ingest,
+            // WP-ONENOTE-EXPORT-02 — OneNote COM client
+            onenote_enumerate_hierarchy,
+            onenote_get_active_page,
+            onenote_export_and_ingest_page,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -2330,6 +2649,101 @@ mod tests {
         let bytes = b"%PDF-tiny";
         let payload = build_onenote_pdf_payload(&path, bytes, "text");
         assert_eq!(payload["title"], "untitled");
+    }
+
+    // ───── WP-ONENOTE-EXPORT-02 — OneNote COM payload shape ─────
+
+    fn sample_com_page_metadata() -> onenote_windows::PageMetadata {
+        onenote_windows::PageMetadata {
+            page_id: "{PG-001}".to_string(),
+            title: "Q2 Engineering Sync".to_string(),
+            notebook_id: "{NB-001}".to_string(),
+            notebook_name: "Work".to_string(),
+            section_id: "{SEC-001}".to_string(),
+            section_name: "Engineering Notes".to_string(),
+            notebook_path: "Work / Engineering Notes".to_string(),
+            last_modified_time: Some("2026-05-28T00:00:00.000Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn onenote_com_payload_has_correct_capture_metadata() {
+        let meta = sample_com_page_metadata();
+        let bytes = b"%PDF-fake-com-bytes";
+        let text = "extracted page content";
+        let payload = build_onenote_com_payload(&meta, bytes, text);
+
+        let m = &payload["sourceMetadata"];
+        assert_eq!(m["captureTool"], "onenote");
+        assert_eq!(m["captureMethod"], "com-capture");
+        assert_eq!(m["sourceApp"], "onenote");
+        assert!(m["capturedAt"].is_string());
+
+        // COM-specific metadata fields (brief §2.4)
+        assert_eq!(m["notebookId"], "{NB-001}");
+        assert_eq!(m["notebookName"], "Work");
+        assert_eq!(m["sectionId"], "{SEC-001}");
+        assert_eq!(m["sectionName"], "Engineering Notes");
+        assert_eq!(m["pageId"], "{PG-001}");
+        assert_eq!(m["notebookPath"], "Work / Engineering Notes");
+
+        assert_eq!(payload["title"], "Q2 Engineering Sync");
+        assert_eq!(payload["content"], text);
+    }
+
+    #[test]
+    fn onenote_com_payload_document_id_uses_page_id_not_byte_hash() {
+        // The COM keyspace is `onenote-{pageId}` (deterministic per page),
+        // NOT `onenote-pdf-{sha8}` (the export-watch keyspace). Distinct so
+        // the same OneNote page captured both ways doesn't accidentally
+        // dedup; per coordinator dispatch + WP-01 agent's observation #1.
+        let meta = sample_com_page_metadata();
+        let payload = build_onenote_com_payload(&meta, b"any-bytes", "any-text");
+        assert_eq!(payload["documentId"], "onenote-{PG-001}");
+    }
+
+    #[test]
+    fn onenote_com_payload_document_id_is_deterministic_across_calls() {
+        // Two calls with the same page id produce the same documentId
+        // regardless of the (possibly differing) PDF bytes / text — the
+        // user re-captures the same OneNote page, Apolla treats it as
+        // idempotent.
+        let meta = sample_com_page_metadata();
+        let p1 = build_onenote_com_payload(&meta, b"bytes-a", "text-a");
+        let p2 = build_onenote_com_payload(&meta, b"bytes-b", "text-b-different");
+        assert_eq!(p1["documentId"], p2["documentId"]);
+    }
+
+    #[test]
+    fn onenote_com_payload_document_id_differs_from_pdf_payload_keyspace() {
+        // Defensive: the COM-keyspace and PDF-keyspace shouldn't accidentally
+        // collide on a deterministic prefix.
+        let meta = sample_com_page_metadata();
+        let com_payload = build_onenote_com_payload(&meta, b"x", "x");
+        let pdf_payload =
+            build_onenote_pdf_payload(&PathBuf::from("page.pdf"), b"x", "x");
+        let com_id = com_payload["documentId"].as_str().expect("string");
+        let pdf_id = pdf_payload["documentId"].as_str().expect("string");
+        assert!(com_id.starts_with("onenote-"));
+        assert!(pdf_id.starts_with("onenote-pdf-"));
+        assert_ne!(com_id, pdf_id);
+        // No COM id should ever start with the PDF prefix (catches a
+        // future refactor that accidentally merges the keyspaces).
+        assert!(!com_id.starts_with("onenote-pdf-"));
+    }
+
+    #[test]
+    fn onenote_com_payload_notebook_path_is_human_readable() {
+        // The notebookPath is what the docs-list tooltip will show
+        // (brief §2.4); confirm it's the "Notebook / Section" format
+        // rather than a GUID concat or path-separator mishap.
+        let meta = sample_com_page_metadata();
+        let payload = build_onenote_com_payload(&meta, b"x", "x");
+        let path_str = payload["sourceMetadata"]["notebookPath"]
+            .as_str()
+            .expect("string notebookPath");
+        assert!(path_str.contains(" / "));
+        assert!(!path_str.contains('{'), "notebookPath should not contain GUIDs");
     }
 
     // ───── D-12-17 lenient response deserialization (AC-14) ─────
