@@ -336,6 +336,68 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-ONENOTE-EXPORT-04 — OneNote browse view.
+         Reached via right-click menu → "Browse OneNote…" (fires
+         widget_expand with target_tab="onenote-browse"). main.js's
+         bootstrap hash-router detects #onenote-browse and calls
+         enterOneNoteBrowseView(), which loads the notebook tree via the
+         onenote_enumerate_hierarchy IPC and renders collapsible
+         notebook → section rows. Per-section "Send all N pages" button
+         dispatches onenote_send_section(sectionId).
+
+         Progress / report UI lives in the footer; hidden until a
+         bulk-send fires, then driven by onenote-bulk-send-progress +
+         onenote-bulk-send-complete events emitted from the Rust side.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-onenote-browse" class="view view-onenote-browse" hidden>
+      <header class="onenote-browse-header">
+        <h1 class="onenote-browse-title">OneNote — Browse</h1>
+        <p class="onenote-browse-meta" id="onenote-browse-meta"></p>
+        <button type="button" id="btn-onenote-browse-refresh" class="btn btn-secondary">
+          Refresh
+        </button>
+      </header>
+
+      <div class="onenote-browse-tree" id="onenote-browse-tree">
+        <!-- Notebook → section rows rendered by enterOneNoteBrowseView in main.js.
+             Tree shape:
+               .onenote-browse-notebook
+                 .onenote-browse-notebook-header (click to expand/collapse)
+                 .onenote-browse-sections
+                   .onenote-browse-section
+                     .onenote-browse-section-name
+                     .onenote-browse-section-count
+                     .onenote-browse-section-send (button, disabled when N=0) -->
+      </div>
+
+      <p class="onenote-browse-empty" id="onenote-browse-empty" hidden>
+        No notebooks found. (OneNote COM is Windows-only — on Mac this view
+        will show an empty tree.)
+      </p>
+
+      <div class="onenote-browse-progress" id="onenote-browse-progress" hidden>
+        <div class="onenote-browse-progress-header">
+          <span class="onenote-browse-progress-status" id="onenote-browse-progress-status">
+            Sending pages…
+          </span>
+          <button type="button" id="btn-onenote-cancel-bulk" class="btn btn-secondary btn-compact">
+            Cancel
+          </button>
+        </div>
+        <div class="onenote-browse-progress-bar">
+          <div class="onenote-browse-progress-fill" id="onenote-browse-progress-fill"></div>
+        </div>
+        <p class="onenote-browse-progress-detail" id="onenote-browse-progress-detail"></p>
+      </div>
+
+      <div class="onenote-browse-footer">
+        <button type="button" id="btn-onenote-browse-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->
     <div id="drop-overlay" class="drop-overlay" hidden>

@@ -39,6 +39,24 @@ const state = {
     keyupListener: null,
     blurListener: null,
   },
+  // WP-ONENOTE-EXPORT-04 — cached notebook hierarchy for the browse view.
+  // `tree` is the NotebookTree returned by onenote_enumerate_hierarchy
+  // (camelCase serde from the Rust side: { notebooks: [{ notebookId, name,
+  // sections: [{ sectionId, name, pages: [{ pageId, name }] }] }] }).
+  // `fetchedAt` is the ms timestamp of the last successful fetch; we
+  // refresh after ONENOTE_HIERARCHY_CACHE_TTL_MS or on manual click.
+  onenoteHierarchy: {
+    tree: null,
+    fetchedAt: 0,
+  },
+  // WP-ONENOTE-EXPORT-04 — in-flight bulk-send tracker. `sectionId` is set
+  // while a bulk-send is running so the cancel button knows which section
+  // was targeted (and so we can guard against starting a second one while
+  // the Rust single-flight mutex would reject it anyway).
+  onenoteBulkSend: {
+    sectionId: null,
+    sectionName: null,
+  },
 };
 
 // Maps source_path → pending toast ID so we can dismiss the pre-flight toast
@@ -57,7 +75,21 @@ const VIEWS = [
   "view-tidbit",
   // WP-PLAUD-04a — Plaud Sync Queue
   "view-plaud-queue",
+  // WP-ONENOTE-EXPORT-04 — OneNote Browse
+  "view-onenote-browse",
 ];
+
+// ───────── WP-ONENOTE-EXPORT-04 constants ─────────
+
+// 15-min cache TTL on the notebook hierarchy (per brief §3.4). Refresh
+// triggers: first open of the view, manual click of the Refresh button,
+// or this many ms elapsed since the last successful fetch.
+const ONENOTE_HIERARCHY_CACHE_TTL_MS = 15 * 60 * 1000;
+
+// Confirm-dialog cost estimate from brief §3.4. Per-page LLM cost; surfaces
+// in the bulk-send confirm copy so the user has the right mental model
+// before clicking through.
+const ONENOTE_BULK_SEND_COST_PER_PAGE_USD = 0.005;
 
 function showView(id) {
   for (const v of VIEWS) {
@@ -126,6 +158,14 @@ async function bootstrap() {
     // Queue" item), land in the queue view.
     if (window.location.hash === "#plaud-queue") {
       enterPlaudQueueView();
+      return;
+    }
+
+    // WP-ONENOTE-EXPORT-04 — when widget_expand was invoked with
+    // target_tab="onenote-browse" (from the right-click menu's "Browse
+    // OneNote…" item), land in the browse view.
+    if (window.location.hash === "#onenote-browse") {
+      enterOneNoteBrowseView();
       return;
     }
 
@@ -215,6 +255,24 @@ async function wireBackendEvents() {
         body: String(err),
       });
     }
+  });
+
+  // WP-ONENOTE-EXPORT-04 — per-page progress events from the Rust bulk-send
+  // loop. Payload (camelCase serde): { sectionId, pageId, pageTitle,
+  // status: "started" | "succeeded" | "failed" | "cancelled",
+  // completed, total }. The handler is a no-op when the browse view's
+  // progress UI is not visible (e.g., user navigated away mid-batch); the
+  // final report still fires and surfaces via toast.
+  await tauri.event.listen("onenote-bulk-send-progress", (event) => {
+    handleOneNoteBulkSendProgress(event.payload || {});
+  });
+
+  // WP-ONENOTE-EXPORT-04 — final report at end of bulk-send. Payload:
+  // { sectionId, sectionName, total, succeeded, failed, cancelled,
+  //   errors: [pageId, msg][] }. Hides the progress UI, shows a
+  // success/failure toast summarizing the run.
+  await tauri.event.listen("onenote-bulk-send-complete", (event) => {
+    handleOneNoteBulkSendComplete(event.payload || {});
   });
 }
 
@@ -847,6 +905,415 @@ async function handlePlaudSyncNow() {
   }
 }
 
+// ───────── WP-ONENOTE-EXPORT-04 — OneNote browse view ─────────
+
+/**
+ * Enter the OneNote browse view. Loads the notebook hierarchy via the
+ * onenote_enumerate_hierarchy IPC (or reuses the cached tree if it's
+ * less than 15min old) and renders collapsible notebook → section rows.
+ *
+ * Per-section "Send all N pages" button dispatches
+ * onenote_send_section(sectionId). Progress + final-report UI is wired
+ * via the onenote-bulk-send-progress / onenote-bulk-send-complete events
+ * (see wireBackendEvents).
+ *
+ * Failure-safe: if the IPC errors (e.g., COM not available on Mac, no
+ * OneNote installed), the empty state shows and a toast surfaces the
+ * error. View still renders so the user can navigate back.
+ */
+async function enterOneNoteBrowseView() {
+  state.inWizard = false;
+  showView("view-onenote-browse");
+  // Hide any leftover progress UI from a previous bulk-send session.
+  hideOneNoteBulkSendProgress();
+  await refreshOneNoteBrowse(/* force */ false);
+}
+
+/**
+ * Re-fetch the hierarchy if cache is empty or stale; otherwise render
+ * from cache. `force=true` always re-fetches (Refresh button).
+ */
+async function refreshOneNoteBrowse(force) {
+  const treeEl = document.getElementById("onenote-browse-tree");
+  const emptyEl = document.getElementById("onenote-browse-empty");
+  const metaEl = document.getElementById("onenote-browse-meta");
+  if (!treeEl || !emptyEl || !metaEl) return;
+
+  const cached = state.onenoteHierarchy;
+  const ageMs = Date.now() - (cached.fetchedAt || 0);
+  const needFetch =
+    force || !cached.tree || ageMs > ONENOTE_HIERARCHY_CACHE_TTL_MS;
+
+  if (needFetch) {
+    metaEl.textContent = "Loading…";
+    const refreshBtn = document.getElementById("btn-onenote-browse-refresh");
+    if (refreshBtn) refreshBtn.disabled = true;
+    try {
+      const tree = await tauri.core.invoke("onenote_enumerate_hierarchy");
+      state.onenoteHierarchy = { tree, fetchedAt: Date.now() };
+    } catch (err) {
+      // Most likely paths:
+      //   - PlatformUnsupported on Mac/Linux (OneNote COM is Windows-only)
+      //   - ComClassNotRegistered (OneNote not installed or UWP variant)
+      //   - NoNotebookOpen (OneNote running but no notebook loaded)
+      // All map to the same UX: empty state visible, toast surfaces detail.
+      treeEl.innerHTML = "";
+      emptyEl.hidden = false;
+      metaEl.textContent = "";
+      showToast({
+        kind: "failure",
+        title: "Couldn't load OneNote notebooks",
+        body: String(err),
+      });
+      if (refreshBtn) refreshBtn.disabled = false;
+      return;
+    }
+    if (refreshBtn) refreshBtn.disabled = false;
+  }
+
+  renderOneNoteBrowse(state.onenoteHierarchy.tree);
+}
+
+/**
+ * Render the notebook tree. Vanilla createElement + textContent throughout
+ * (matches enterPlaudQueueView's pattern — no innerHTML for OneNote-supplied
+ * strings, which can contain anything the user typed).
+ */
+function renderOneNoteBrowse(tree) {
+  const treeEl = document.getElementById("onenote-browse-tree");
+  const emptyEl = document.getElementById("onenote-browse-empty");
+  const metaEl = document.getElementById("onenote-browse-meta");
+  if (!treeEl || !emptyEl || !metaEl) return;
+
+  treeEl.innerHTML = "";
+
+  const notebooks = Array.isArray(tree?.notebooks) ? tree.notebooks : [];
+  if (notebooks.length === 0) {
+    emptyEl.hidden = false;
+    metaEl.textContent = "";
+    return;
+  }
+  emptyEl.hidden = true;
+
+  // Header meta: total notebook + page counts.
+  let totalSections = 0;
+  let totalPages = 0;
+  for (const nb of notebooks) {
+    const sections = Array.isArray(nb.sections) ? nb.sections : [];
+    totalSections += sections.length;
+    for (const sec of sections) {
+      totalPages += Array.isArray(sec.pages) ? sec.pages.length : 0;
+    }
+  }
+  metaEl.textContent =
+    `${notebooks.length} notebook${notebooks.length === 1 ? "" : "s"}` +
+    ` · ${totalSections} section${totalSections === 1 ? "" : "s"}` +
+    ` · ${totalPages} page${totalPages === 1 ? "" : "s"}`;
+
+  for (const notebook of notebooks) {
+    treeEl.appendChild(renderOneNoteNotebook(notebook));
+  }
+}
+
+function renderOneNoteNotebook(notebook) {
+  const nb = document.createElement("div");
+  nb.className = "onenote-browse-notebook";
+  nb.dataset.notebookId = notebook.notebookId || "";
+  // First notebook collapsed by default? No — expand all so a small
+  // demo notebook reads at a glance. User can collapse if dense.
+  nb.dataset.expanded = "true";
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "onenote-browse-notebook-header";
+
+  const chevron = document.createElement("span");
+  chevron.className = "onenote-browse-notebook-chevron";
+  chevron.textContent = "▶";
+  header.appendChild(chevron);
+
+  const name = document.createElement("span");
+  name.className = "onenote-browse-notebook-name";
+  name.textContent = notebook.name || "Untitled notebook";
+  header.appendChild(name);
+
+  const sections = Array.isArray(notebook.sections) ? notebook.sections : [];
+  const totalPages = sections.reduce(
+    (sum, s) => sum + (Array.isArray(s.pages) ? s.pages.length : 0),
+    0,
+  );
+
+  const count = document.createElement("span");
+  count.className = "onenote-browse-notebook-count";
+  count.textContent =
+    `${sections.length} section${sections.length === 1 ? "" : "s"}` +
+    ` · ${totalPages} page${totalPages === 1 ? "" : "s"}`;
+  header.appendChild(count);
+
+  header.addEventListener("click", () => {
+    nb.dataset.expanded = nb.dataset.expanded === "true" ? "false" : "true";
+  });
+  nb.appendChild(header);
+
+  const sectionsEl = document.createElement("div");
+  sectionsEl.className = "onenote-browse-sections";
+  for (const section of sections) {
+    sectionsEl.appendChild(renderOneNoteSection(section));
+  }
+  nb.appendChild(sectionsEl);
+
+  return nb;
+}
+
+function renderOneNoteSection(section) {
+  const row = document.createElement("div");
+  row.className = "onenote-browse-section";
+  row.dataset.sectionId = section.sectionId || "";
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "onenote-browse-section-name";
+  nameEl.textContent = section.name || "Untitled section";
+  row.appendChild(nameEl);
+
+  const pageCount = Array.isArray(section.pages) ? section.pages.length : 0;
+  const countEl = document.createElement("span");
+  countEl.className = "onenote-browse-section-count";
+  countEl.textContent = `${pageCount} page${pageCount === 1 ? "" : "s"}`;
+  row.appendChild(countEl);
+
+  const sendBtn = document.createElement("button");
+  sendBtn.type = "button";
+  sendBtn.className = "btn btn-secondary btn-compact onenote-browse-section-send";
+  sendBtn.textContent =
+    pageCount === 0 ? "No pages" : `Send all ${pageCount} page${pageCount === 1 ? "" : "s"}`;
+  sendBtn.disabled = pageCount === 0;
+  if (pageCount > 0) {
+    sendBtn.addEventListener("click", () =>
+      handleOneNoteSendSection(section, pageCount),
+    );
+  }
+  row.appendChild(sendBtn);
+
+  return row;
+}
+
+/**
+ * Per-section "Send all N pages" handler. Confirms the LLM cost with the
+ * user (brief §3.4 AC: "Confirm dialog shows estimated LLM cost"), then
+ * dispatches onenote_send_section(sectionId). Progress UI + final report
+ * are driven by the onenote-bulk-send-progress / onenote-bulk-send-complete
+ * events wired in wireBackendEvents.
+ */
+async function handleOneNoteSendSection(section, pageCount) {
+  // Guard against concurrent bulk-sends. The Rust single-flight mutex
+  // would short-circuit with a structured failure report, but we may as
+  // well not paper-over the UX.
+  if (state.onenoteBulkSend.sectionId) {
+    showToast({
+      kind: "failure",
+      title: "Another bulk send is already running",
+      body: "Wait for it to finish or cancel it first.",
+    });
+    return;
+  }
+
+  const sectionName = section.name || "this section";
+  const estCostUsd = (pageCount * ONENOTE_BULK_SEND_COST_PER_PAGE_USD).toFixed(2);
+  const confirmMsg =
+    `Send all ${pageCount} page${pageCount === 1 ? "" : "s"} in "${sectionName}"?\n\n` +
+    `Estimated cost ~$${ONENOTE_BULK_SEND_COST_PER_PAGE_USD.toFixed(3)} per page ` +
+    `(~$${estCostUsd} total).\n\n` +
+    `Continue?`;
+  if (!window.confirm(confirmMsg)) return;
+
+  // Track the in-flight section so the progress handler can drive the UI
+  // and the cancel button has the right context.
+  state.onenoteBulkSend = {
+    sectionId: section.sectionId,
+    sectionName: sectionName,
+  };
+  showOneNoteBulkSendProgress(sectionName, pageCount);
+
+  try {
+    // Returns the same BulkSendReport that gets emitted on the
+    // onenote-bulk-send-complete event; we rely on the event handler to
+    // drive the UI (so the active-section dispatch path from the widget
+    // menu — which doesn't await this IPC — gets the same handling). The
+    // try here is just for the IPC-level error (config missing, etc.) —
+    // per-page errors get aggregated in the BulkSendReport.
+    await tauri.core.invoke("onenote_send_section", {
+      sectionId: section.sectionId,
+    });
+    // Final UI cleanup happens in handleOneNoteBulkSendComplete.
+  } catch (err) {
+    // IPC-level error (e.g., config missing, hierarchy enum failed).
+    // Clear the in-flight tracker + UI; surface via toast.
+    state.onenoteBulkSend = { sectionId: null, sectionName: null };
+    hideOneNoteBulkSendProgress();
+    showToast({
+      kind: "failure",
+      title: `Couldn't send section: ${sectionName}`,
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Cancel button handler — invokes the Rust cancel flag. The bulk-send
+ * loop checks the flag between pages; in-flight Publish + POST on the
+ * current page completes (per brief §3.4 AC).
+ */
+async function handleOneNoteCancelBulkSend() {
+  try {
+    await tauri.core.invoke("onenote_cancel_bulk_send");
+    // Update the progress text to reflect the pending cancel; the
+    // final-report event will fire when the loop exits.
+    const statusEl = document.getElementById("onenote-browse-progress-status");
+    if (statusEl) statusEl.textContent = "Cancelling…";
+    const cancelBtn = document.getElementById("btn-onenote-cancel-bulk");
+    if (cancelBtn) cancelBtn.disabled = true;
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Cancel failed",
+      body: String(err),
+    });
+  }
+}
+
+/**
+ * Refresh button — drop the cache + re-fetch.
+ */
+async function handleOneNoteBrowseRefresh() {
+  state.onenoteHierarchy = { tree: null, fetchedAt: 0 };
+  await refreshOneNoteBrowse(/* force */ true);
+}
+
+/**
+ * Show the progress UI band with initial 0/N state. Called when a
+ * bulk-send starts (handleOneNoteSendSection); the per-page event
+ * handler updates the bar + detail line.
+ */
+function showOneNoteBulkSendProgress(sectionName, total) {
+  const progressEl = document.getElementById("onenote-browse-progress");
+  const statusEl = document.getElementById("onenote-browse-progress-status");
+  const fillEl = document.getElementById("onenote-browse-progress-fill");
+  const detailEl = document.getElementById("onenote-browse-progress-detail");
+  const cancelBtn = document.getElementById("btn-onenote-cancel-bulk");
+  if (!progressEl) return;
+  progressEl.hidden = false;
+  if (statusEl) statusEl.textContent = `Sending pages from "${sectionName}"…`;
+  if (fillEl) fillEl.style.width = "0%";
+  if (detailEl) detailEl.textContent = `0 / ${total}`;
+  if (cancelBtn) cancelBtn.disabled = false;
+}
+
+function hideOneNoteBulkSendProgress() {
+  const progressEl = document.getElementById("onenote-browse-progress");
+  if (progressEl) progressEl.hidden = true;
+}
+
+/**
+ * Per-page progress event handler. Updates the progress bar + detail line.
+ * No-op when the browse view isn't visible (user navigated away mid-batch).
+ */
+function handleOneNoteBulkSendProgress(payload) {
+  const { sectionId, pageTitle, status, completed, total } = payload;
+  // Only render when the event is for the section we're tracking. The
+  // active-section dispatch (from the widget menu) may fire while a
+  // different section's progress is on screen — extremely unlikely but
+  // worth guarding.
+  if (!state.onenoteBulkSend.sectionId) return;
+  if (state.onenoteBulkSend.sectionId !== sectionId) return;
+
+  const fillEl = document.getElementById("onenote-browse-progress-fill");
+  const detailEl = document.getElementById("onenote-browse-progress-detail");
+  if (total > 0 && fillEl) {
+    const pct = Math.min(100, Math.round((completed / total) * 100));
+    fillEl.style.width = `${pct}%`;
+  }
+  if (detailEl) {
+    const label =
+      status === "started"
+        ? "Sending"
+        : status === "succeeded"
+          ? "Sent"
+          : status === "failed"
+            ? "Failed"
+            : status === "cancelled"
+              ? "Cancelled"
+              : status;
+    detailEl.textContent = `${completed} / ${total} · ${label}: ${pageTitle || ""}`;
+  }
+}
+
+/**
+ * Final-report event handler. Hides the progress UI, shows a toast
+ * summarizing the run (success / partial-failure / cancelled).
+ */
+function handleOneNoteBulkSendComplete(payload) {
+  const { sectionId, sectionName, total, succeeded, failed, cancelled, errors } = payload;
+  // Only handle events for the section we're tracking (or — defensively
+  // — any event when our tracker is unset, in case a menu-dispatched
+  // active-section run lands while the view is open). Always clear the
+  // tracker on any complete event we receive.
+  const isOurs =
+    !state.onenoteBulkSend.sectionId ||
+    state.onenoteBulkSend.sectionId === sectionId;
+
+  if (isOurs) {
+    state.onenoteBulkSend = { sectionId: null, sectionName: null };
+    hideOneNoteBulkSendProgress();
+  }
+
+  // Build a summary toast. Brief §3.4 AC: "Cancel button stops further
+  // sends mid-batch (in-flight POST completes)." Idempotency: re-running
+  // bulk-send on the same section produces identical documentIds → Apolla
+  // treats as update; we render that as success here.
+  const name = sectionName || "section";
+  if (cancelled > 0 && succeeded === 0 && failed === 0) {
+    showToast({
+      kind: "idempotent",
+      title: `Cancelled: ${name}`,
+      body: `${cancelled} page${cancelled === 1 ? "" : "s"} not sent.`,
+    });
+  } else if (failed > 0 && succeeded === 0) {
+    showToast({
+      kind: "failure",
+      title: `Bulk send failed: ${name}`,
+      body: errorSummary(errors) || `${failed} of ${total} failed.`,
+    });
+  } else if (failed > 0 || cancelled > 0) {
+    showToast({
+      kind: "idempotent",
+      title: `Partial: ${name}`,
+      body:
+        `${succeeded} succeeded` +
+        (failed > 0 ? `, ${failed} failed` : "") +
+        (cancelled > 0 ? `, ${cancelled} cancelled` : "") +
+        ` out of ${total}.`,
+    });
+  } else {
+    showToast({
+      kind: "success",
+      title: `Sent: ${name}`,
+      body: `${succeeded} page${succeeded === 1 ? "" : "s"} ingested.`,
+    });
+  }
+}
+
+function errorSummary(errors) {
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  // errors is Array<[pageId, message]> from the Rust Vec<(String,String)>.
+  // Show the first error message; remainder hidden in the structured
+  // toast body (could surface in a "Show details" follow-up in v2).
+  const first = errors[0];
+  const msg = Array.isArray(first) ? first[1] : String(first);
+  return errors.length === 1
+    ? msg
+    : `${msg} (+${errors.length - 1} more)`;
+}
+
 // ───────── Capture flows ─────────
 
 async function handleUploadFile() {
@@ -1073,6 +1540,28 @@ window.addEventListener("DOMContentLoaded", () => {
         await tauri.core.invoke("widget_collapse");
       } catch (err) {
         console.warn("[main] widget_collapse (plaud-back) failed:", err);
+      }
+    });
+  }
+
+  // WP-ONENOTE-EXPORT-04 — OneNote Browse view buttons. Defensive optional
+  // chaining (same posture as the Plaud block) so older index.html builds
+  // that lack these elements don't break bootstrap.
+  const onenoteRefreshBtn = document.getElementById("btn-onenote-browse-refresh");
+  if (onenoteRefreshBtn) {
+    onenoteRefreshBtn.addEventListener("click", handleOneNoteBrowseRefresh);
+  }
+  const onenoteCancelBtn = document.getElementById("btn-onenote-cancel-bulk");
+  if (onenoteCancelBtn) {
+    onenoteCancelBtn.addEventListener("click", handleOneNoteCancelBulkSend);
+  }
+  const onenoteBackBtn = document.getElementById("btn-onenote-browse-back");
+  if (onenoteBackBtn) {
+    onenoteBackBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("widget_collapse");
+      } catch (err) {
+        console.warn("[main] widget_collapse (onenote-back) failed:", err);
       }
     });
   }
