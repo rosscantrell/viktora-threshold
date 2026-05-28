@@ -724,6 +724,226 @@ pub fn export_page(_page_id: &str, _output_dir: &Path) -> Result<PathBuf, OneNot
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-05 — auto-watch tracker (pure data + decision helpers)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Per brief §3.5: the polling loop calls `get_active_page` every 2s; once
+// the same `pageId` has been observed for ≥10s consecutive AND has not
+// been sent in this session, the loop fires the send flow. Per-session
+// dedup is intra-process (HashSet cleared on app restart). Counter
+// resets at midnight local time.
+//
+// The data + decision logic lives here (pure / synchronous / no Tauri
+// dep) so it can be unit-tested cross-platform and so the lib.rs loop
+// is a thin "poll → tracker.observe → maybe fire" wrapper.
+
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+/// WP-ONENOTE-EXPORT-05 — debounce window. Per brief §3.5: same page
+/// must be observed for ≥10s consecutive before auto-send fires.
+pub const AUTO_WATCH_STABLE_WINDOW: Duration = Duration::from_secs(10);
+
+/// WP-ONENOTE-EXPORT-05 — polling cadence. Per brief §3.5 + research
+/// §8 (2s for active-page check; per-tick cost dominated by
+/// powershell.exe startup ~50-150ms).
+pub const AUTO_WATCH_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Outcome of a single `observe()` call on the tracker. The polling loop
+/// consumes this to decide whether to fire the send flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoWatchAction {
+    /// No-op: page hasn't been stable for the debounce window yet (or
+    /// is already sent for this session, or no notebook is open).
+    Wait,
+    /// Fire the send flow for this page. The loop should call
+    /// `mark_sent(page_id)` on success.
+    FireSend(String),
+}
+
+/// WP-ONENOTE-EXPORT-05 — auto-watch state tracker.
+///
+/// Three responsibilities:
+///   1. Track the current observed page id + the time it was first
+///      observed (debounce gate).
+///   2. Maintain a per-session dedup `HashSet<PageId>` — re-visiting an
+///      already-sent page in the same session does NOT re-send (per
+///      brief §3.5 AC predicate).
+///   3. Track "Sent today: N pages" counter with midnight-local reset.
+///
+/// `Instant`-based debounce (monotonic; immune to wall-clock skew).
+/// `chrono::NaiveDate` for the today-date comparison (calendar-aware;
+/// uses local time per brief §3.5 "counter resets midnight local time").
+///
+/// All methods are synchronous + take `&mut self` — the polling loop
+/// holds a single tracker behind a `Mutex` in lib.rs.
+#[derive(Debug, Clone)]
+pub struct AutoWatchTracker {
+    /// Page id last returned by `get_active_page()`. `None` when no
+    /// notebook is open (or before the first observation).
+    last_observed_page_id: Option<String>,
+    /// Monotonic instant the current `last_observed_page_id` was first
+    /// observed. Reset on page change. `None` when no page has been
+    /// observed yet.
+    first_observed_at: Option<Instant>,
+    /// Per-session dedup. Cleared on app restart (not persisted to
+    /// disk per brief §3.5; "session" = process lifetime).
+    sent_this_session: HashSet<String>,
+    /// Today's count of successfully auto-sent pages. Resets at
+    /// midnight local time via `today_date` comparison.
+    sent_today_count: usize,
+    /// Local calendar date the `sent_today_count` was last incremented
+    /// on. When `observe()` or `mark_sent()` notices a different date,
+    /// the counter resets to 0 before incrementing.
+    today_date: Option<chrono::NaiveDate>,
+    /// Total sent in this session (across midnight rollovers). Reset
+    /// only on app restart. Surfaced in the AutoWatchStatus IPC for
+    /// the Configure pane diagnostic display.
+    sent_total_session: usize,
+}
+
+impl Default for AutoWatchTracker {
+    fn default() -> Self {
+        Self {
+            last_observed_page_id: None,
+            first_observed_at: None,
+            sent_this_session: HashSet::new(),
+            sent_today_count: 0,
+            today_date: None,
+            sent_total_session: 0,
+        }
+    }
+}
+
+impl AutoWatchTracker {
+    /// Construct a fresh tracker. Equivalent to `Default::default()`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Per-tick observation. Caller polls `get_active_page()` (or its
+    /// equivalent) every `AUTO_WATCH_POLL_INTERVAL` and feeds the
+    /// result here.
+    ///
+    /// `current_page_id`:
+    ///   - `Some(id)` — OneNote has a page selected (id may match or
+    ///     differ from `last_observed_page_id`).
+    ///   - `None` — no notebook open. Resets the debounce tracker so
+    ///     we don't accidentally "carry forward" the stale page id
+    ///     across notebook-close → notebook-reopen transitions.
+    ///
+    /// `now` is plumbed in for testability (production code passes
+    /// `Instant::now()`; tests pass synthetic instants).
+    ///
+    /// Returns `AutoWatchAction::FireSend(page_id)` when ALL of:
+    ///   - same `current_page_id` has been observed for `>=` the
+    ///     debounce window
+    ///   - the page id is NOT in `sent_this_session`
+    /// Otherwise returns `AutoWatchAction::Wait`.
+    pub fn observe(&mut self, current_page_id: Option<&str>, now: Instant) -> AutoWatchAction {
+        let id = match current_page_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                // No notebook open (or empty page id) — reset the
+                // debounce tracker. Don't clear `sent_this_session`
+                // (still the same session; re-opening a previously-
+                // sent page should still dedup).
+                self.last_observed_page_id = None;
+                self.first_observed_at = None;
+                return AutoWatchAction::Wait;
+            }
+        };
+
+        // Did the page change since the last observation?
+        match &self.last_observed_page_id {
+            Some(prev) if prev == id => {
+                // Same page. Don't update first_observed_at.
+            }
+            _ => {
+                // Different page (or first observation). Reset the
+                // debounce timer.
+                self.last_observed_page_id = Some(id.to_string());
+                self.first_observed_at = Some(now);
+                return AutoWatchAction::Wait;
+            }
+        }
+
+        // Debounce window check.
+        let elapsed = match self.first_observed_at {
+            Some(start) => now.saturating_duration_since(start),
+            None => return AutoWatchAction::Wait,
+        };
+        if elapsed < AUTO_WATCH_STABLE_WINDOW {
+            return AutoWatchAction::Wait;
+        }
+
+        // Stable for the window. Already sent this session?
+        if self.sent_this_session.contains(id) {
+            return AutoWatchAction::Wait;
+        }
+
+        AutoWatchAction::FireSend(id.to_string())
+    }
+
+    /// Record a successful auto-send. Adds the page id to the per-
+    /// session dedup set + increments the today counter (with midnight-
+    /// reset bookkeeping). Idempotent — re-calling for the same page id
+    /// in the same session is a no-op on the counter (won't double-
+    /// count) but does re-insert the id (HashSet is set-like).
+    ///
+    /// `today` is plumbed in for testability (production code passes
+    /// `chrono::Local::now().date_naive()`).
+    pub fn mark_sent(&mut self, page_id: &str, today: chrono::NaiveDate) {
+        // Idempotency guard: if we've already marked this page id sent
+        // in this session, don't double-count. (Defensive — the loop
+        // checks `contains` before firing, but the per-call guard
+        // makes the API safe to call from anywhere.)
+        if !self.sent_this_session.insert(page_id.to_string()) {
+            return;
+        }
+
+        // Midnight reset for sent_today_count.
+        match self.today_date {
+            Some(prev) if prev == today => {
+                self.sent_today_count += 1;
+            }
+            _ => {
+                // New day (or first send) — reset the counter to 1
+                // (this very send is the first of the new day).
+                self.today_date = Some(today);
+                self.sent_today_count = 1;
+            }
+        }
+        self.sent_total_session += 1;
+    }
+
+    /// Read-only accessor for the IPC status report.
+    pub fn sent_today(&self) -> usize {
+        self.sent_today_count
+    }
+
+    /// Read-only accessor for the IPC status report.
+    pub fn sent_total_session(&self) -> usize {
+        self.sent_total_session
+    }
+
+    /// Reset the per-session dedup set + counters. Called when auto-
+    /// watch is toggled off → on again so the user can re-send a
+    /// previously-auto-sent page by toggling the feature.
+    /// NOT called by the polling loop itself — the per-session
+    /// semantics in the brief are explicit ("resets on next session").
+    #[allow(dead_code)] // Exposed for future use; not wired in v1.
+    pub fn reset_session(&mut self) {
+        self.sent_this_session.clear();
+        self.last_observed_page_id = None;
+        self.first_observed_at = None;
+        // Don't reset sent_today_count or sent_total_session —
+        // they're calendar / process-lifetime scoped, not "session"
+        // scoped per the brief.
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Unit tests — exercise the pure functions (XML parsing, stdout parsing,
 // metadata enrichment, error semantics) on every platform.
 // ───────────────────────────────────────────────────────────────────────────
@@ -1067,5 +1287,207 @@ mod tests {
         assert!(script.contains("'a''b'"));
         assert!(script.contains("'C:\\d''d'"));
         assert!(script.contains("'e''e'"));
+    }
+
+    // ───── WP-ONENOTE-EXPORT-05 — AutoWatchTracker (pure-fn debounce + dedup) ─────
+    //
+    // All tests are cross-platform (the tracker has no PowerShell/COM
+    // dependency). Run on Mac CI + Windows CI without `#[cfg]` gating.
+
+    use chrono::NaiveDate;
+    use std::time::{Duration, Instant};
+
+    fn date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).expect("valid date")
+    }
+
+    #[test]
+    fn auto_watch_constants_match_brief() {
+        // Brief §3.5: 2s poll, 10s debounce. Lock to these values via
+        // unit test so a refactor can't silently drift the cadence.
+        assert_eq!(AUTO_WATCH_POLL_INTERVAL, Duration::from_secs(2));
+        assert_eq!(AUTO_WATCH_STABLE_WINDOW, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn auto_watch_observe_returns_wait_on_first_observation() {
+        let mut t = AutoWatchTracker::new();
+        let now = Instant::now();
+        assert_eq!(t.observe(Some("{PG-1}"), now), AutoWatchAction::Wait);
+    }
+
+    #[test]
+    fn auto_watch_observe_fires_after_stable_window() {
+        let mut t = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        // Tick 0: first observation — Wait.
+        assert_eq!(t.observe(Some("{PG-1}"), t0), AutoWatchAction::Wait);
+        // Tick 1: 2s in — still inside debounce window.
+        assert_eq!(
+            t.observe(Some("{PG-1}"), t0 + Duration::from_secs(2)),
+            AutoWatchAction::Wait
+        );
+        // Tick 4: 8s in — still inside.
+        assert_eq!(
+            t.observe(Some("{PG-1}"), t0 + Duration::from_secs(8)),
+            AutoWatchAction::Wait
+        );
+        // Tick 5: 10s in — fire.
+        assert_eq!(
+            t.observe(Some("{PG-1}"), t0 + Duration::from_secs(10)),
+            AutoWatchAction::FireSend("{PG-1}".to_string())
+        );
+    }
+
+    #[test]
+    fn auto_watch_observe_resets_debounce_on_page_change() {
+        let mut t = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        // Observe page A for 8s.
+        t.observe(Some("{PG-A}"), t0);
+        t.observe(Some("{PG-A}"), t0 + Duration::from_secs(8));
+        // Switch to page B at t=9s.
+        assert_eq!(
+            t.observe(Some("{PG-B}"), t0 + Duration::from_secs(9)),
+            AutoWatchAction::Wait
+        );
+        // 9s later (t=18s total), still not stable on B (only 9s elapsed
+        // since first observation of B).
+        assert_eq!(
+            t.observe(Some("{PG-B}"), t0 + Duration::from_secs(18)),
+            AutoWatchAction::Wait
+        );
+        // 10s after first observation of B (t=19s total) — fire.
+        assert_eq!(
+            t.observe(Some("{PG-B}"), t0 + Duration::from_secs(19)),
+            AutoWatchAction::FireSend("{PG-B}".to_string())
+        );
+    }
+
+    #[test]
+    fn auto_watch_observe_skips_already_sent_in_session() {
+        let mut t = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        // Observe + fire page A.
+        t.observe(Some("{PG-A}"), t0);
+        assert_eq!(
+            t.observe(Some("{PG-A}"), t0 + Duration::from_secs(10)),
+            AutoWatchAction::FireSend("{PG-A}".to_string())
+        );
+        t.mark_sent("{PG-A}", date(2026, 5, 28));
+        // Continue observing A — should NOT re-fire.
+        assert_eq!(
+            t.observe(Some("{PG-A}"), t0 + Duration::from_secs(15)),
+            AutoWatchAction::Wait
+        );
+        assert_eq!(
+            t.observe(Some("{PG-A}"), t0 + Duration::from_secs(120)),
+            AutoWatchAction::Wait
+        );
+    }
+
+    #[test]
+    fn auto_watch_observe_resets_on_no_notebook_open() {
+        let mut t = AutoWatchTracker::new();
+        let t0 = Instant::now();
+        // Observe page A for 8s.
+        t.observe(Some("{PG-A}"), t0);
+        t.observe(Some("{PG-A}"), t0 + Duration::from_secs(8));
+        // User closes the notebook — None means reset.
+        assert_eq!(
+            t.observe(None, t0 + Duration::from_secs(9)),
+            AutoWatchAction::Wait
+        );
+        // Re-opening page A at t=12s — debounce restarts; not stable
+        // for 10s yet (only just started).
+        assert_eq!(
+            t.observe(Some("{PG-A}"), t0 + Duration::from_secs(12)),
+            AutoWatchAction::Wait
+        );
+        // 10s after re-open (t=22s total) — fire.
+        assert_eq!(
+            t.observe(Some("{PG-A}"), t0 + Duration::from_secs(22)),
+            AutoWatchAction::FireSend("{PG-A}".to_string())
+        );
+    }
+
+    #[test]
+    fn auto_watch_observe_treats_empty_string_as_no_notebook() {
+        // Defensive: parse_active_page_stdout returns None for empty
+        // input but a defensive caller might pass Some("") instead of
+        // None. Treat both the same.
+        let mut t = AutoWatchTracker::new();
+        let now = Instant::now();
+        assert_eq!(t.observe(Some(""), now), AutoWatchAction::Wait);
+        assert_eq!(t.observe(Some(""), now + Duration::from_secs(20)), AutoWatchAction::Wait);
+    }
+
+    #[test]
+    fn auto_watch_mark_sent_increments_counter_same_day() {
+        let mut t = AutoWatchTracker::new();
+        let today = date(2026, 5, 28);
+        assert_eq!(t.sent_today(), 0);
+        t.mark_sent("{PG-1}", today);
+        assert_eq!(t.sent_today(), 1);
+        t.mark_sent("{PG-2}", today);
+        assert_eq!(t.sent_today(), 2);
+        t.mark_sent("{PG-3}", today);
+        assert_eq!(t.sent_today(), 3);
+        assert_eq!(t.sent_total_session(), 3);
+    }
+
+    #[test]
+    fn auto_watch_mark_sent_resets_counter_at_midnight() {
+        let mut t = AutoWatchTracker::new();
+        let d1 = date(2026, 5, 28);
+        let d2 = date(2026, 5, 29);
+        t.mark_sent("{PG-1}", d1);
+        t.mark_sent("{PG-2}", d1);
+        assert_eq!(t.sent_today(), 2);
+        // Date rolls over — counter resets to 1 (this send is the
+        // first of the new day).
+        t.mark_sent("{PG-3}", d2);
+        assert_eq!(t.sent_today(), 1);
+        // sent_total_session keeps accumulating across the rollover.
+        assert_eq!(t.sent_total_session(), 3);
+        // Two more on the new day → counter 3.
+        t.mark_sent("{PG-4}", d2);
+        t.mark_sent("{PG-5}", d2);
+        assert_eq!(t.sent_today(), 3);
+        assert_eq!(t.sent_total_session(), 5);
+    }
+
+    #[test]
+    fn auto_watch_mark_sent_is_idempotent_per_page() {
+        let mut t = AutoWatchTracker::new();
+        let today = date(2026, 5, 28);
+        t.mark_sent("{PG-1}", today);
+        t.mark_sent("{PG-1}", today); // idempotent; no double-count
+        t.mark_sent("{PG-1}", today);
+        assert_eq!(t.sent_today(), 1);
+        assert_eq!(t.sent_total_session(), 1);
+    }
+
+    #[test]
+    fn auto_watch_reset_session_clears_dedup_but_preserves_counter() {
+        let mut t = AutoWatchTracker::new();
+        let today = date(2026, 5, 28);
+        let t0 = Instant::now();
+        // Fire + mark sent.
+        t.observe(Some("{PG-1}"), t0);
+        t.observe(Some("{PG-1}"), t0 + Duration::from_secs(10));
+        t.mark_sent("{PG-1}", today);
+        assert_eq!(t.sent_today(), 1);
+
+        t.reset_session();
+        // Counter preserved (calendar-day scope, not session scope).
+        assert_eq!(t.sent_today(), 1);
+        assert_eq!(t.sent_total_session(), 1);
+        // Dedup set cleared → page becomes re-sendable.
+        t.observe(Some("{PG-1}"), t0 + Duration::from_secs(20));
+        assert_eq!(
+            t.observe(Some("{PG-1}"), t0 + Duration::from_secs(30)),
+            AutoWatchAction::FireSend("{PG-1}".to_string())
+        );
     }
 }

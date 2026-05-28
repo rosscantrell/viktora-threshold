@@ -169,6 +169,16 @@ pub struct AppConfig {
     /// field continue to work (additive-only schema delta).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub onenote_hotkey: Option<String>,
+    /// WP-ONENOTE-EXPORT-05 — opt-in auto-watch mode. When `true`,
+    /// Threshold polls OneNote's active page every 2s; once the same
+    /// page has been observed for ≥10s consecutive AND has not yet been
+    /// sent in this session, it auto-fires the same send flow as the
+    /// hotkey / menu item. Default `false` (opt-in per brief §2.3 +
+    /// §3.5 — "Configure pane toggle defaulted OFF"). `#[serde(default)]`
+    /// (via the struct-level attribute) means existing configs without
+    /// this field deserialize cleanly as `false`.
+    #[serde(default)]
+    pub auto_watch: bool,
 }
 
 impl Default for AppConfig {
@@ -181,6 +191,7 @@ impl Default for AppConfig {
             widget_x: None,
             widget_y: None,
             onenote_hotkey: None,
+            auto_watch: false,
         }
     }
 }
@@ -4098,6 +4109,7 @@ mod tests {
             widget_x: Some(1820),
             widget_y: Some(980),
             onenote_hotkey: None,
+            auto_watch: false,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4159,6 +4171,7 @@ mod tests {
             widget_x: None,
             widget_y: None,
             onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
+            auto_watch: false,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
