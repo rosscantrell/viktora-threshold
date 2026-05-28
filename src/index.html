@@ -182,6 +182,35 @@
             </span>
             <span class="field-help" id="onenote-hotkey-capture-status" hidden></span>
           </label>
+
+          <!-- WP-ONENOTE-EXPORT-05 — auto-watch toggle + live counter.
+               Toggle defaults OFF per brief §3.5 (opt-in only — first-week
+               LLM-cost protection from risk #4). Hooked to the
+               `onenote_set_auto_watch` IPC on change for immediate
+               start/stop of the polling loop AND inclusion in `auto_watch`
+               on the Save payload so it persists. The status line below
+               polls `onenote_auto_watch_status` every 30s while the
+               Configure pane is visible (and on toggle change). -->
+          <label class="field">
+            <span class="field-label">
+              <input
+                type="checkbox"
+                id="config-onenote-auto-watch"
+                aria-label="Auto-send OneNote pages I view"
+              />
+              Auto-send pages I view in OneNote (5-10s after last change)
+            </span>
+            <span class="field-help">
+              When on, Threshold watches the page you're viewing in OneNote and
+              sends it to Apolla automatically after you've dwelled on it for
+              about 10 seconds (cross-recording dedup means each page sends
+              at most once per session). Windows-only — the toggle is safe to
+              flip on Mac but won't fire any sends.
+            </span>
+            <span class="field-help" id="config-onenote-auto-watch-status">
+              Auto-watch off
+            </span>
+          </label>
         </fieldset>
 
         <div class="actions">

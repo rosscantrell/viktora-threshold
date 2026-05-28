@@ -57,7 +57,18 @@ const state = {
     sectionId: null,
     sectionName: null,
   },
+  // WP-ONENOTE-EXPORT-05 — periodic refresh handle for the auto-watch
+  // status line in the Configure pane. Set when the Configure view is
+  // shown; cleared when it's hidden (avoid background polling when the
+  // status display isn't visible to the user).
+  onenoteAutoWatchStatusInterval: null,
 };
+
+// WP-ONENOTE-EXPORT-05 — refresh cadence for the Configure-pane status
+// line. The Rust polling loop ticks every 2s but the status display
+// doesn't need sub-second freshness; 30s strikes a balance between
+// staleness and per-tick IPC cost (a tracker mutex lock + struct clone).
+const ONENOTE_AUTO_WATCH_STATUS_REFRESH_MS = 30 * 1000;
 
 // Maps source_path → pending toast ID so we can dismiss the pre-flight toast
 // when the response toast arrives. Screen captures use the special key
@@ -98,6 +109,14 @@ function showView(id) {
     if (v === id) el.removeAttribute("hidden");
     else el.setAttribute("hidden", "");
   }
+  // WP-ONENOTE-EXPORT-05 — tear down the auto-watch status refresh loop
+  // when navigating away from the Configure pane. The enterWizard/Standalone
+  // Configure handlers re-start it on view-enter; this single chokepoint
+  // covers every navigation path away (Save, Cancel, widget_collapse,
+  // hash-driven routing to Plaud/OneNote-browse/tidbit, etc.).
+  if (id !== "view-configure") {
+    stopAutoWatchStatusRefresh();
+  }
 }
 
 // ───────── Bootstrap ─────────
@@ -134,6 +153,17 @@ async function bootstrap() {
       hotkeyEl.value = (cfg.onenote_hotkey && cfg.onenote_hotkey.trim())
         ? cfg.onenote_hotkey
         : DEFAULT_ONENOTE_HOTKEY;
+    }
+
+    // WP-ONENOTE-EXPORT-05 — hydrate the auto-watch toggle from the
+    // persisted AppConfig. `auto_watch` is `bool` on the Rust side
+    // (#[serde(default)] so legacy configs without the field deserialize
+    // as `false`). The Rust startup hook in setup() already starts the
+    // polling loop when this is true; the toggle UI just mirrors the
+    // current state.
+    const autoWatchEl = document.getElementById("config-onenote-auto-watch");
+    if (autoWatchEl) {
+      autoWatchEl.checked = !!cfg.auto_watch;
     }
 
     // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
@@ -292,6 +322,11 @@ function enterWizardConfigure() {
   document.getElementById("btn-back-to-main").setAttribute("hidden", "");
   document.getElementById("btn-save").textContent = "Next";
   showView("view-configure");
+  // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
+  // refresh so the counter line below the toggle stays current while
+  // the Configure pane is visible. Safe in the wizard path too (the
+  // status line just reads "Auto-watch off" pre-first-toggle).
+  startAutoWatchStatusRefresh();
   document.getElementById("config-base-url").focus();
 }
 
@@ -316,6 +351,10 @@ function enterStandaloneConfigure() {
   document.getElementById("btn-back-to-main").removeAttribute("hidden");
   document.getElementById("btn-save").textContent = "Save";
   showView("view-configure");
+  // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
+  // refresh so the counter line below the toggle stays current while
+  // the Configure pane is visible.
+  startAutoWatchStatusRefresh();
   document.getElementById("config-base-url").focus();
 }
 
@@ -381,12 +420,21 @@ async function handleSave(e) {
   // re-registration of the global shortcut when the value changes.
   const hotkeyEl = document.getElementById("config-onenote-hotkey");
   const onenoteHotkey = hotkeyEl ? hotkeyEl.value.trim() : "";
+  // WP-ONENOTE-EXPORT-05 — include the auto-watch flag in the save
+  // payload. Defaults to false (toggle off) when the element is missing
+  // (defensive against older index.html builds, same pattern as the
+  // optional hotkey block). The toggle's change listener already drove
+  // `onenote_set_auto_watch` for instant feedback; this round-trip just
+  // keeps the full-config save_config IPC's view of disk consistent.
+  const autoWatchEl = document.getElementById("config-onenote-auto-watch");
+  const autoWatch = autoWatchEl ? autoWatchEl.checked : false;
   const config = {
     base_url: baseUrl,
     bearer_token: bearerToken,
     last_used: null,
     mode: "workspace",
     onenote_hotkey: onenoteHotkey || null,
+    auto_watch: autoWatch,
   };
 
   try {
@@ -404,6 +452,100 @@ async function handleSave(e) {
     enterWizardDone(config);
   } else {
     enterMainView(config);
+  }
+}
+
+// ───────── WP-ONENOTE-EXPORT-05 — auto-watch toggle + status refresh ─────────
+
+/**
+ * Refresh the auto-watch status display in the Configure pane.
+ *
+ * Invokes `onenote_auto_watch_status` and rewrites the inline status
+ * text below the toggle. Called: (a) on Configure-pane open, (b) right
+ * after a toggle change for instant feedback, (c) on a 30s interval
+ * while the Configure pane is visible.
+ *
+ * Wire shape (camelCase per AutoWatchStatus serde rename):
+ *   { enabled, sentToday, sentTotalSession, distinctPagesSent,
+ *     debouncingPageId? }
+ *
+ * Failure-safe: if the IPC errors (e.g., tracker mutex poisoned), the
+ * status line stays at whatever it was last; no toast spam.
+ */
+async function refreshAutoWatchStatus() {
+  const statusEl = document.getElementById("config-onenote-auto-watch-status");
+  if (!statusEl) return;
+  try {
+    const status = await tauri.core.invoke("onenote_auto_watch_status");
+    if (!status || !status.enabled) {
+      statusEl.textContent = "Auto-watch off";
+      return;
+    }
+    const n = status.sentToday || 0;
+    statusEl.textContent = n === 1
+      ? "Sent today: 1 page"
+      : `Sent today: ${n} pages`;
+  } catch (err) {
+    console.warn("[main] onenote_auto_watch_status failed:", err);
+    // Leave the status line at its prior value; don't blank it on error.
+  }
+}
+
+/**
+ * Begin the periodic status-refresh loop. Idempotent: clears any prior
+ * interval before starting a new one. Called when the Configure view is
+ * shown.
+ */
+function startAutoWatchStatusRefresh() {
+  stopAutoWatchStatusRefresh();
+  // Immediate refresh so the user sees a current value on view-enter,
+  // not a 30s-stale one from the previous mount.
+  refreshAutoWatchStatus();
+  state.onenoteAutoWatchStatusInterval = setInterval(
+    refreshAutoWatchStatus,
+    ONENOTE_AUTO_WATCH_STATUS_REFRESH_MS,
+  );
+}
+
+/**
+ * Stop the periodic status-refresh loop. Idempotent. Called when the
+ * Configure view is hidden (any other view enter).
+ */
+function stopAutoWatchStatusRefresh() {
+  if (state.onenoteAutoWatchStatusInterval) {
+    clearInterval(state.onenoteAutoWatchStatusInterval);
+    state.onenoteAutoWatchStatusInterval = null;
+  }
+}
+
+/**
+ * Change-handler for the auto-watch toggle. Drives the Rust polling
+ * loop immediately (don't wait for Save) for instant UX feedback.
+ * Reverts the toggle state if the IPC fails so the UI doesn't drift
+ * from disk.
+ *
+ * The IPC also persists `auto_watch` to AppConfig on disk, so the
+ * Save button isn't required to keep the toggle state — it's
+ * equivalent to clicking Save with only this field changed. The full
+ * `handleSave` payload still includes `auto_watch` (so a Save click
+ * after a toggle is byte-equal to the on-disk state and doesn't drift).
+ */
+async function handleAutoWatchToggle(e) {
+  const checked = e.target.checked;
+  try {
+    await tauri.core.invoke("onenote_set_auto_watch", { enabled: checked });
+    // Refresh status display immediately so the line updates from
+    // "Auto-watch off" → "Sent today: 0 pages" (or vice versa).
+    refreshAutoWatchStatus();
+  } catch (err) {
+    console.error("[main] onenote_set_auto_watch failed:", err);
+    // Revert the toggle so the UI doesn't drift from on-disk state.
+    e.target.checked = !checked;
+    showToast({
+      kind: "failure",
+      title: "Could not toggle OneNote auto-watch",
+      body: String(err),
+    });
   }
 }
 
@@ -1520,6 +1662,14 @@ window.addEventListener("DOMContentLoaded", () => {
   document
     .getElementById("btn-back-to-main")
     .addEventListener("click", () => enterMainView(state.lastConfig));
+
+  // WP-ONENOTE-EXPORT-05 — auto-watch toggle drives the Rust polling
+  // loop immediately on change (don't wait for Save). Defensive optional
+  // chaining for older index.html builds that lack the element.
+  const autoWatchEl = document.getElementById("config-onenote-auto-watch");
+  if (autoWatchEl) {
+    autoWatchEl.addEventListener("change", handleAutoWatchToggle);
+  }
 
   // Capture flows
   document.getElementById("btn-upload-file").addEventListener("click", handleUploadFile);
