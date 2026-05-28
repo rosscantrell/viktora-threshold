@@ -1033,7 +1033,12 @@ mod tests {
     #[test]
     fn ps_get_active_page_uses_currentpageid_and_handles_null_window() {
         let script = imp::PS_GET_ACTIVE_PAGE;
-        assert!(script.contains("Windows.CurrentWindow"));
+        // Script uses an intermediate `$windows` variable for proper COM
+        // RCW release in the `finally` block (can't `ReleaseComObject` an
+        // unnamed chained accessor). So the literal `Windows.CurrentWindow`
+        // substring won't appear; assert each property access separately.
+        assert!(script.contains(".Windows"));
+        assert!(script.contains(".CurrentWindow"));
         assert!(script.contains("CurrentPageId"));
         assert!(script.contains("NO_NOTEBOOK_OPEN"));
         assert!(script.contains("ReleaseComObject"));
