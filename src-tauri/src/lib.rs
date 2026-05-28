@@ -30,6 +30,14 @@ mod pdf_extract;
 // returning `OneNoteError::PlatformUnsupported` from every function.
 mod onenote_windows;
 
+// WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
+// Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
+// PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
+// then POSTs the minted tokens to /api/plaud/connect on the configured
+// droplet (WP-PLAUD-07a). Pure helpers are `pub` for the byte-equivalence
+// tests in tests/plaud_oauth_tests.rs.
+pub mod plaud_oauth;
+
 // WP-OCR-13 Phase A — Mac in-process Vision OCR (D-13-02, AC-2).
 #[cfg(target_os = "macos")]
 mod ocr_mac;
@@ -210,6 +218,14 @@ pub struct AppConfig {
     /// this field deserialize cleanly as `false`.
     #[serde(default)]
     pub auto_watch: bool,
+    /// WP-PLAUD-07b — local cached "Plaud Connected" status, set on every
+    /// successful `plaud_connect_start` and cleared by the soft-clear
+    /// Disconnect button. UX hint only — the droplet's
+    /// `/home/deploy/.plaud/tokens.json` is authoritative. Optional +
+    /// skip-serializing-if-none so legacy configs deserialize cleanly
+    /// (additive-only schema delta — same pattern as widget_x / widget_y).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plaud_connect: Option<plaud_oauth::PlaudConnectStatus>,
 }
 
 impl Default for AppConfig {
@@ -223,6 +239,7 @@ impl Default for AppConfig {
             widget_y: None,
             onenote_hotkey: None,
             auto_watch: false,
+            plaud_connect: None,
         }
     }
 }
@@ -1638,6 +1655,159 @@ async fn plaud_ingest(
     resp.json::<PlaudIngestResult>()
         .await
         .map_err(|e| format!("plaud_ingest: parse response failed: {}", e))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-PLAUD-07b — Plaud Connect (Settings → Connections)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// IPC surface for the Threshold-mediated Plaud OAuth bootstrap. The full
+// PKCE flow + droplet POST lives in `plaud_oauth.rs`; these commands are
+// thin wrappers that thread Tauri state (config, app handle for emitting
+// status events, cancel sender) into and out of the orchestrator.
+//
+// Naming follows the brief's suggested commands (`plaud_connect_start` /
+// `_cancel` / `_status`) plus an explicit `plaud_disconnect_soft_clear` for
+// the v1.0 scope-cut Disconnect path (server-side `/api/plaud/disconnect`
+// is WP-PLAUD-07d, named-not-specced).
+
+/// Holds the cancel side of the in-flight Connect flow's oneshot. Single
+/// slot — concurrent `plaud_connect_start` calls fail fast rather than
+/// stomp each other. Cleared back to `None` when the orchestrator
+/// completes (success or failure).
+static PLAUD_CONNECT_CANCEL: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
+
+/// Frontend-visible outcome of `plaud_connect_start`. Echoes the local
+/// cached status the IPC just wrote into AppConfig so the UI doesn't need
+/// a follow-up `plaud_connect_status` round-trip on the happy path.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaudConnectResult {
+    pub status: plaud_oauth::PlaudConnectStatus,
+}
+
+#[tauri::command]
+async fn plaud_connect_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<PlaudConnectResult, String> {
+    let cfg = current_config(&state)?;
+    if cfg.base_url.trim().is_empty() || cfg.bearer_token.trim().is_empty() {
+        return Err(
+            "Threshold isn't configured yet — open Settings, fill in your Apolla URL and bearer token, then try Connect Plaud again."
+                .into(),
+        );
+    }
+
+    // Claim the in-flight slot. If a previous Connect is still running,
+    // fail fast — the user can click Cancel on the existing flow first.
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+    {
+        let mut guard = PLAUD_CONNECT_CANCEL
+            .lock()
+            .map_err(|e| format!("connect-cancel mutex poisoned: {}", e))?;
+        if guard.is_some() {
+            return Err("Connect Plaud is already in progress — finish or cancel that attempt first.".into());
+        }
+        *guard = Some(cancel_tx);
+    }
+
+    let app_for_emit = app.clone();
+    let emit_status = move |evt: plaud_oauth::PlaudConnectStatusEvent| {
+        if let Err(e) = app_for_emit.emit("plaud-connect://status", &evt) {
+            log::warn!("plaud-connect://status emit failed: {}", e);
+        }
+    };
+
+    let inputs = plaud_oauth::ConnectInputs {
+        base_url: cfg.base_url.clone(),
+        bearer: cfg.bearer_token.clone(),
+        emit_status,
+        cancel_rx,
+        browser_opener: plaud_oauth::BrowserOpener::Default(app.clone()),
+    };
+
+    let outcome = plaud_oauth::run_connect_flow(inputs).await;
+
+    // Release the in-flight slot regardless of outcome.
+    {
+        let mut guard = PLAUD_CONNECT_CANCEL
+            .lock()
+            .map_err(|e| format!("connect-cancel mutex poisoned: {}", e))?;
+        *guard = None;
+    }
+
+    match outcome {
+        Ok(success) => {
+            // Persist local cached status (UX hint). The droplet is the
+            // source of truth; this just lets the Settings → Connections
+            // pane render "Connected" on next open without a round-trip.
+            let now = Utc::now().to_rfc3339();
+            let new_status = plaud_oauth::PlaudConnectStatus {
+                connected_at: now,
+                expires_at: success
+                    .server_expires_at
+                    .or(success.tokens.expires_at),
+                posted_to: Some(cfg.base_url.clone()),
+            };
+            {
+                let mut guard = state.config.lock().expect("config mutex poisoned");
+                let mut next = guard.clone().unwrap_or_default();
+                next.plaud_connect = Some(new_status.clone());
+                if let Err(e) = save_config_to_disk(&next) {
+                    log::warn!("plaud_connect_start: save_config_to_disk failed: {}", e);
+                }
+                *guard = Some(next);
+            }
+            log::info!("plaud_connect_start success");
+            Ok(PlaudConnectResult { status: new_status })
+        }
+        Err(err) => {
+            log::warn!("plaud_connect_start failed: {}", err);
+            Err(err.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+fn plaud_connect_cancel() -> Result<(), String> {
+    let mut guard = PLAUD_CONNECT_CANCEL
+        .lock()
+        .map_err(|e| format!("connect-cancel mutex poisoned: {}", e))?;
+    if let Some(tx) = guard.take() {
+        // Receiver may have already finished — ignore the SendError that
+        // returns; either way the slot is now empty.
+        let _ = tx.send(());
+        log::info!("plaud_connect_cancel: cancel signal sent");
+    } else {
+        log::debug!("plaud_connect_cancel: no in-flight flow to cancel");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn plaud_connect_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<plaud_oauth::PlaudConnectStatus>, String> {
+    let guard = state.config.lock().expect("config mutex poisoned");
+    Ok(guard.as_ref().and_then(|c| c.plaud_connect.clone()))
+}
+
+#[tauri::command]
+fn plaud_disconnect_soft_clear(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let mut guard = state.config.lock().expect("config mutex poisoned");
+    let mut next = guard.clone().unwrap_or_default();
+    if next.plaud_connect.is_some() {
+        next.plaud_connect = None;
+        if let Err(e) = save_config_to_disk(&next) {
+            log::warn!("plaud_disconnect_soft_clear: save_config_to_disk failed: {}", e);
+        }
+        *guard = Some(next);
+        log::info!("plaud_disconnect_soft_clear: local cached status cleared");
+    }
+    Ok(())
 }
 
 /// Minimal path-segment encoding for Plaud recording IDs (32-char hex on the
@@ -3157,6 +3327,10 @@ const MENU_ONENOTE_SEND_SECTION: &str = "menu.onenote_send_section";
 /// the notebook → section → page tree and per-section "Send all N pages"
 /// buttons that dispatch to `onenote_send_section`.
 const MENU_ONENOTE_BROWSE: &str = "menu.onenote_browse";
+/// WP-PLAUD-07b — opens the Settings → Connections pane. Same
+/// widget_expand mechanism as Plaud-queue / Settings; URL fragment
+/// routes main.js's bootstrap to enterConnectionsView().
+const MENU_CONNECTIONS: &str = "menu.connections";
 /// WP-ONENOTE-EXPORT-05 — disabled menu item that surfaces the live
 /// "Sent today: N pages" counter from the auto-watch loop. Disabled
 /// (un-clickable) per brief §3.5 — it's a visual indicator, not an
@@ -3230,6 +3404,10 @@ fn build_widget_menu(
     )?;
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    // WP-PLAUD-07b — Connections sits with Settings (workspace controls).
+    // Lives below Settings so the high-frequency capture/send items stay
+    // at the top of the menu.
+    let connections = MenuItem::with_id(app, MENU_CONNECTIONS, "Connections…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
 
@@ -3257,6 +3435,7 @@ fn build_widget_menu(
                 &onenote_autowatch_counter,
                 &expand,
                 &settings,
+                &connections,
                 &sep2,
                 &quit,
                 &sep_dev,
@@ -3991,6 +4170,11 @@ pub fn run() {
             plaud_get_inbox,
             plaud_decide,
             plaud_ingest,
+            // WP-PLAUD-07b — Threshold-mediated Plaud Connect
+            plaud_connect_start,
+            plaud_connect_cancel,
+            plaud_connect_status,
+            plaud_disconnect_soft_clear,
             // WP-ONENOTE-EXPORT-02 — OneNote COM client
             onenote_enumerate_hierarchy,
             onenote_get_active_page,
@@ -4050,6 +4234,18 @@ pub fn run() {
                             Some("configure".into()),
                         ) {
                             log::warn!("menu settings failed: {e}");
+                        }
+                    }
+                    MENU_CONNECTIONS => {
+                        // WP-PLAUD-07b — open the Settings → Connections
+                        // pane. main.js's bootstrap hash-router calls
+                        // enterConnectionsView() when it sees #connections.
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("connections".into()),
+                        ) {
+                            log::warn!("menu connections failed: {e}");
                         }
                     }
                     MENU_PLAUD_QUEUE => {
@@ -4456,6 +4652,7 @@ mod tests {
             widget_y: Some(980),
             onenote_hotkey: None,
             auto_watch: false,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4518,6 +4715,7 @@ mod tests {
             widget_y: None,
             onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
             auto_watch: false,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4555,6 +4753,7 @@ mod tests {
             widget_y: None,
             onenote_hotkey: None,
             auto_watch: true,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         // The auto_watch field must appear in serialized JSON (no

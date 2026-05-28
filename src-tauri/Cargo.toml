@@ -1,6 +1,6 @@
 [package]
 name = "viktora-threshold"
-version = "0.5.0"
+version = "0.6.0"
 description = "Viktora Threshold — Mac + Windows desktop capture app for Apolla workspaces (WP-OCR-12 + WP-OCR-13)"
 authors = ["Ross Cantrell"]
 edition = "2021"
@@ -73,6 +73,15 @@ lopdf = "0.38"
 # transitive dep of Tauri at this version (verified via Cargo.lock at
 # impl-time) — declaring directly is zero bundle-size impact.
 quick-xml = "0.37"
+
+# WP-PLAUD-07b — PKCE bootstrap for the Threshold-mediated Plaud Connect
+# flow (Settings → Connections). `base64` for the URL-safe-no-pad encoding
+# Node's `Buffer.toString('base64url')` produces; `rand` (already a
+# transitive dep through reqwest/getrandom) is declared directly so the
+# CSPRNG path is grep-able from the OAuth module. Both crates are pure-Rust;
+# bundle-size impact is sub-100KB.
+base64 = "0.22"
+rand = "0.8"
 
 # WP-ONENOTE-EXPORT-03 — global hotkey for the OneNote send-current-page
 # flow (default Ctrl+Shift+O, user-configurable via Configure pane). Plugin

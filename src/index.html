@@ -427,6 +427,68 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-PLAUD-07b — Settings → Connections pane.
+         Reached via right-click menu → "Connections…" (fires widget_expand
+         with target_tab="connections"). main.js's bootstrap hash-router
+         detects #connections and calls enterConnectionsView(), which reads
+         local cached status via plaud_connect_status and renders the
+         Plaud card.
+
+         v1.0 ships a single Plaud card; future Connected Recorder
+         providers (Limitless / Otter / Granola — brief §1.4 v2 deferral)
+         would each get their own card on this same surface.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-connections" class="view view-connections" hidden>
+      <header class="connections-header">
+        <h1 class="connections-title">Connections</h1>
+        <p class="connections-subtitle">Connected Recorders &amp; integrations.</p>
+      </header>
+
+      <div class="connections-card" id="connection-plaud">
+        <div class="connections-card-header">
+          <h2 class="connections-card-title">Plaud</h2>
+          <span class="connections-card-tag">Connected Recorder</span>
+        </div>
+
+        <p class="connections-card-status" id="plaud-status">
+          Status: Not connected
+        </p>
+
+        <p class="connections-card-progress" id="plaud-progress" hidden></p>
+
+        <div class="connections-card-actions">
+          <button type="button" id="btn-plaud-connect" class="btn btn-primary">
+            Connect Plaud
+          </button>
+          <button type="button" id="btn-plaud-cancel" class="btn btn-secondary" hidden>
+            Cancel
+          </button>
+          <button type="button" id="btn-plaud-disconnect" class="btn btn-secondary" hidden>
+            Disconnect
+          </button>
+        </div>
+
+        <p class="connections-card-help" id="plaud-help">
+          Connect Plaud to have new recordings show up in your Apolla Plaud
+          queue automatically. Sign-in happens in your default browser; no
+          credentials touch this app.
+        </p>
+
+        <p class="connections-card-banner" id="plaud-disconnect-banner" hidden>
+          Local status cleared. Plaud tokens are still on the droplet — SSH in
+          and delete <code>/home/deploy/.plaud/tokens.json</code> to fully
+          revoke.
+        </p>
+      </div>
+
+      <div class="connections-footer">
+        <button type="button" id="btn-connections-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->
     <div id="drop-overlay" class="drop-overlay" hidden>
