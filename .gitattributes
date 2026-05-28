@@ -1,0 +1,28 @@
+# Binary file types — prevent Git's autocrlf=true (Windows default) from
+# converting LF→CRLF inside binary file streams.
+#
+# Triggered by WP-OneNote-Export-01 CI failure 2026-05-28: lopdf parses
+# PDFs byte-exact; CRLF conversion corrupts the PDF trailer block on
+# Windows clones, producing `Corrupted("Parse(InvalidTrailer)")` errors
+# in the WP-EXPORT-01 pdf_extract test fixtures.
+#
+# Mac CI passes (no autocrlf); Windows CI fails the same tests on the
+# same commit. Marking these extensions binary is the canonical fix.
+
+# PDFs (added 2026-05-28 — was the immediate trigger)
+*.pdf binary
+
+# Image formats — Threshold ships icons; same risk pattern
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+
+# Bundle / executable formats — for shipped artifacts
+*.dmg binary
+*.exe binary
+*.dll binary
+*.msi binary
+*.app binary
