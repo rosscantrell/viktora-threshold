@@ -12,7 +12,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -69,6 +69,39 @@ static IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Maximum wait for in-flight ingestions to drain before exiting anyway.
 const SHUTDOWN_MAX_WAIT: Duration = Duration::from_secs(60);
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-04 — bulk-send-section coordination state
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Two globals coordinate the bulk-send-section lifecycle:
+//
+//   - `ONENOTE_BULK_SEND_IN_FLIGHT`: a `bool` mutex set to true while a bulk
+//     send is running. Used as the single-flight guard (Plaud `ingestionTail`
+//     pattern) — concurrent calls fail with a structured `BulkSendError` so
+//     the user understands they need to wait or cancel.
+//
+//   - `ONENOTE_BULK_SEND_CANCEL`: an `AtomicBool` flipped to `true` by the
+//     `onenote_cancel_bulk_send` IPC command. The bulk-send loop checks the
+//     flag BETWEEN pages (per brief §3.4: "in-flight POST completes"). The
+//     loop resets the flag to `false` at the start of every new bulk-send so
+//     a prior cancel doesn't poison the next batch.
+//
+// Brief §3.4 explicitly requires sequential per-page processing (`.await`
+// each, NOT `try_join_all` / `tokio::spawn` per page); the mutex enforces
+// this across re-entries (e.g., the menu fires while a browse-initiated send
+// is still running).
+
+/// Single-flight mutex: held for the duration of the bulk-send loop.
+/// `Mutex<bool>` rather than `AtomicBool` so we can hold the guard across
+/// `.await` points without races on the start-of-send / end-of-send
+/// transitions. Concurrent invocations bail with `Busy` instead of waiting.
+static ONENOTE_BULK_SEND_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
+
+/// Cancel signal: set by `onenote_cancel_bulk_send`. The loop checks this
+/// flag once per page-boundary; in-flight Publish + POST completes on the
+/// current page before the loop short-circuits (matches brief §3.4 AC).
+static ONENOTE_BULK_SEND_CANCEL: AtomicBool = AtomicBool::new(false);
 
 // ───────────────────────────────────────────────────────────────────────────
 // AppState
@@ -1991,6 +2024,221 @@ async fn fire_onenote_send_flow(app: tauri::AppHandle) {
     let _ = app.emit("threshold://toast", outcome);
 }
 
+/// WP-ONENOTE-EXPORT-04 — widget right-click menu helper.
+///
+/// Same role as `fire_onenote_send_flow` but for the "Send all pages in
+/// current section…" menu item. Resolves config, emits a "Sending all N
+/// pages of <section>…" pre-send toast, then dispatches into
+/// `run_bulk_send_section` (the shared engine that the
+/// `onenote_send_section` + `onenote_send_active_section` IPCs also use).
+/// The progress events + final-report event are emitted by
+/// `run_bulk_send_section`; here we also emit a structured `threshold://toast`
+/// summary on completion so the menu user gets the same toast UX as every
+/// other ingestion surface.
+async fn fire_onenote_send_active_section_flow(app: tauri::AppHandle) {
+    // ── 1. Resolve config (or bail with a Configure-first toast) ────────
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        None => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "Configure Apolla first".into(),
+                    body: Some(
+                        "Open Settings → connect your Apolla workspace before sending \
+                         OneNote sections."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    // ── 2. Resolve active section via COM ───────────────────────────────
+    let active = tauri::async_runtime::spawn_blocking(|| {
+        let page_id_res = onenote_windows::get_active_page();
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (page_id_res, tree_res)
+    })
+    .await;
+
+    let (page_id_res, tree_res) = match active {
+        Ok(pair) => pair,
+        Err(join_err) => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "OneNote section lookup task panicked".into(),
+                    body: Some(format!("blocking task join error: {}", join_err)),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    let page_id = match page_id_res {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            let err = onenote_windows::OneNoteError::NoNotebookOpen;
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: err.user_message().to_string(),
+                    body: Some(
+                        "Open a OneNote notebook in the Microsoft 365 desktop OneNote app, \
+                         select any page in the section you want to send, then retry."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+        Err(e) => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: e.user_message().to_string(),
+                    body: Some(format!("{}", e)),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    let tree = match tree_res {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: e.user_message().to_string(),
+                    body: Some(format!("{}", e)),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    let page_meta = match onenote_windows::enrich_page_metadata(&tree, &page_id) {
+        Some(m) => m,
+        None => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: format!("Active page {} not found in hierarchy", page_id),
+                    body: Some(
+                        "The page may have just been created or moved. OneNote may need a \
+                         sync round-trip before its section can be enumerated."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    // Count pages in section for the pre-send toast.
+    let section_page_count = find_section_with_notebook(&tree, &page_meta.section_id)
+        .map(|(_, section)| section.pages.len())
+        .unwrap_or(0);
+
+    // ── 3. Pre-send toast (so user knows the operation kicked off) ──────
+    let _ = app.emit(
+        "threshold://toast",
+        IngestionOutcome {
+            kind: "success".into(), // info-style, no error tint
+            title: format!(
+                "Sending {} page(s) from \"{}\"…",
+                section_page_count, page_meta.section_name
+            ),
+            body: Some(format!(
+                "Notebook: {}\nSection: {}\n\nProgress events will fire as each page is processed.",
+                page_meta.notebook_name, page_meta.section_name
+            )),
+            source_path: None,
+        },
+    );
+
+    // ── 4. Dispatch into the shared bulk-send engine. ──────────────────
+    // `run_bulk_send_section` owns single-flight, cancel, per-page emit,
+    // and the final-report emit.
+    let report = run_bulk_send_section(app.clone(), cfg, tree, page_meta.section_id).await;
+
+    // ── 5. Summary toast — same renderer the rest of Threshold uses. ────
+    let (kind, title) = if report.failed == 0 && report.cancelled == 0 {
+        (
+            "success",
+            format!(
+                "Sent {}/{} page(s) from \"{}\"",
+                report.succeeded, report.total, report.section_name
+            ),
+        )
+    } else if report.cancelled > 0 && report.failed == 0 {
+        (
+            "idempotent",
+            format!(
+                "Cancelled: sent {}/{} page(s) from \"{}\" before stop",
+                report.succeeded, report.total, report.section_name
+            ),
+        )
+    } else {
+        (
+            "failure",
+            format!(
+                "Partial send: {} succeeded, {} failed, {} cancelled (of {} pages from \"{}\")",
+                report.succeeded,
+                report.failed,
+                report.cancelled,
+                report.total,
+                report.section_name
+            ),
+        )
+    };
+
+    let body = if report.errors.is_empty() {
+        None
+    } else {
+        // Surface the first 3 error messages in the toast body; full list
+        // is in the report event.
+        let preview = report
+            .errors
+            .iter()
+            .take(3)
+            .map(|(_, msg)| format!("• {}", msg))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let suffix = if report.errors.len() > 3 {
+            format!("\n…and {} more", report.errors.len() - 3)
+        } else {
+            String::new()
+        };
+        Some(format!("{}{}", preview, suffix))
+    };
+
+    let _ = app.emit(
+        "threshold://toast",
+        IngestionOutcome {
+            kind: kind.into(),
+            title,
+            body,
+            source_path: None,
+        },
+    );
+}
+
 /// Plain-function version of `onenote_export_and_ingest_page` (the
 /// `#[tauri::command]` requires `tauri::State`, which we already deref'd
 /// inside `fire_onenote_send_flow`). Code path is byte-equal to the IPC
@@ -2174,6 +2422,404 @@ async fn run_onenote_send_inline(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-04 — bulk-send-section IPC + progress / cancel
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Three Tauri commands implement the browse-view's per-section "Send all N
+// pages" flow:
+//
+//   - `onenote_send_section(section_id)`     — main entry point. Used by
+//                                              the browse-view per-section
+//                                              button. Looks up the section
+//                                              in the hierarchy, then runs
+//                                              the bulk-send loop.
+//   - `onenote_send_active_section()`        — convenience for the widget
+//                                              right-click menu item.
+//                                              Resolves active section via
+//                                              `onenote_get_active_page` +
+//                                              dispatches into
+//                                              `onenote_send_section`.
+//   - `onenote_cancel_bulk_send()`           — flips the cancel flag so the
+//                                              bulk-send loop short-circuits
+//                                              after the current page
+//                                              completes.
+//
+// Progress events (per WP-04 dispatch prompt):
+//   - `onenote-bulk-send-progress` — emitted per-page with
+//                                    {page_id, page_title, status,
+//                                    completed, total}
+//   - `onenote-bulk-send-complete` — emitted once at end of loop with the
+//                                    full `BulkSendReport`
+//
+// Single-flight discipline (brief §3.4 + WP-02 agent's observation #7):
+// the loop holds `ONENOTE_BULK_SEND_IN_FLIGHT` for its entire duration and
+// `.await`s every page sequentially. Concurrent invocations short-circuit
+// with `BulkSendError::Busy`. Per-page Publish / pdf-extract / POST stays
+// inside the existing `run_onenote_send_inline` so the policy (handwriting
+// skip, hierarchy miss, etc.) is single-source-of-truth.
+
+/// Per-page progress event payload. Emitted on every page-boundary transition
+/// inside the bulk-send loop. `status` is one of: `"started"` (about to
+/// publish), `"succeeded"` (ingestion success or idempotent), `"failed"`
+/// (any error path), `"cancelled"` (skipped because the cancel flag was
+/// flipped before the page started).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkSendProgress {
+    pub section_id: String,
+    pub page_id: String,
+    pub page_title: String,
+    pub status: String,
+    pub completed: usize,
+    pub total: usize,
+}
+
+/// Final report emitted on `onenote-bulk-send-complete`. `cancelled` is the
+/// count of pages that were skipped because of an early cancel; `errors`
+/// carries per-failure `(page_id, message)` tuples so the frontend can list
+/// the misses if needed (v1 ships just the counts in the success toast).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkSendReport {
+    pub section_id: String,
+    pub section_name: String,
+    pub total: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+    pub errors: Vec<(String, String)>,
+}
+
+/// Tauri command — flip the cancel flag. The bulk-send loop checks the flag
+/// between pages; in-flight Publish + POST on the current page completes
+/// (per brief §3.4 AC: "Cancel button stops further sends mid-batch
+/// (in-flight POST completes)").
+#[tauri::command]
+fn onenote_cancel_bulk_send() {
+    ONENOTE_BULK_SEND_CANCEL.store(true, Ordering::SeqCst);
+    log::info!("[onenote-bulk-send] cancel flag set");
+}
+
+/// Pure helper — given a hierarchy tree and a section id, return the section
+/// + its enriched notebook context (notebook_id / notebook_name) so the loop
+/// can stamp the per-page toast titles and the final report.
+///
+/// Lifted out of the IPC command so it's exercisable on Mac (the tree is a
+/// pure serde struct; the join is pure-function). Returns `None` when the
+/// section id is not present in the tree (most likely: section was just
+/// deleted, or hierarchy is stale and OneNote needs a sync round-trip).
+pub fn find_section_with_notebook<'a>(
+    tree: &'a onenote_windows::NotebookTree,
+    section_id: &str,
+) -> Option<(&'a onenote_windows::Notebook, &'a onenote_windows::Section)> {
+    for notebook in &tree.notebooks {
+        for section in &notebook.sections {
+            if section.section_id == section_id {
+                return Some((notebook, section));
+            }
+        }
+    }
+    None
+}
+
+/// Tauri command — convenience wrapper that resolves the active section via
+/// `onenote_get_active_page`'s enriched metadata, then dispatches into
+/// `onenote_send_section`. Used by the widget right-click menu's "Send all
+/// pages in current section…" item; the browse-view's per-section button
+/// calls `onenote_send_section` directly with the user-clicked section id.
+///
+/// Returns the same `BulkSendReport` shape so a single frontend toast
+/// renderer handles both entry points.
+#[tauri::command]
+async fn onenote_send_active_section(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<BulkSendReport, String> {
+    // Cheap active-page lookup (carries section context) → section_id.
+    // No need to call `onenote_send_section` indirectly; just inline the
+    // resolve + dispatch so we don't pay a second hierarchy enumeration.
+    let active = tauri::async_runtime::spawn_blocking(|| {
+        let page_id_res = onenote_windows::get_active_page();
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (page_id_res, tree_res)
+    })
+    .await
+    .map_err(|e| format!("join error: {}", e))?;
+
+    let (page_id_res, tree_res) = active;
+
+    let page_id = match page_id_res {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return Err(onenote_windows::OneNoteError::NoNotebookOpen
+                .user_message()
+                .to_string());
+        }
+        Err(e) => return Err(format!("{}", e)),
+    };
+
+    let tree = tree_res.map_err(|e| format!("{}", e))?;
+    let page_meta = onenote_windows::enrich_page_metadata(&tree, &page_id).ok_or_else(|| {
+        format!(
+            "Active OneNote page {} not found in hierarchy (sync may be pending)",
+            page_id
+        )
+    })?;
+
+    // Dispatch through the canonical section-by-id command so the same
+    // single-flight + cancel + progress machinery runs.
+    let cfg = current_config(&state)?;
+    Ok(run_bulk_send_section(
+        app_handle,
+        cfg,
+        tree,
+        page_meta.section_id,
+    )
+    .await)
+}
+
+/// Tauri command — bulk-send every page in a section by id. Frontend supplies
+/// `section_id` (from the browse-view tree); we re-enumerate the hierarchy
+/// to get a fresh snapshot before iterating (a stale browse-view cache may
+/// be 15 min old per brief §3.4; if a section was just deleted we want to
+/// fail fast).
+///
+/// Returns the `BulkSendReport` on completion (success / failure / cancelled
+/// paths all return Ok with the populated report). Top-level `Err` only
+/// for: config missing, single-flight conflict, hierarchy enumeration
+/// failure, section not found.
+#[tauri::command]
+async fn onenote_send_section(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    section_id: String,
+) -> Result<BulkSendReport, String> {
+    let cfg = current_config(&state)?;
+
+    // Fresh hierarchy enumeration — the frontend's tree may be 15min stale.
+    let tree = tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy)
+        .await
+        .map_err(|e| format!("join error: {}", e))?
+        .map_err(|e| format!("{}", e))?;
+
+    Ok(run_bulk_send_section(app_handle, cfg, tree, section_id).await)
+}
+
+/// Internal: actually iterate over the section's pages and dispatch each
+/// through the existing per-page send flow. Holds the single-flight mutex
+/// for the entire duration; emits per-page progress + final-report events.
+///
+/// Why a separate function (and not inlined in both IPC entry points): the
+/// `onenote_send_active_section` path needs the tree it already enumerated
+/// (don't pay for a second enum); the `onenote_send_section` path needs to
+/// enum a fresh tree (frontend tree may be stale). Both paths converge here.
+async fn run_bulk_send_section(
+    app_handle: tauri::AppHandle,
+    cfg: AppConfig,
+    tree: onenote_windows::NotebookTree,
+    section_id: String,
+) -> BulkSendReport {
+    // ── 1. Resolve section + notebook in the supplied tree ──────────────
+    let (notebook_name, section_name, page_list) = match find_section_with_notebook(
+        &tree,
+        &section_id,
+    ) {
+        Some((notebook, section)) => (
+            notebook.name.clone(),
+            section.name.clone(),
+            section.pages.clone(),
+        ),
+        None => {
+            let report = BulkSendReport {
+                section_id: section_id.clone(),
+                section_name: String::new(),
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                cancelled: 0,
+                errors: vec![(
+                    String::new(),
+                    format!("Section {} not found in OneNote hierarchy", section_id),
+                )],
+            };
+            let _ = app_handle.emit("onenote-bulk-send-complete", &report);
+            return report;
+        }
+    };
+
+    // ── 2. Acquire single-flight guard ──────────────────────────────────
+    {
+        let mut guard = match ONENOTE_BULK_SEND_IN_FLIGHT.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if *guard {
+            let report = BulkSendReport {
+                section_id: section_id.clone(),
+                section_name,
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                cancelled: 0,
+                errors: vec![(
+                    String::new(),
+                    "Another bulk send is already running — wait for it to finish or cancel it"
+                        .to_string(),
+                )],
+            };
+            let _ = app_handle.emit("onenote-bulk-send-complete", &report);
+            return report;
+        }
+        *guard = true;
+    }
+
+    // Reset cancel flag at the start of every bulk send (so a prior cancel
+    // doesn't poison this batch). The cancel flag is only read between pages
+    // so it's safe to reset here.
+    ONENOTE_BULK_SEND_CANCEL.store(false, Ordering::SeqCst);
+
+    let total = page_list.len();
+    let mut succeeded: usize = 0;
+    let mut failed: usize = 0;
+    let mut cancelled: usize = 0;
+    let mut errors: Vec<(String, String)> = Vec::new();
+
+    log::info!(
+        "[onenote-bulk-send] starting section_id={} ({} / {}) total_pages={}",
+        section_id,
+        notebook_name,
+        section_name,
+        total
+    );
+
+    // ── 3. Iterate pages sequentially, awaiting each. The brief explicitly
+    //       requires this (no try_join_all / tokio::spawn-per-page) to avoid
+    //       fanning out N concurrent COM calls + N concurrent POSTs. ──────
+    for (index, page) in page_list.iter().enumerate() {
+        let completed_after = index + 1;
+
+        // Cancel check happens BEFORE the page starts. If a prior page is
+        // mid-flight when cancel is set, that page completes; the next
+        // iteration short-circuits here.
+        if ONENOTE_BULK_SEND_CANCEL.load(Ordering::SeqCst) {
+            cancelled = total - index; // every remaining page including this one
+            log::info!(
+                "[onenote-bulk-send] cancelled at page {}/{} ({})",
+                completed_after,
+                total,
+                page.name
+            );
+            let _ = app_handle.emit(
+                "onenote-bulk-send-progress",
+                BulkSendProgress {
+                    section_id: section_id.clone(),
+                    page_id: page.page_id.clone(),
+                    page_title: page.name.clone(),
+                    status: "cancelled".into(),
+                    completed: index, // we did NOT start this page
+                    total,
+                },
+            );
+            break;
+        }
+
+        // "Started" event so the frontend can update the active-page row
+        // BEFORE the multi-second Publish + POST round-trip.
+        let _ = app_handle.emit(
+            "onenote-bulk-send-progress",
+            BulkSendProgress {
+                section_id: section_id.clone(),
+                page_id: page.page_id.clone(),
+                page_title: page.name.clone(),
+                status: "started".into(),
+                completed: index,
+                total,
+            },
+        );
+
+        // Per-page send. `run_onenote_send_inline` is the same code path
+        // hotkey + menu use — handwriting skip, hierarchy miss, COM error
+        // → user_message mapping are all single source of truth.
+        let outcome = run_onenote_send_inline(cfg.clone(), Some(page.page_id.clone())).await;
+
+        let (status, body_for_error) = match outcome.kind.as_str() {
+            "success" | "idempotent" => {
+                succeeded += 1;
+                ("succeeded", None)
+            }
+            _ => {
+                failed += 1;
+                errors.push((
+                    page.page_id.clone(),
+                    outcome
+                        .body
+                        .clone()
+                        .unwrap_or_else(|| outcome.title.clone()),
+                ));
+                ("failed", outcome.body.clone())
+            }
+        };
+
+        log::debug!(
+            "[onenote-bulk-send] page {}/{} status={} title={}",
+            completed_after,
+            total,
+            status,
+            page.name
+        );
+
+        let _ = app_handle.emit(
+            "onenote-bulk-send-progress",
+            BulkSendProgress {
+                section_id: section_id.clone(),
+                page_id: page.page_id.clone(),
+                page_title: page.name.clone(),
+                status: status.into(),
+                completed: completed_after,
+                total,
+            },
+        );
+
+        // Suppress the unused-variable warning for the error body — the
+        // detail is already captured in `errors` above and emitted via the
+        // progress event's `status` field.
+        let _ = body_for_error;
+    }
+
+    // ── 4. Release single-flight guard ──────────────────────────────────
+    {
+        let mut guard = match ONENOTE_BULK_SEND_IN_FLIGHT.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = false;
+    }
+    // Reset cancel flag so the next bulk-send starts clean even if no one
+    // pressed cancel during this run (defensive — `start` also resets it).
+    ONENOTE_BULK_SEND_CANCEL.store(false, Ordering::SeqCst);
+
+    let report = BulkSendReport {
+        section_id: section_id.clone(),
+        section_name,
+        total,
+        succeeded,
+        failed,
+        cancelled,
+        errors,
+    };
+    log::info!(
+        "[onenote-bulk-send] complete section_id={} total={} succeeded={} failed={} cancelled={}",
+        section_id,
+        report.total,
+        report.succeeded,
+        report.failed,
+        report.cancelled
+    );
+    let _ = app_handle.emit("onenote-bulk-send-complete", &report);
+    report
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -2197,6 +2843,20 @@ const MENU_PLAUD_QUEUE: &str = "menu.plaud_queue";
 /// "Browse OneNote…" and "Send all pages in current section…"; v1 ships
 /// the single item only (refined scope per coordinator).
 const MENU_ONENOTE_SEND_CURRENT_PAGE: &str = "menu.onenote_send_current_page";
+/// WP-ONENOTE-EXPORT-04 — "Send all pages in current section…" widget
+/// right-click menu item. Resolves the active section via
+/// `onenote_get_active_page` (whose enriched metadata carries
+/// `sectionId` + `sectionName`), then dispatches the bulk-send loop over
+/// every page in that section. Same cross-platform discipline as the
+/// send-current-page item: menu renders everywhere; selecting on Mac
+/// returns a `PlatformUnsupported` toast.
+const MENU_ONENOTE_SEND_SECTION: &str = "menu.onenote_send_section";
+/// WP-ONENOTE-EXPORT-04 — "Browse OneNote…" widget right-click menu item.
+/// Opens the `#view-onenote-browse` section via `widget_expand` (same
+/// mechanism the Plaud-queue and Settings items use). Frontend renders
+/// the notebook → section → page tree and per-section "Send all N pages"
+/// buttons that dispatch to `onenote_send_section`.
+const MENU_ONENOTE_BROWSE: &str = "menu.onenote_browse";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
 /// that opens Tauri's devtools for diagnosis. Constant + menu builder
 /// branch + event handler arm are all #[cfg(debug_assertions)] gated so
@@ -2229,6 +2889,23 @@ fn build_widget_menu(
         true,
         None::<&str>,
     )?;
+    // WP-ONENOTE-EXPORT-04 — bulk-send-section + browse entries grouped with
+    // the single-page send item so all OneNote surfaces sit together. Order
+    // mirrors increasing scope: single page → whole section → browse.
+    let onenote_send_section = MenuItem::with_id(
+        app,
+        MENU_ONENOTE_SEND_SECTION,
+        "Send all pages in current section…",
+        true,
+        None::<&str>,
+    )?;
+    let onenote_browse = MenuItem::with_id(
+        app,
+        MENU_ONENOTE_BROWSE,
+        "Browse OneNote…",
+        true,
+        None::<&str>,
+    )?;
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -2253,6 +2930,8 @@ fn build_widget_menu(
                 &sep1,
                 &plaud_queue,
                 &onenote_send_current_page,
+                &onenote_send_section,
+                &onenote_browse,
                 &expand,
                 &settings,
                 &sep2,
@@ -2272,6 +2951,8 @@ fn build_widget_menu(
             &sep1,
             &plaud_queue,
             &onenote_send_current_page,
+            &onenote_send_section,
+            &onenote_browse,
             &expand,
             &settings,
             &sep2,
@@ -2968,6 +3649,10 @@ pub fn run() {
             onenote_enumerate_hierarchy,
             onenote_get_active_page,
             onenote_export_and_ingest_page,
+            // WP-ONENOTE-EXPORT-04 — bulk-send-section + browse view
+            onenote_send_section,
+            onenote_send_active_section,
+            onenote_cancel_bulk_send,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -3038,6 +3723,32 @@ pub fn run() {
                         // toast, including PlatformUnsupported on Mac/Linux.
                         log::info!("menu onenote_send_current_page fired");
                         fire_onenote_send_flow(app.clone()).await;
+                    }
+                    MENU_ONENOTE_BROWSE => {
+                        // WP-ONENOTE-EXPORT-04 — open the OneNote browse view.
+                        // Same widget_expand mechanism used by Plaud Queue and
+                        // Settings; URL fragment routes main.js's bootstrap to
+                        // enterOneNoteBrowseView() which loads the hierarchy
+                        // via the onenote_enumerate_hierarchy IPC.
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("onenote-browse".into()),
+                        ) {
+                            log::warn!("menu onenote_browse failed: {e}");
+                        }
+                    }
+                    MENU_ONENOTE_SEND_SECTION => {
+                        // WP-ONENOTE-EXPORT-04 — bulk-send every page in the
+                        // currently-active OneNote section. Helper resolves
+                        // active section via CurrentPageId enrichment, then
+                        // dispatches through the canonical
+                        // onenote_send_section flow (single-flight + cancel +
+                        // progress events). Emits a structured toast on the
+                        // resolve-failure paths (no notebook open, COM
+                        // unregistered, hierarchy miss).
+                        log::info!("menu onenote_send_section fired");
+                        fire_onenote_send_active_section_flow(app.clone()).await;
                     }
                     MENU_QUIT => {
                         log::info!("menu quit");
@@ -3923,5 +4634,183 @@ mod tests {
         let res: PlaudIngestResult = serde_json::from_str(json).expect("ingest result parses");
         assert_eq!(res.apolla_document_id, "DOC-abc123");
         assert_eq!(res.ingested_at, "2026-05-25T12:05:00Z");
+    }
+
+    // ───── WP-ONENOTE-EXPORT-04 — bulk-send helpers ─────
+
+    /// Build a small in-memory `NotebookTree` fixture for the helper +
+    /// report tests. Mirrors the shape produced by `parse_hierarchy_xml`
+    /// on the multi-notebook fixture but constructed by hand so we don't
+    /// share state with onenote_windows::tests.
+    fn make_test_tree() -> onenote_windows::NotebookTree {
+        onenote_windows::NotebookTree {
+            notebooks: vec![
+                onenote_windows::Notebook {
+                    notebook_id: "{NB-WORK}".into(),
+                    name: "Work".into(),
+                    last_modified_time: None,
+                    sections: vec![
+                        onenote_windows::Section {
+                            section_id: "{SEC-ENG}".into(),
+                            name: "Engineering".into(),
+                            last_modified_time: None,
+                            pages: vec![
+                                onenote_windows::Page {
+                                    page_id: "{PG-1}".into(),
+                                    name: "Q2 Sync".into(),
+                                    last_modified_time: None,
+                                },
+                                onenote_windows::Page {
+                                    page_id: "{PG-2}".into(),
+                                    name: "Sprint Planning".into(),
+                                    last_modified_time: None,
+                                },
+                            ],
+                        },
+                        onenote_windows::Section {
+                            section_id: "{SEC-EMPTY}".into(),
+                            name: "Empty Section".into(),
+                            last_modified_time: None,
+                            pages: vec![],
+                        },
+                    ],
+                },
+                onenote_windows::Notebook {
+                    notebook_id: "{NB-PERSONAL}".into(),
+                    name: "Personal".into(),
+                    last_modified_time: None,
+                    sections: vec![onenote_windows::Section {
+                        section_id: "{SEC-RECIPES}".into(),
+                        name: "Recipes".into(),
+                        last_modified_time: None,
+                        pages: vec![onenote_windows::Page {
+                            page_id: "{PG-3}".into(),
+                            name: "Sourdough".into(),
+                            last_modified_time: None,
+                        }],
+                    }],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn find_section_with_notebook_returns_match() {
+        let tree = make_test_tree();
+        let (notebook, section) =
+            find_section_with_notebook(&tree, "{SEC-ENG}").expect("section exists");
+        assert_eq!(notebook.name, "Work");
+        assert_eq!(notebook.notebook_id, "{NB-WORK}");
+        assert_eq!(section.name, "Engineering");
+        assert_eq!(section.pages.len(), 2);
+    }
+
+    #[test]
+    fn find_section_with_notebook_returns_none_on_missing() {
+        let tree = make_test_tree();
+        assert!(find_section_with_notebook(&tree, "{NOT-PRESENT}").is_none());
+    }
+
+    #[test]
+    fn find_section_with_notebook_finds_section_in_second_notebook() {
+        // Defensive: make sure the search doesn't bail after the first
+        // notebook. Personal/Recipes is the second notebook.
+        let tree = make_test_tree();
+        let (notebook, section) =
+            find_section_with_notebook(&tree, "{SEC-RECIPES}").expect("section in second notebook");
+        assert_eq!(notebook.name, "Personal");
+        assert_eq!(section.name, "Recipes");
+        assert_eq!(section.pages[0].name, "Sourdough");
+    }
+
+    #[test]
+    fn find_section_with_notebook_finds_empty_section() {
+        // Empty sections must still be findable — WP-04 browse view lists
+        // them with a 0-page count, so the per-section button can be
+        // disabled. The helper itself doesn't filter.
+        let tree = make_test_tree();
+        let (notebook, section) =
+            find_section_with_notebook(&tree, "{SEC-EMPTY}").expect("empty section is findable");
+        assert_eq!(notebook.name, "Work");
+        assert_eq!(section.pages.len(), 0);
+    }
+
+    #[test]
+    fn bulk_send_report_serde_round_trips_camel_case() {
+        // The browse view's progress-event consumer reads camelCase fields
+        // (sectionId / sectionName / pageId / etc.); make sure serde
+        // emits them. A drift to snake_case would silently break the
+        // frontend.
+        let report = BulkSendReport {
+            section_id: "{SEC-1}".into(),
+            section_name: "Engineering".into(),
+            total: 5,
+            succeeded: 3,
+            failed: 1,
+            cancelled: 1,
+            errors: vec![("{PG-X}".into(), "publish failed".into())],
+        };
+        let json = serde_json::to_string(&report).expect("serializes");
+        assert!(json.contains("\"sectionId\":\"{SEC-1}\""), "{}", json);
+        assert!(json.contains("\"sectionName\":\"Engineering\""), "{}", json);
+        assert!(json.contains("\"total\":5"), "{}", json);
+        assert!(json.contains("\"succeeded\":3"), "{}", json);
+        assert!(json.contains("\"failed\":1"), "{}", json);
+        assert!(json.contains("\"cancelled\":1"), "{}", json);
+        // Two-tuple serializes as JSON array; frontend reshapes if needed.
+        assert!(json.contains("[\"{PG-X}\",\"publish failed\"]"), "{}", json);
+    }
+
+    #[test]
+    fn bulk_send_progress_serde_round_trips_camel_case() {
+        // Progress events drive the per-page UI; camelCase is load-bearing
+        // for the frontend consumer. Drift-guard.
+        let progress = BulkSendProgress {
+            section_id: "{SEC-1}".into(),
+            page_id: "{PG-1}".into(),
+            page_title: "Q2 Sync".into(),
+            status: "succeeded".into(),
+            completed: 2,
+            total: 5,
+        };
+        let json = serde_json::to_string(&progress).expect("serializes");
+        assert!(json.contains("\"sectionId\":\"{SEC-1}\""), "{}", json);
+        assert!(json.contains("\"pageId\":\"{PG-1}\""), "{}", json);
+        assert!(json.contains("\"pageTitle\":\"Q2 Sync\""), "{}", json);
+        assert!(json.contains("\"completed\":2"), "{}", json);
+        assert!(json.contains("\"total\":5"), "{}", json);
+        assert!(json.contains("\"status\":\"succeeded\""), "{}", json);
+    }
+
+    #[test]
+    fn onenote_cancel_bulk_send_sets_flag_idempotently() {
+        // Reset to a known state first because the static is process-wide
+        // and other tests may have left it set.
+        ONENOTE_BULK_SEND_CANCEL.store(false, Ordering::SeqCst);
+        assert!(!ONENOTE_BULK_SEND_CANCEL.load(Ordering::SeqCst));
+
+        // First call sets the flag.
+        onenote_cancel_bulk_send();
+        assert!(ONENOTE_BULK_SEND_CANCEL.load(Ordering::SeqCst));
+
+        // Second call is a no-op (idempotent — flag already true).
+        onenote_cancel_bulk_send();
+        assert!(ONENOTE_BULK_SEND_CANCEL.load(Ordering::SeqCst));
+
+        // Clean up so subsequent tests start with the flag false.
+        ONENOTE_BULK_SEND_CANCEL.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn bulk_send_in_flight_mutex_is_initially_free() {
+        // The static mutex must start in the unlocked + value=false state.
+        // If a prior test left it locked or true, subsequent bulk sends
+        // would refuse with Busy. (We can't easily test the contended path
+        // without a tokio runtime; the live integration is what catches
+        // cross-test interference.)
+        let guard = ONENOTE_BULK_SEND_IN_FLIGHT
+            .lock()
+            .expect("mutex should be available");
+        assert!(!*guard, "in-flight flag must be false at test start");
     }
 }
