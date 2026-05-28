@@ -4652,6 +4652,7 @@ mod tests {
             widget_y: Some(980),
             onenote_hotkey: None,
             auto_watch: false,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4714,6 +4715,7 @@ mod tests {
             widget_y: None,
             onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
             auto_watch: false,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4751,6 +4753,7 @@ mod tests {
             widget_y: None,
             onenote_hotkey: None,
             auto_watch: true,
+            plaud_connect: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         // The auto_watch field must appear in serialized JSON (no
