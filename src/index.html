@@ -147,6 +147,43 @@
           </span>
         </label>
 
+        <!-- ──────────────────────────────────────────────────────────────
+             WP-ONENOTE-EXPORT-03 — OneNote subsection
+             Lives inside the Configure form (mirrors the existing field
+             pattern) so the same Save button persists all fields in one
+             go. v1 ships the hotkey configurator only; WP-05 (auto-watch)
+             will append its toggle to this same subsection.
+             ────────────────────────────────────────────────────────────── -->
+        <fieldset class="config-subsection" id="config-onenote-section">
+          <legend class="config-subsection-legend">OneNote</legend>
+
+          <label class="field">
+            <span class="field-label">Send-current-page hotkey</span>
+            <div class="hotkey-row">
+              <input
+                type="text"
+                id="config-onenote-hotkey"
+                readonly
+                value="Ctrl+Shift+O"
+                aria-label="Global hotkey for sending the current OneNote page"
+              />
+              <button type="button" id="btn-onenote-hotkey-capture" class="btn btn-secondary btn-compact">
+                Change…
+              </button>
+              <button type="button" id="btn-onenote-hotkey-reset" class="btn-inline-link">
+                Reset
+              </button>
+            </div>
+            <span class="field-help">
+              Press anywhere on Windows to send the OneNote page you're currently viewing
+              to Apolla. Default <code>Ctrl+Shift+O</code>. The hotkey is registered only
+              on Windows (OneNote COM is Windows-only); the menu item "Send current
+              OneNote page" works on all platforms but only succeeds on Windows.
+            </span>
+            <span class="field-help" id="onenote-hotkey-capture-status" hidden></span>
+          </label>
+        </fieldset>
+
         <div class="actions">
           <button type="button" id="btn-test-connection" class="btn btn-secondary">
             Test connection

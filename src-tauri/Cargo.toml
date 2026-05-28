@@ -74,6 +74,17 @@ lopdf = "0.38"
 # impl-time) — declaring directly is zero bundle-size impact.
 quick-xml = "0.37"
 
+# WP-ONENOTE-EXPORT-03 — global hotkey for the OneNote send-current-page
+# flow (default Ctrl+Shift+O, user-configurable via Configure pane). Plugin
+# is cross-platform but the hotkey HANDLER is Windows-only (`#[cfg(target_os
+# = "windows")]`) because the underlying COM dispatch is Windows-only —
+# registering on Mac/Linux would just fire a PlatformUnsupported toast on
+# every keypress, which is noise. The plugin is still initialized on all
+# platforms so the Configure pane's hotkey field renders + persists
+# uniformly (the value is parked in AppConfig; only the Rust-side
+# registration is gated). Tauri v2 plugin family.
+tauri-plugin-global-shortcut = "2"
+
 # WP-OCR-13 Phase A — Mac native in-process OCR via Apple Vision framework.
 # Replaces the v0.1.x subprocess to `viktora-ocr-capture`. See AC-1, D-13-02.
 # objc2-app-kit gives us NSWorkspace.frontmostApplication for sourceApp lookup

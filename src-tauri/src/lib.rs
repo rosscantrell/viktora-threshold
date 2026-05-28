@@ -128,6 +128,14 @@ pub struct AppConfig {
     pub widget_x: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub widget_y: Option<i32>,
+    /// WP-ONENOTE-EXPORT-03 — user-configurable global hotkey for the
+    /// "send current OneNote page" flow. Stored as the
+    /// `tauri-plugin-global-shortcut` string form (e.g. `"Ctrl+Shift+O"`,
+    /// `"CommandOrControl+Shift+O"`, `"Alt+F12"`). `None` → reader falls
+    /// back to `DEFAULT_ONENOTE_HOTKEY` so existing configs without this
+    /// field continue to work (additive-only schema delta).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub onenote_hotkey: Option<String>,
 }
 
 impl Default for AppConfig {
@@ -139,8 +147,31 @@ impl Default for AppConfig {
             mode: "workspace".into(),
             widget_x: None,
             widget_y: None,
+            onenote_hotkey: None,
         }
     }
+}
+
+/// WP-ONENOTE-EXPORT-03 — default global hotkey for "send current OneNote
+/// page" when AppConfig has no `onenote_hotkey` override (either a fresh
+/// install or a config written by an older Threshold build). Per brief
+/// §2.3 Path A. Use the literal `"Ctrl+Shift+O"` form rather than
+/// `"CommandOrControl+Shift+O"` because (a) OneNote COM is Windows-only —
+/// the hotkey is only ever registered on Windows, (b) the JS side renders
+/// the string verbatim in the Configure pane, and "Ctrl+Shift+O" is the
+/// human-recognizable form Windows users expect.
+pub const DEFAULT_ONENOTE_HOTKEY: &str = "Ctrl+Shift+O";
+
+/// WP-ONENOTE-EXPORT-03 — Resolve the configured hotkey or fall back to
+/// the default. Centralizes the `Option<String>` → `&str` mapping so the
+/// plugin-registration site, the toast wording, and (any future) Configure
+/// pre-fill all agree on the canonical string.
+pub fn resolved_onenote_hotkey(cfg: &AppConfig) -> String {
+    cfg.onenote_hotkey
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(DEFAULT_ONENOTE_HOTKEY)
+        .to_string()
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -246,7 +277,21 @@ fn load_config(state: tauri::State<AppState>) -> Result<Option<AppConfig>, Strin
 }
 
 #[tauri::command]
-fn save_config(state: tauri::State<AppState>, config: AppConfig) -> Result<(), String> {
+fn save_config(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    config: AppConfig,
+) -> Result<(), String> {
+    // WP-ONENOTE-EXPORT-03 — capture the previously-cached hotkey BEFORE
+    // we swap it in below, so we can decide whether to re-register the
+    // global shortcut. Avoids unnecessary unregister/register churn on
+    // unrelated config changes (base_url, bearer_token, widget position).
+    let prev_hotkey = state
+        .config
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(resolved_onenote_hotkey));
+
     let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
     let path = dir.join("config.json");
@@ -256,8 +301,82 @@ fn save_config(state: tauri::State<AppState>, config: AppConfig) -> Result<(), S
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
     fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
     log::info!("Saved config to {}", path.display());
+    let new_hotkey = resolved_onenote_hotkey(&to_write);
     *state.config.lock().expect("config mutex poisoned") = Some(to_write);
+
+    // WP-ONENOTE-EXPORT-03 — re-register the global hotkey if the user
+    // changed it via Configure pane. Cross-platform-safe: the
+    // `reregister_onenote_hotkey` helper is a no-op on non-Windows
+    // (the hotkey is only registered on Windows in the first place).
+    if prev_hotkey.as_deref() != Some(new_hotkey.as_str()) {
+        log::info!(
+            "WP-ONENOTE-EXPORT-03: hotkey changed (prev={:?}, new='{}'); re-registering",
+            prev_hotkey,
+            new_hotkey
+        );
+        reregister_onenote_hotkey(&app, prev_hotkey.as_deref(), &new_hotkey);
+    }
+
     Ok(())
+}
+
+/// WP-ONENOTE-EXPORT-03 — unregister the old hotkey (if any) and
+/// register the new one. Failure on either side is logged + skipped —
+/// the user still has the widget right-click menu item as a fallback.
+/// No-op on non-Windows (mirrors the registration site in `setup()`).
+#[cfg(target_os = "windows")]
+fn reregister_onenote_hotkey(
+    app: &tauri::AppHandle,
+    prev_hotkey: Option<&str>,
+    new_hotkey: &str,
+) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    if let Some(prev) = prev_hotkey {
+        match app.global_shortcut().unregister(prev) {
+            Ok(()) => log::info!("WP-ONENOTE-EXPORT-03: unregistered prior hotkey '{}'", prev),
+            Err(e) => log::warn!(
+                "WP-ONENOTE-EXPORT-03: failed to unregister prior hotkey '{}': {}",
+                prev,
+                e
+            ),
+        }
+    }
+    let app_handle_for_hotkey = app.clone();
+    match app.global_shortcut().on_shortcut(
+        new_hotkey,
+        move |_app, _shortcut, event| {
+            if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                return;
+            }
+            let handle = app_handle_for_hotkey.clone();
+            tauri::async_runtime::spawn(async move {
+                fire_onenote_send_flow(handle).await;
+            });
+        },
+    ) {
+        Ok(()) => log::info!(
+            "WP-ONENOTE-EXPORT-03: re-registered global hotkey '{}'",
+            new_hotkey
+        ),
+        Err(e) => log::warn!(
+            "WP-ONENOTE-EXPORT-03: failed to register new hotkey '{}': {} \
+             — the widget menu item still works",
+            new_hotkey,
+            e
+        ),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn reregister_onenote_hotkey(
+    _app: &tauri::AppHandle,
+    _prev_hotkey: Option<&str>,
+    _new_hotkey: &str,
+) {
+    // No-op: hotkey isn't registered on Mac/Linux (see WP-ONENOTE-EXPORT-03
+    // gate in `setup()`). Configure-pane writes still persist the hotkey
+    // string in AppConfig so it survives across platforms (e.g., user
+    // configures on Mac via shared config, runs on Windows).
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1716,6 +1835,345 @@ async fn onenote_export_and_ingest_page(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-ONENOTE-EXPORT-03 — internal dispatch helper for hotkey + menu item
+// ───────────────────────────────────────────────────────────────────────────
+//
+// `fire_onenote_send_flow` performs the two-step send (cheap active-page
+// lookup → pre-send "Sending: <title>" toast → full publish+post) and
+// emits every outcome as a structured `IngestionOutcome` over the same
+// `threshold://toast` event the frontend already wires up for every
+// other ingestion surface. Used by BOTH the global hotkey handler AND
+// the widget right-click "Send current OneNote page" menu item so the
+// two surfaces are guaranteed identical (single source of truth).
+//
+// The function does NOT need `tauri::State<AppState>` because both call
+// sites already hold an `AppHandle`; we re-read the cached config from
+// AppState ourselves. Returns `()` — the result is reported via toast,
+// not via return value.
+
+/// Best-effort lookup of the cached `AppConfig`. Returns `None` if the
+/// user hasn't completed Configure yet (no `load_config` has populated
+/// the cache). Used by the hotkey + menu dispatch path so we can emit a
+/// "Configure Apolla first" toast instead of silently hanging.
+fn current_config_opt(app: &tauri::AppHandle) -> Option<AppConfig> {
+    let state = app.state::<AppState>();
+    state.config.lock().ok().and_then(|guard| guard.clone())
+}
+
+/// Fire the "send the OneNote page the user is currently viewing" flow.
+/// Two-step: cheap active-page lookup for the pre-send toast, then the
+/// full publish + POST in `onenote_export_and_ingest_page`. Every outcome
+/// (no notebook open, COM unregistered, PDF extraction failed, success,
+/// handwriting-skip, etc.) emits a structured `IngestionOutcome` event.
+/// Called from both the global-shortcut handler and the menu_event arm.
+#[allow(dead_code)] // Only invoked under cfg(target_os = "windows") on the hotkey path; menu arm invokes unconditionally on all platforms.
+async fn fire_onenote_send_flow(app: tauri::AppHandle) {
+    // ── 1. Resolve config (or bail with a Configure-first toast) ────────
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        None => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "Configure Apolla first".into(),
+                    body: Some(
+                        "Open Settings → connect your Apolla workspace before sending \
+                         OneNote pages."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    // ── 2. Cheap active-page lookup for the pre-send "Sending: …" toast ─
+    //
+    // We branch on the Result/Option here rather than calling the full
+    // `onenote_export_and_ingest_page` IPC so the user gets immediate
+    // feedback ("Sending: <title>…") that something is happening BEFORE
+    // the multi-second Publish + extract + POST round-trip kicks off.
+    // The pre-send toast carries the same `source_path: None` so it
+    // shows alongside other captures without the pre/post-dedup
+    // matching path that file uploads use.
+    let active = tauri::async_runtime::spawn_blocking(|| {
+        let page_id_res = onenote_windows::get_active_page();
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (page_id_res, tree_res)
+    })
+    .await;
+
+    let (page_id_res, tree_res) = match active {
+        Ok(pair) => pair,
+        Err(join_err) => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: "OneNote lookup task panicked".into(),
+                    body: Some(format!("blocking task join error: {}", join_err)),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    // Handle the active-page lookup explicitly so we can emit the
+    // user-friendly toast for the two most common UX cases:
+    //   - PlatformUnsupported → Mac/Linux fallback toast
+    //   - ComClassNotRegistered → UWP-variant guidance toast
+    //   - NoNotebookOpen → "Open a notebook first" toast
+    let page_id = match page_id_res {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            // Distinct UX from a Result::Err — OneNote is healthy but no
+            // notebook is open. Map through `OneNoteError::NoNotebookOpen`
+            // so the wording matches the IPC path's outcome.
+            let err = onenote_windows::OneNoteError::NoNotebookOpen;
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: err.user_message().to_string(),
+                    body: Some(
+                        "Open a OneNote notebook in the Microsoft 365 desktop OneNote app, \
+                         select the page you want to send, then retry."
+                            .into(),
+                    ),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+        Err(e) => {
+            let _ = app.emit(
+                "threshold://toast",
+                IngestionOutcome {
+                    kind: "failure".into(),
+                    title: e.user_message().to_string(),
+                    body: Some(format!("{}", e)),
+                    source_path: None,
+                },
+            );
+            return;
+        }
+    };
+
+    // Enrich title for the pre-send toast. If the hierarchy enumeration
+    // failed we still fire the send — the full IPC will re-attempt the
+    // hierarchy and surface the error there. Best-effort here.
+    let display_title = tree_res
+        .as_ref()
+        .ok()
+        .and_then(|tree| onenote_windows::enrich_page_metadata(tree, &page_id))
+        .map(|m| m.title)
+        .unwrap_or_else(|| "current OneNote page".to_string());
+
+    let _ = app.emit(
+        "threshold://toast",
+        IngestionOutcome {
+            kind: "success".into(), // pre-send is treated as info; "success" renders without an error tint
+            title: format!("Sending: {}…", display_title),
+            body: Some("Publishing the OneNote page and sending to Apolla.".into()),
+            source_path: None,
+        },
+    );
+
+    // ── 3. Full publish + POST. Re-uses the IPC's body so the policy
+    //       (handwriting skip, hierarchy miss, PDF extract failure, etc.)
+    //       is single-source-of-truth.
+    let cfg_for_send = cfg.clone();
+    let page_id_for_send = page_id.clone();
+    let outcome = run_onenote_send_inline(cfg_for_send, Some(page_id_for_send)).await;
+    let _ = app.emit("threshold://toast", outcome);
+}
+
+/// Plain-function version of `onenote_export_and_ingest_page` (the
+/// `#[tauri::command]` requires `tauri::State`, which we already deref'd
+/// inside `fire_onenote_send_flow`). Code path is byte-equal to the IPC
+/// — including: handwriting-skip handling, hierarchy miss handling,
+/// temp-PDF cleanup, COM error → `OneNoteError::user_message()` mapping.
+///
+/// Lives here so the hotkey + menu dispatch path doesn't replicate the
+/// 100-line publish-and-post body; future calls (WP-04 bulk-send loop,
+/// WP-05 auto-watch tick) can call this too. The IPC command becomes a
+/// 1-line wrapper in a follow-on cleanup pass (left as-is for now to
+/// minimize the WP-03 diff).
+async fn run_onenote_send_inline(
+    cfg: AppConfig,
+    page_id: Option<String>,
+) -> IngestionOutcome {
+    // ── 1. Resolve page id + enriched metadata via COM ──────────────────
+    let supplied = page_id.clone();
+    let active = tauri::async_runtime::spawn_blocking(move || {
+        let id_res = match supplied {
+            Some(id) => Ok(Some(id)),
+            None => onenote_windows::get_active_page(),
+        };
+        let tree_res = onenote_windows::enumerate_hierarchy();
+        (id_res, tree_res)
+    })
+    .await;
+
+    let (resolved_id, tree) = match active {
+        Ok(pair) => pair,
+        Err(e) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: "OneNote send task panicked".into(),
+                body: Some(format!("blocking task join error: {}", e)),
+                source_path: None,
+            };
+        }
+    };
+
+    let resolved_id = match resolved_id {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: onenote_windows::OneNoteError::NoNotebookOpen
+                    .user_message()
+                    .to_string(),
+                body: Some(
+                    "Open a OneNote notebook and select the page you want to send, then retry."
+                        .into(),
+                ),
+                source_path: None,
+            };
+        }
+        Err(e) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}", e)),
+                source_path: None,
+            };
+        }
+    };
+
+    let tree = match tree {
+        Ok(t) => t,
+        Err(e) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}", e)),
+                source_path: None,
+            };
+        }
+    };
+
+    let page_meta = match onenote_windows::enrich_page_metadata(&tree, &resolved_id) {
+        Some(m) => m,
+        None => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("OneNote page {} not found in hierarchy", resolved_id),
+                body: Some(
+                    "The page may have just been created or moved. \
+                    OneNote may need a sync round-trip before it appears."
+                        .into(),
+                ),
+                source_path: None,
+            };
+        }
+    };
+
+    // ── 2. Publish page → temp PDF on disk ──────────────────────────────
+    let tmp_dir = std::env::temp_dir();
+    let resolved_id_for_export = resolved_id.clone();
+    let tmp_dir_for_export = tmp_dir.clone();
+    let pdf_path = match tauri::async_runtime::spawn_blocking(move || {
+        onenote_windows::export_page(&resolved_id_for_export, &tmp_dir_for_export)
+    })
+    .await
+    {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: e.user_message().to_string(),
+                body: Some(format!("{}\n\nPage: {}", e, page_meta.title)),
+                source_path: None,
+            };
+        }
+        Err(join_err) => {
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: "OneNote export task panicked".into(),
+                body: Some(format!("blocking task join error: {}", join_err)),
+                source_path: None,
+            };
+        }
+    };
+
+    // ── 3. Read PDF bytes + extract text ────────────────────────────────
+    let bytes = match fs::read(&pdf_path) {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = fs::remove_file(&pdf_path);
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: format!("Couldn't read exported PDF for {}", page_meta.title),
+                body: Some(format!("{}: {}", pdf_path.display(), e)),
+                source_path: None,
+            };
+        }
+    };
+    let _ = fs::remove_file(&pdf_path);
+
+    let extraction = match pdf_extract::extract_pdf_text(&bytes) {
+        Ok(e) => e,
+        Err(err) => {
+            log::warn!(
+                "[onenote-com] pdf-extract failed for page {}: {}",
+                page_meta.title,
+                err
+            );
+            return IngestionOutcome {
+                kind: "failure".into(),
+                title: err.user_message().to_string(),
+                body: Some(format!(
+                    "Page: {}\nNotebook: {}\n\n{}",
+                    page_meta.title, page_meta.notebook_path, err
+                )),
+                source_path: None,
+            };
+        }
+    };
+
+    if extraction.is_likely_handwriting {
+        log::info!(
+            "[onenote-com] flagged as likely handwriting (chars/page={}, pages={}): {}",
+            extraction.chars_per_page,
+            extraction.page_count,
+            page_meta.title
+        );
+        return IngestionOutcome {
+            kind: "failure".into(),
+            title: format!("Skipped: {} contains handwriting/images", page_meta.title),
+            body: Some(format!(
+                "OneNote page appears to be mostly handwriting or images \
+                ({} chars across {} page(s)). Threshold v1 does not OCR \
+                handwriting; the page was not sent to Apolla.",
+                extraction.text.len(),
+                extraction.page_count
+            )),
+            source_path: None,
+        };
+    }
+
+    // ── 4. Build COM payload + POST to Apolla ───────────────────────────
+    let payload = build_onenote_com_payload(&page_meta, &bytes, &extraction.text);
+    let display_name = format!("{} ({})", page_meta.title, page_meta.notebook_path);
+    post_payload_to_apolla(payload, &cfg, &display_name, None).await
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-Threshold-Compact-UX Phase 2D + 2E — right-click menu + expand toggle
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -1730,6 +2188,15 @@ const MENU_QUIT: &str = "menu.quit";
 /// WP-PLAUD-04a — Plaud Sync Queue menu item ID. Right-clicking the widget
 /// surfaces this option; selecting it expands the widget into the queue view.
 const MENU_PLAUD_QUEUE: &str = "menu.plaud_queue";
+/// WP-ONENOTE-EXPORT-03 — "Send current OneNote page" widget right-click
+/// menu item. Sits below the Plaud queue entry; same dispatch surface as
+/// the global hotkey (default Ctrl+Shift+O). Cross-platform: the menu item
+/// renders on Mac too, but selecting it surfaces a structured
+/// `OneNoteError::PlatformUnsupported` toast — chosen over hiding the item
+/// on Mac so the menu shape is consistent during dev / demo. WP-04 adds
+/// "Browse OneNote…" and "Send all pages in current section…"; v1 ships
+/// the single item only (refined scope per coordinator).
+const MENU_ONENOTE_SEND_CURRENT_PAGE: &str = "menu.onenote_send_current_page";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
 /// that opens Tauri's devtools for diagnosis. Constant + menu builder
 /// branch + event handler arm are all #[cfg(debug_assertions)] gated so
@@ -1750,6 +2217,18 @@ fn build_widget_menu(
     // WP-PLAUD-04a — sits between Pick File and Expand so the high-frequency
     // capture surfaces stay at the top of the menu.
     let plaud_queue = MenuItem::with_id(app, MENU_PLAUD_QUEUE, "Plaud Sync Queue", true, None::<&str>)?;
+    // WP-ONENOTE-EXPORT-03 — sits directly after Plaud Sync Queue so the
+    // per-source ingestion surfaces are grouped above the workspace
+    // controls (Expand / Settings / Quit). v1 ships this single item;
+    // WP-04 adds "Browse OneNote…" + "Send all pages in current section…"
+    // when their backing UX lands.
+    let onenote_send_current_page = MenuItem::with_id(
+        app,
+        MENU_ONENOTE_SEND_CURRENT_PAGE,
+        "Send current OneNote page",
+        true,
+        None::<&str>,
+    )?;
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
@@ -1773,6 +2252,7 @@ fn build_widget_menu(
                 &pick_file,
                 &sep1,
                 &plaud_queue,
+                &onenote_send_current_page,
                 &expand,
                 &settings,
                 &sep2,
@@ -1791,6 +2271,7 @@ fn build_widget_menu(
             &pick_file,
             &sep1,
             &plaud_queue,
+            &onenote_send_current_page,
             &expand,
             &settings,
             &sep2,
@@ -2202,6 +2683,18 @@ pub fn run() {
         // covers dev-mode + Windows-msi-not-yet-installed paths where
         // the installer registration isn't active yet.
         .plugin(tauri_plugin_deep_link::init())
+        // WP-ONENOTE-EXPORT-03 — global hotkey for "send current OneNote
+        // page" (default Ctrl+Shift+O, user-configurable via Configure pane).
+        // Plugin is initialized unconditionally so the Configure pane's
+        // hotkey field renders + persists on all platforms; the actual
+        // shortcut registration is Windows-only (gated inside `setup()`
+        // below) because the OneNote COM dispatch is Windows-only — a
+        // hotkey on Mac would just fire `PlatformUnsupported` toasts on
+        // every keypress. We do NOT grant `global-shortcut:default` in
+        // `capabilities/default.json` because the JS side never invokes
+        // the plugin's register/unregister IPC — all registration happens
+        // Rust-side via `app.global_shortcut().on_shortcut(...)`.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // WP-OCR-09 Phase D — deep-link handler + dev-mode runtime
             // registration. Wire the URL listener BEFORE any other setup
@@ -2254,12 +2747,88 @@ pub fn run() {
 
             // WP-OCR-13 v0.2: in-process Vision (Mac) / Windows.Media.Ocr (Windows)
             // replaces the v0.1 D-12-19 startup probe for `~/.local/bin/ocr-capture`.
-            // AppState's only remaining field is the cached config — populated on
-            // first `load_config` IPC call, not at startup.
+            //
+            // WP-ONENOTE-EXPORT-03 amendment — pre-load AppConfig from disk
+            // here (synchronously) so the global hotkey can be registered
+            // with the user's configured key before the first webview frame
+            // renders. Previously the cache populated lazily on the first
+            // `load_config` IPC; for hotkey UX we need it earlier. Failure
+            // to read is non-fatal — we fall back to None (legacy behavior)
+            // and use `DEFAULT_ONENOTE_HOTKEY` for hotkey registration.
+            let preloaded_cfg = config_path()
+                .filter(|p| p.exists())
+                .and_then(|p| fs::read_to_string(&p).ok())
+                .and_then(|raw| serde_json::from_str::<AppConfig>(&raw).ok());
+            if preloaded_cfg.is_some() {
+                log::info!("WP-ONENOTE-EXPORT-03: pre-loaded AppConfig from disk");
+            } else {
+                log::info!(
+                    "WP-ONENOTE-EXPORT-03: no AppConfig on disk yet — \
+                     hotkey will register with default {}",
+                    DEFAULT_ONENOTE_HOTKEY
+                );
+            }
             app.manage(AppState {
-                config: Mutex::new(None),
+                config: Mutex::new(preloaded_cfg.clone()),
                 pending_tidbit: Mutex::new(None),
             });
+
+            // WP-ONENOTE-EXPORT-03 — register the OneNote global hotkey.
+            // Windows-only: the OneNote COM dispatch is Windows-only, so
+            // registering on Mac/Linux would just fire `PlatformUnsupported`
+            // toasts on every keypress. The plugin is initialized on all
+            // platforms (so the Configure pane uses a single code path),
+            // but the actual `on_shortcut(...)` call is gated here.
+            //
+            // Resolution order: AppConfig.onenote_hotkey (user override) →
+            // DEFAULT_ONENOTE_HOTKEY ("Ctrl+Shift+O"). Parse failure is
+            // logged and skipped — the hotkey is unavailable but the menu
+            // item still works. Re-registration on user config change is
+            // handled inside the `save_config` IPC (see WP-03 amendment
+            // below the command body).
+            #[cfg(target_os = "windows")]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let hotkey_string = preloaded_cfg
+                    .as_ref()
+                    .map(resolved_onenote_hotkey)
+                    .unwrap_or_else(|| DEFAULT_ONENOTE_HOTKEY.to_string());
+                let app_handle_for_hotkey = app.handle().clone();
+                match app.global_shortcut().on_shortcut(
+                    hotkey_string.as_str(),
+                    move |_app, _shortcut, event| {
+                        // Fire only on key-PRESS (otherwise both Down + Up
+                        // trigger the send flow). The plugin emits both
+                        // states by default.
+                        if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            return;
+                        }
+                        let handle = app_handle_for_hotkey.clone();
+                        tauri::async_runtime::spawn(async move {
+                            fire_onenote_send_flow(handle).await;
+                        });
+                    },
+                ) {
+                    Ok(()) => log::info!(
+                        "WP-ONENOTE-EXPORT-03: registered global hotkey '{}'",
+                        hotkey_string
+                    ),
+                    Err(e) => log::warn!(
+                        "WP-ONENOTE-EXPORT-03: failed to register global hotkey '{}': {} \
+                         — the widget menu item still works",
+                        hotkey_string,
+                        e
+                    ),
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                // Suppress unused-variable warning on Mac/Linux. The cfg
+                // gate above means `preloaded_cfg` is read only on
+                // Windows; the binding above this block still needs to
+                // exist for AppState population.
+                let _ = &preloaded_cfg;
+            }
 
             // WP-Threshold-Compact-UX Phase 2 D-CUX-04: apply the
             // non-activating-panel shim to the widget's NSWindow on Mac.
@@ -2461,6 +3030,14 @@ pub fn run() {
                         ) {
                             log::warn!("menu plaud_queue failed: {e}");
                         }
+                    }
+                    MENU_ONENOTE_SEND_CURRENT_PAGE => {
+                        // WP-ONENOTE-EXPORT-03 — same dispatch as the global
+                        // hotkey (default Ctrl+Shift+O). The helper handles
+                        // every error class via structured `IngestionOutcome`
+                        // toast, including PlatformUnsupported on Mac/Linux.
+                        log::info!("menu onenote_send_current_page fired");
+                        fire_onenote_send_flow(app.clone()).await;
                     }
                     MENU_QUIT => {
                         log::info!("menu quit");
@@ -2809,6 +3386,7 @@ mod tests {
             mode: "workspace".to_string(),
             widget_x: Some(1820),
             widget_y: Some(980),
+            onenote_hotkey: None,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -2818,6 +3396,63 @@ mod tests {
         assert_eq!(parsed.widget_y, cfg.widget_y);
         assert_eq!(parsed.last_used, cfg.last_used);
         assert_eq!(parsed.mode, cfg.mode);
+    }
+
+    // ───── WP-ONENOTE-EXPORT-03 — OneNote hotkey persistence ─────
+    //
+    // 4 tests covering the `onenote_hotkey: Option<String>` field on
+    // AppConfig + the `resolved_onenote_hotkey` reader. The reader is the
+    // canonical "what hotkey should I register?" source — used both by
+    // the plugin-registration site and by Configure-pane pre-fill (when
+    // implemented). Tests verify default fallback + custom value pass-
+    // through + empty-string-treated-as-unset + round-trip with hotkey set.
+
+    #[test]
+    fn resolved_onenote_hotkey_with_none_returns_default() {
+        let mut cfg = AppConfig::default();
+        cfg.onenote_hotkey = None;
+        assert_eq!(resolved_onenote_hotkey(&cfg), DEFAULT_ONENOTE_HOTKEY);
+        assert_eq!(resolved_onenote_hotkey(&cfg), "Ctrl+Shift+O");
+    }
+
+    #[test]
+    fn resolved_onenote_hotkey_with_some_returns_custom_value() {
+        let mut cfg = AppConfig::default();
+        cfg.onenote_hotkey = Some("Ctrl+Alt+Q".to_string());
+        assert_eq!(resolved_onenote_hotkey(&cfg), "Ctrl+Alt+Q");
+    }
+
+    #[test]
+    fn resolved_onenote_hotkey_with_empty_string_falls_back_to_default() {
+        // Empty-string or whitespace-only override is treated as unset —
+        // reader returns the default. Belt-and-suspenders for the JS
+        // handleSave path, which sends `null` for an empty input but
+        // could conceivably send `""` if a future code path forgets.
+        let mut cfg = AppConfig::default();
+        cfg.onenote_hotkey = Some("".to_string());
+        assert_eq!(resolved_onenote_hotkey(&cfg), DEFAULT_ONENOTE_HOTKEY);
+        cfg.onenote_hotkey = Some("   ".to_string());
+        assert_eq!(resolved_onenote_hotkey(&cfg), DEFAULT_ONENOTE_HOTKEY);
+    }
+
+    #[test]
+    fn config_round_trips_with_onenote_hotkey_set() {
+        // Round-trip an AppConfig with the hotkey explicitly set, to
+        // verify serde preserves the value through JSON. Companion to
+        // `config_round_trips_through_json` which covers the None case.
+        let cfg = AppConfig {
+            base_url: "https://hosted.viktora.ai".to_string(),
+            bearer_token: "test-token-456".to_string(),
+            last_used: None,
+            mode: "workspace".to_string(),
+            widget_x: None,
+            widget_y: None,
+            onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
+        };
+        let json = serde_json::to_string(&cfg).expect("should serialize");
+        let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(parsed.onenote_hotkey, cfg.onenote_hotkey);
+        assert_eq!(resolved_onenote_hotkey(&parsed), "Ctrl+Shift+T");
     }
 
     // ───── Screenshot payload (WP-OCR-13 AC-19) ─────

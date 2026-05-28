@@ -18,11 +18,27 @@
 
 const tauri = window.__TAURI__;
 
+// WP-ONENOTE-EXPORT-03 — default global hotkey for "send current OneNote
+// page" when AppConfig has no override. Must stay in sync with
+// `DEFAULT_ONENOTE_HOTKEY` in lib.rs (the Rust side is the
+// source-of-truth at registration time; this constant only governs the
+// initial Configure pane display before load_config completes).
+const DEFAULT_ONENOTE_HOTKEY = "Ctrl+Shift+O";
+
 // ───────── State ─────────
 
 const state = {
   inWizard: false,
   lastConfig: null,
+  // WP-ONENOTE-EXPORT-03 — capture-mode tracker for the hotkey configurator.
+  // When user clicks "Change…", we listen for the next keydown and accept
+  // any modifier+key combo as the new hotkey. ESC cancels.
+  onenoteHotkeyCapture: {
+    active: false,
+    keydownListener: null,
+    keyupListener: null,
+    blurListener: null,
+  },
 };
 
 // Maps source_path → pending toast ID so we can dismiss the pre-flight toast
@@ -77,6 +93,16 @@ async function bootstrap() {
   if (cfg) {
     document.getElementById("config-base-url").value = cfg.base_url || "";
     document.getElementById("config-bearer-token").value = cfg.bearer_token || "";
+    // WP-ONENOTE-EXPORT-03 — hydrate the hotkey field from the persisted
+    // AppConfig. `onenote_hotkey` is Option<String> on the Rust side
+    // (additive-only schema delta); reader falls back to the same
+    // DEFAULT_ONENOTE_HOTKEY constant the Rust side ships.
+    const hotkeyEl = document.getElementById("config-onenote-hotkey");
+    if (hotkeyEl) {
+      hotkeyEl.value = (cfg.onenote_hotkey && cfg.onenote_hotkey.trim())
+        ? cfg.onenote_hotkey
+        : DEFAULT_ONENOTE_HOTKEY;
+    }
 
     // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
     // navigates here with #tidbit in the URL hash. Bootstrap detects it,
@@ -291,7 +317,19 @@ async function handleSave(e) {
     return;
   }
 
-  const config = { base_url: baseUrl, bearer_token: bearerToken, last_used: null, mode: "workspace" };
+  // WP-ONENOTE-EXPORT-03 — include the OneNote hotkey in the save
+  // payload. Empty input → null so the Rust-side reader falls back to
+  // DEFAULT_ONENOTE_HOTKEY. The save_config IPC handles
+  // re-registration of the global shortcut when the value changes.
+  const hotkeyEl = document.getElementById("config-onenote-hotkey");
+  const onenoteHotkey = hotkeyEl ? hotkeyEl.value.trim() : "";
+  const config = {
+    base_url: baseUrl,
+    bearer_token: bearerToken,
+    last_used: null,
+    mode: "workspace",
+    onenote_hotkey: onenoteHotkey || null,
+  };
 
   try {
     await tauri.core.invoke("save_config", { config });
