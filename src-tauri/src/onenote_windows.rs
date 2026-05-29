@@ -203,7 +203,19 @@ impl std::error::Error for OneNoteError {}
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
+
+    /// `CREATE_NO_WINDOW` flag for `Command::creation_flags`. Suppresses the
+    /// console window that `powershell.exe` would otherwise flash on each
+    /// subprocess invocation. Without this, every spawn — hotkey send,
+    /// active-page poll (auto-watch mode), per-page Publish in bulk-send —
+    /// briefly opens + closes a black PowerShell console on top of the
+    /// user's screen. Empirically jarring during testing on a real Windows
+    /// machine: bulk-sending 10 pages flashed the console ~20 times.
+    /// Win32 constant: `0x08000000`. See:
+    /// https://learn.microsoft.com/en-us/windows/win32/procthread/process-creation-flags
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     /// `Application.GetHierarchy("", hsPages=4, ...)` — returns the full
     /// notebook/section/page tree XML on stdout. Per
@@ -349,6 +361,7 @@ try {{
     pub(super) fn spawn_ps_script(script: &str) -> Result<String, OneNoteError> {
         let output = Command::new("powershell.exe")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| OneNoteError::PowerShellSpawnFailed(format!("{}", e)))?;
 
