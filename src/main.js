@@ -62,6 +62,20 @@ const state = {
   // shown; cleared when it's hidden (avoid background polling when the
   // status display isn't visible to the user).
   onenoteAutoWatchStatusInterval: null,
+  // WP-AUTO-IMPORT — Auto-import pane working state. `config` is the
+  // persisted AutoImportConfig (camelCase from Rust:
+  // { enabled, onenoteNotebooks: [{notebookId, name, enabled, watermark?}],
+  //   plaudDevices: [{serialNumber, name, enabled, since?}] }). `available`
+  // is the last auto_import_available_sources result (notebooks + plaud
+  // devices that can be designated, plus onenoteSupported / plaudConnected
+  // flags). `mode` toggles the body between the source list and the
+  // add-a-source picker.
+  autoImport: {
+    config: { enabled: false, onenoteNotebooks: [], plaudDevices: [] },
+    available: null,
+    mode: "list",
+    busy: false,
+  },
 };
 
 // WP-ONENOTE-EXPORT-05 — refresh cadence for the Configure-pane status
@@ -90,6 +104,8 @@ const VIEWS = [
   "view-onenote-browse",
   // WP-PLAUD-07b — Settings → Connections (Connect Plaud)
   "view-connections",
+  // WP-AUTO-IMPORT — designated-source auto-import
+  "view-auto-import",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -206,6 +222,14 @@ async function bootstrap() {
     // "Connections…" item), land in the Settings → Connections pane.
     if (window.location.hash === "#connections") {
       enterConnectionsView();
+      return;
+    }
+
+    // WP-AUTO-IMPORT — when widget_expand was invoked with
+    // target_tab="auto-import" (from the right-click menu's "Auto-import…"
+    // item), land in the Auto-import pane.
+    if (window.location.hash === "#auto-import") {
+      enterAutoImportView();
       return;
     }
 
@@ -1854,6 +1878,391 @@ async function wirePlaudConnectStatusListener() {
   });
 }
 
+// ───────── WP-AUTO-IMPORT — Auto-import pane ─────────
+
+// Inline SVGs (stroke = currentColor; inherit the icon-chip color) so the
+// pane matches the widget's line-icon aesthetic rather than emoji.
+const AI_ICON_SYNC = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 4 21 9 16 9"></polyline></svg>`;
+const AI_ICON_MIC = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="21"></line><line x1="8" y1="21" x2="16" y2="21"></line></svg>`;
+const AI_ICON_NOTEBOOK = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path><line x1="9" y1="4" x2="9" y2="20"></line><line x1="13" y1="9" x2="16" y2="9"></line></svg>`;
+const AI_ICON_PLUS = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
+
+function normalizeAutoImportConfig(cfg) {
+  return {
+    enabled: !!(cfg && cfg.enabled),
+    onenoteNotebooks: (cfg && cfg.onenoteNotebooks) || [],
+    plaudDevices: (cfg && cfg.plaudDevices) || [],
+  };
+}
+
+async function enterAutoImportView() {
+  state.inWizard = false;
+  showView("view-auto-import");
+  state.autoImport.mode = "list";
+
+  // Persisted config first (fast), render, then enrich with the available
+  // sources (slower — may hit OneNote COM + the Plaud inbox).
+  try {
+    const cfg = await tauri.core.invoke("get_auto_import_config");
+    state.autoImport.config = normalizeAutoImportConfig(cfg);
+  } catch (err) {
+    console.warn("[auto-import] get_auto_import_config failed:", err);
+    state.autoImport.config = { enabled: false, onenoteNotebooks: [], plaudDevices: [] };
+  }
+  renderAutoImport();
+  refreshAutoImportAvailable();
+}
+
+async function refreshAutoImportAvailable() {
+  try {
+    state.autoImport.available = await tauri.core.invoke("auto_import_available_sources");
+  } catch (err) {
+    console.warn("[auto-import] auto_import_available_sources failed:", err);
+    state.autoImport.available = null;
+  }
+  // Re-render so the Windows-only treatment / picker contents reflect the
+  // fresh data — but only if the user is still on this pane.
+  const view = document.getElementById("view-auto-import");
+  if (view && !view.hidden) renderAutoImport();
+}
+
+async function persistAutoImport() {
+  if (state.autoImport.busy) return;
+  state.autoImport.busy = true;
+  try {
+    const stored = await tauri.core.invoke("set_auto_import_config", {
+      config: state.autoImport.config,
+    });
+    if (stored) state.autoImport.config = normalizeAutoImportConfig(stored);
+  } catch (err) {
+    console.warn("[auto-import] set_auto_import_config failed:", err);
+    showToast({
+      kind: "failure",
+      title: "Couldn't save auto-import settings",
+      body: String(err),
+    });
+  } finally {
+    state.autoImport.busy = false;
+  }
+}
+
+function renderAutoImport() {
+  const body = document.getElementById("auto-import-body");
+  if (!body) return;
+  body.innerHTML = "";
+
+  if (state.autoImport.mode === "picker") {
+    renderAutoImportPicker(body);
+    return;
+  }
+
+  const cfg = state.autoImport.config;
+  const avail = state.autoImport.available;
+  const onenoteSupported = avail ? !!avail.onenoteSupported : true;
+
+  const enabledCount =
+    (cfg.onenoteNotebooks || []).filter((s) => s.enabled).length +
+    (cfg.plaudDevices || []).filter((s) => s.enabled).length;
+
+  // Master toggle row.
+  const master = buildAutoImportRow({
+    kind: "master",
+    iconSvg: AI_ICON_SYNC,
+    name: "Auto-import",
+    meta: cfg.enabled
+      ? enabledCount === 1
+        ? "On · 1 source"
+        : `On · ${enabledCount} sources`
+      : "Off — nothing imports automatically",
+    checked: !!cfg.enabled,
+  });
+  master
+    .querySelector(".auto-import-toggle")
+    .addEventListener("click", handleAutoImportMasterToggle);
+  body.appendChild(master);
+
+  const sources = [
+    ...(cfg.plaudDevices || []).map((s) => ({
+      kind: "plaud",
+      id: s.serialNumber,
+      name: s.name,
+      enabled: s.enabled,
+      meta: "Recorder",
+    })),
+    ...(cfg.onenoteNotebooks || []).map((s) => ({
+      kind: "onenote",
+      id: s.notebookId,
+      name: s.name,
+      enabled: s.enabled,
+      meta: onenoteSupported ? "Notebook" : "Notebook · Windows-only, paused on this Mac",
+    })),
+  ];
+
+  if (sources.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "auto-import-empty";
+    empty.textContent =
+      "No sources yet. Add a OneNote notebook or Plaud device and Threshold will pull in anything new automatically.";
+    body.appendChild(empty);
+  } else {
+    for (const s of sources) {
+      const disabled = s.kind === "onenote" && !onenoteSupported;
+      const row = buildAutoImportRow({
+        kind: s.kind,
+        iconSvg: s.kind === "plaud" ? AI_ICON_MIC : AI_ICON_NOTEBOOK,
+        name: s.name,
+        meta: s.meta,
+        checked: !!s.enabled && !disabled,
+        disabled,
+        removable: true,
+      });
+      const toggle = row.querySelector(".auto-import-toggle");
+      if (!disabled) {
+        toggle.addEventListener("click", () => handleAutoImportToggleSource(s.kind, s.id));
+      }
+      row
+        .querySelector(".auto-import-remove")
+        .addEventListener("click", () => handleAutoImportRemoveSource(s.kind, s.id));
+      body.appendChild(row);
+    }
+  }
+
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "auto-import-add";
+  addBtn.innerHTML = `${AI_ICON_PLUS}<span>Add a source</span>`;
+  addBtn.addEventListener("click", handleAutoImportAddClick);
+  body.appendChild(addBtn);
+}
+
+function buildAutoImportRow({
+  kind,
+  iconSvg,
+  name,
+  meta,
+  checked,
+  disabled = false,
+  removable = false,
+}) {
+  const row = document.createElement("div");
+  row.className = "auto-import-source";
+  row.dataset.kind = kind;
+  if (disabled) row.dataset.disabled = "true";
+
+  const icon = document.createElement("div");
+  icon.className = "auto-import-source-icon";
+  icon.innerHTML = iconSvg;
+
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "auto-import-source-body";
+  const nameEl = document.createElement("div");
+  nameEl.className = "auto-import-source-name";
+  nameEl.textContent = name;
+  const metaEl = document.createElement("div");
+  metaEl.className = "auto-import-source-meta";
+  metaEl.textContent = meta;
+  bodyEl.appendChild(nameEl);
+  bodyEl.appendChild(metaEl);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "auto-import-toggle";
+  toggle.setAttribute("role", "switch");
+  toggle.setAttribute("aria-checked", checked ? "true" : "false");
+  toggle.setAttribute("aria-label", `Toggle ${name}`);
+  if (disabled) toggle.disabled = true;
+
+  row.appendChild(icon);
+  row.appendChild(bodyEl);
+
+  if (removable) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn-inline-link auto-import-remove";
+    remove.textContent = "Remove";
+    row.appendChild(remove);
+  }
+  row.appendChild(toggle);
+  return row;
+}
+
+async function handleAutoImportMasterToggle() {
+  state.autoImport.config.enabled = !state.autoImport.config.enabled;
+  await persistAutoImport();
+  renderAutoImport();
+}
+
+async function handleAutoImportToggleSource(kind, id) {
+  const cfg = state.autoImport.config;
+  const list = kind === "plaud" ? cfg.plaudDevices : cfg.onenoteNotebooks;
+  const idField = kind === "plaud" ? "serialNumber" : "notebookId";
+  const src = (list || []).find((s) => s[idField] === id);
+  if (!src) return;
+  src.enabled = !src.enabled;
+  await persistAutoImport();
+  renderAutoImport();
+}
+
+async function handleAutoImportRemoveSource(kind, id) {
+  const cfg = state.autoImport.config;
+  if (kind === "plaud") {
+    cfg.plaudDevices = (cfg.plaudDevices || []).filter((s) => s.serialNumber !== id);
+  } else {
+    cfg.onenoteNotebooks = (cfg.onenoteNotebooks || []).filter((s) => s.notebookId !== id);
+  }
+  await persistAutoImport();
+  renderAutoImport();
+}
+
+async function handleAutoImportAddClick() {
+  state.autoImport.mode = "picker";
+  renderAutoImport();
+  if (!state.autoImport.available) {
+    await refreshAutoImportAvailable();
+    if (state.autoImport.mode === "picker") renderAutoImport();
+  }
+}
+
+function renderAutoImportPicker(body) {
+  const avail = state.autoImport.available;
+  const cfg = state.autoImport.config;
+
+  const intro = document.createElement("p");
+  intro.className = "auto-import-subtitle";
+  intro.textContent = "Choose a source to import from automatically.";
+  body.appendChild(intro);
+
+  if (!avail) {
+    const loading = document.createElement("p");
+    loading.className = "auto-import-empty";
+    loading.textContent = "Looking for available sources…";
+    body.appendChild(loading);
+    appendAutoImportPickerDone(body);
+    return;
+  }
+
+  const havePlaud = new Set((cfg.plaudDevices || []).map((s) => s.serialNumber));
+  const haveOnenote = new Set((cfg.onenoteNotebooks || []).map((s) => s.notebookId));
+
+  // Plaud group.
+  const plaudLabel = document.createElement("p");
+  plaudLabel.className = "auto-import-section-label";
+  plaudLabel.textContent = "Plaud devices";
+  body.appendChild(plaudLabel);
+
+  if (!avail.plaudConnected) {
+    body.appendChild(
+      autoImportPickerHint("Connect Plaud first in Connections to designate a device.")
+    );
+  } else {
+    const plaudOptions = (avail.plaud || []).filter((o) => !havePlaud.has(o.id));
+    if (plaudOptions.length === 0) {
+      body.appendChild(
+        autoImportPickerHint(
+          "No new Plaud devices — they appear here once they've synced a recording."
+        )
+      );
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "auto-import-picker";
+      for (const o of plaudOptions) wrap.appendChild(buildAutoImportPickerRow("plaud", o, "Recorder"));
+      body.appendChild(wrap);
+    }
+  }
+
+  // OneNote group.
+  const onLabel = document.createElement("p");
+  onLabel.className = "auto-import-section-label";
+  onLabel.textContent = "OneNote notebooks";
+  body.appendChild(onLabel);
+
+  if (!avail.onenoteSupported) {
+    body.appendChild(
+      autoImportPickerHint(
+        "OneNote auto-import is Windows-only — notebooks can't be listed on this Mac."
+      )
+    );
+  } else {
+    const onOptions = (avail.onenote || []).filter((o) => !haveOnenote.has(o.id));
+    if (onOptions.length === 0) {
+      body.appendChild(
+        autoImportPickerHint(
+          "No notebooks to add. Open OneNote (and Refresh) — already-designated ones are hidden."
+        )
+      );
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "auto-import-picker";
+      for (const o of onOptions) wrap.appendChild(buildAutoImportPickerRow("onenote", o, "Notebook"));
+      body.appendChild(wrap);
+    }
+  }
+
+  appendAutoImportPickerDone(body);
+}
+
+function autoImportPickerHint(text) {
+  const p = document.createElement("p");
+  p.className = "auto-import-empty";
+  p.textContent = text;
+  return p;
+}
+
+function buildAutoImportPickerRow(kind, option, metaLabel) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "auto-import-picker-row";
+  const name = document.createElement("span");
+  name.className = "auto-import-picker-name";
+  name.textContent = option.name;
+  const meta = document.createElement("span");
+  meta.className = "auto-import-picker-meta";
+  meta.textContent = metaLabel;
+  btn.appendChild(name);
+  btn.appendChild(meta);
+  btn.addEventListener("click", () => handleAutoImportPick(kind, option));
+  return btn;
+}
+
+function appendAutoImportPickerDone(body) {
+  const done = document.createElement("button");
+  done.type = "button";
+  done.className = "btn btn-secondary";
+  done.textContent = "← Done";
+  done.style.marginTop = "8px";
+  done.style.alignSelf = "flex-start";
+  done.addEventListener("click", () => {
+    state.autoImport.mode = "list";
+    renderAutoImport();
+  });
+  body.appendChild(done);
+}
+
+async function handleAutoImportPick(kind, option) {
+  const cfg = state.autoImport.config;
+  if (kind === "plaud") {
+    cfg.plaudDevices = cfg.plaudDevices || [];
+    if (!cfg.plaudDevices.some((s) => s.serialNumber === option.id)) {
+      cfg.plaudDevices.push({ serialNumber: option.id, name: option.name, enabled: true });
+    }
+  } else {
+    cfg.onenoteNotebooks = cfg.onenoteNotebooks || [];
+    if (!cfg.onenoteNotebooks.some((s) => s.notebookId === option.id)) {
+      cfg.onenoteNotebooks.push({ notebookId: option.id, name: option.name, enabled: true });
+    }
+  }
+  // Adding a source implies the user wants auto-import on.
+  if (!cfg.enabled) cfg.enabled = true;
+  await persistAutoImport();
+  showToast({
+    kind: "success",
+    title: "Source added",
+    body: `${option.name} will auto-import new items.`,
+  });
+  state.autoImport.mode = "list";
+  renderAutoImport();
+}
+
 // ───────── Event wiring ─────────
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -1949,6 +2358,19 @@ window.addEventListener("DOMContentLoaded", () => {
         await tauri.core.invoke("widget_collapse");
       } catch (err) {
         console.warn("[main] widget_collapse (connections-back) failed:", err);
+      }
+    });
+  }
+
+  // WP-AUTO-IMPORT — Auto-import pane back button (same widget_collapse path
+  // as the other list views). Defensive optional chaining for older builds.
+  const autoImportBackBtn = document.getElementById("btn-auto-import-back");
+  if (autoImportBackBtn) {
+    autoImportBackBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("widget_collapse");
+      } catch (err) {
+        console.warn("[main] widget_collapse (auto-import-back) failed:", err);
       }
     });
   }

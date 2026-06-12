@@ -22,12 +22,14 @@
       type="button"
       title="Collapse to widget"
       aria-label="Collapse to widget"
-      style="position:fixed;top:8px;right:8px;z-index:10000;
-             background:rgba(255,255,255,0.85);border:1px solid rgba(0,0,0,0.15);
-             border-radius:8px;padding:4px 10px;font-size:12px;font-weight:500;
-             cursor:pointer;line-height:1.2;
-             box-shadow:0 1px 3px rgba(0,0,0,0.1);"
-    >▢ Collapse</button>
+      style="position:fixed;top:10px;right:10px;z-index:10000;
+             display:inline-flex;align-items:center;gap:6px;
+             background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.16);
+             border-radius:9px;padding:5px 11px;font-size:12px;font-weight:500;
+             color:#e8eaed;cursor:pointer;line-height:1.2;
+             backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+             box-shadow:0 4px 14px rgba(0,0,0,0.3);"
+    ><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>Collapse</button>
     <script>
       // Inline collapse-button handler. Kept separate from main.js so the
       // existing v0.2 UI doesn't need to know about widget mode.
@@ -236,17 +238,17 @@
         <p class="wizard-lede">Try your first capture by doing one of these:</p>
         <div class="wizard-prompts">
           <button type="button" class="wizard-prompt" data-action="drag">
-            <span class="prompt-icon">⤓</span>
+            <span class="prompt-icon"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 19h16"></path></svg></span>
             <span class="prompt-title">Drag a file</span>
             <span class="prompt-detail">.txt · .md · .vtt · .srt · .html · .pdf</span>
           </button>
           <button type="button" class="wizard-prompt" data-action="upload">
-            <span class="prompt-icon">📂</span>
+            <span class="prompt-icon"><svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg></span>
             <span class="prompt-title">Pick a file</span>
             <span class="prompt-detail">Mac file picker</span>
           </button>
           <button type="button" class="wizard-prompt" data-action="screenshot">
-            <span class="prompt-icon">⌗</span>
+            <span class="prompt-icon"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><circle cx="12" cy="12" r="1.5" fill="currentColor"></circle></svg></span>
             <span class="prompt-title">Capture a region</span>
             <span class="prompt-detail">Native OCR; drag a region</span>
           </button>
@@ -269,20 +271,20 @@
 
       <div class="capture-controls">
         <button type="button" id="btn-capture-screen" class="capture-button">
-          <span class="capture-icon">⌗</span>
+          <span class="capture-icon"><svg viewBox="0 0 24 24" width="27" height="27" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><circle cx="12" cy="12" r="1.5" fill="currentColor"></circle></svg></span>
           <span class="capture-label">Capture Screen</span>
           <span class="capture-detail">Drag a region to capture text</span>
         </button>
 
         <button type="button" id="btn-upload-file" class="capture-button">
-          <span class="capture-icon">📂</span>
+          <span class="capture-icon"><svg viewBox="0 0 24 24" width="27" height="27" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg></span>
           <span class="capture-label">Upload File</span>
           <span class="capture-detail">.txt · .md · .vtt · .srt · .html · .pdf</span>
         </button>
       </div>
 
       <div class="drop-hint" id="drop-hint">
-        <span class="drop-icon">⤓</span>
+        <span class="drop-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 19h16"></path></svg></span>
         Or just drag a file anywhere onto this window
       </div>
     </section>
@@ -489,11 +491,42 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-AUTO-IMPORT — Auto-import pane.
+         Reached via right-click menu → "Auto-import…" (fires widget_expand
+         with target_tab="auto-import"). main.js's bootstrap hash-router
+         detects #auto-import and calls enterAutoImportView(), which loads
+         the persisted auto_import config (get_auto_import_config) +
+         available sources (auto_import_available_sources) and renders the
+         designated-source list with per-source toggles plus an
+         "Add a source" picker. New items from enabled sources are pulled in
+         silently by the Rust polling loop; each import fires a toast.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-auto-import" class="view view-auto-import" hidden>
+      <header class="auto-import-header">
+        <h1 class="auto-import-title">Auto-import</h1>
+        <p class="auto-import-subtitle">
+          New items from designated sources arrive on their own — no manual step.
+        </p>
+      </header>
+
+      <div id="auto-import-body" class="auto-import-list">
+        <!-- Master toggle + source rows + "Add a source" rendered by
+             renderAutoImport() in main.js. -->
+      </div>
+
+      <div class="auto-import-footer">
+        <button type="button" id="btn-auto-import-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->
     <div id="drop-overlay" class="drop-overlay" hidden>
       <div class="drop-overlay-content">
-        <span class="drop-overlay-icon">⤓</span>
+        <span class="drop-overlay-icon"><svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 19h16"></path></svg></span>
         <p>Drop to capture</p>
       </div>
     </div>
