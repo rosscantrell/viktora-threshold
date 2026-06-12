@@ -844,18 +844,23 @@ function renderRecordCard(rec, recState, lifecycle, recEdges) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
-  // Meta: owner · due · silent-days (when overdue+silent).
-  const metaParts = [];
-  if (rec.owner) metaParts.push(prettySlug(rec.owner));
-  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
-  if (lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number") {
-    metaParts.push(lifecycle.silentDays + "d silent");
-  }
-  if (metaParts.length) {
+  // Meta: owner · due dim; the overdue/silent count amber (when overdue+silent).
+  const dimMeta = [];
+  if (rec.owner) dimMeta.push(prettySlug(rec.owner));
+  if (rec.due) dimMeta.push("due " + formatDueDate(rec.due));
+  const cardOverdue =
+    lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number";
+  if (dimMeta.length || cardOverdue) {
     const meta = document.createElement("p");
     meta.className = "record-meta";
-    if (lifecycle && lifecycle.overdueSilent) meta.dataset.attention = "true";
-    meta.textContent = metaParts.join(" · ");
+    meta.textContent = dimMeta.join(" · ");
+    if (cardOverdue) {
+      if (dimMeta.length) meta.appendChild(document.createTextNode(" · "));
+      const overdue = document.createElement("span");
+      overdue.className = "record-meta-overdue";
+      overdue.textContent = lifecycle.silentDays + "d silent";
+      meta.appendChild(overdue);
+    }
     card.appendChild(meta);
   }
 
@@ -1120,15 +1125,22 @@ function renderAttentionRow(entry) {
   summary.textContent = rec.summary || "";
   row.appendChild(summary);
 
-  const metaParts = [];
-  if (rec.owner) metaParts.push(prettySlug(rec.owner));
-  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
-  if (typeof lc.silentDays === "number") metaParts.push(lc.silentDays + "d silent");
-  if (metaParts.length) {
+  // Metadata: owner + due are dim; only the overdue/silent count is amber.
+  const dimParts = [];
+  if (rec.owner) dimParts.push(prettySlug(rec.owner));
+  if (rec.due) dimParts.push("due " + formatDueDate(rec.due));
+  const hasSilent = typeof lc.silentDays === "number";
+  if (dimParts.length || hasSilent) {
     const meta = document.createElement("p");
     meta.className = "log-row-meta";
-    meta.dataset.attention = "true";
-    meta.textContent = metaParts.join(" · ");
+    meta.textContent = dimParts.join(" · ");
+    if (hasSilent) {
+      if (dimParts.length) meta.appendChild(document.createTextNode(" · "));
+      const overdue = document.createElement("span");
+      overdue.className = "log-meta-overdue";
+      overdue.textContent = lc.silentDays + "d silent";
+      meta.appendChild(overdue);
+    }
     row.appendChild(meta);
   }
 
@@ -1147,54 +1159,47 @@ function renderAttentionRow(entry) {
   return row;
 }
 
-/** One contradiction row: the two record summaries with a conflict marker. */
+/** One contradiction — a compact inline warning chip (severity tag + the two
+ *  record summaries). The full explanation lives in Receipts, not here. */
 function renderContradictionRow(edge) {
   const row = document.createElement("div");
   row.className = "log-contradiction-row";
   row.dataset.severity = edge.severity || "";
 
-  const head = document.createElement("div");
-  head.className = "log-row-head";
-  const icon = document.createElement("span");
-  icon.className = "record-edge-icon";
-  icon.textContent = "⚠️";
-  head.appendChild(icon);
-  const sev = document.createElement("span");
-  sev.className = "log-contradiction-sev";
-  sev.dataset.severity = edge.severity || "";
-  sev.textContent = (edge.severity || "").toUpperCase();
-  head.appendChild(sev);
-  row.appendChild(head);
-
-  const pair = document.createElement("p");
-  pair.className = "log-contradiction-pair";
-  pair.textContent = `${edge.recordASummary || "—"}  ⟷  ${edge.recordBSummary || "—"}`;
-  row.appendChild(pair);
-
-  if (edge.explanation) {
-    const why = document.createElement("p");
-    why.className = "log-contradiction-why";
-    why.textContent = edge.explanation;
-    row.appendChild(why);
+  if (edge.severity) {
+    const sev = document.createElement("span");
+    sev.className = "log-contradiction-sev";
+    sev.textContent = edge.severity.toUpperCase();
+    row.appendChild(sev);
   }
+
+  const text = document.createElement("span");
+  text.className = "log-contradiction-text";
+  text.textContent = `${edge.recordASummary || "—"} ⟷ ${edge.recordBSummary || "—"}`;
+  row.appendChild(text);
   return row;
 }
 
-/** One owner-load chip: owner, open commitments, overdue+silent count. */
+/** One owner-load chip: a small ghost card — owner + open count (dim), with the
+ *  overdue count in amber when present. */
 function renderOwnerChip(o) {
   const chip = document.createElement("div");
   chip.className = "log-owner-chip";
-  if (o.overdueSilent > 0) chip.dataset.attention = "true";
   const name = document.createElement("span");
   name.className = "log-owner-name";
   name.textContent = prettySlug(o.owner);
   chip.appendChild(name);
+
   const count = document.createElement("span");
   count.className = "log-owner-count";
-  count.textContent =
-    o.overdueSilent > 0
-      ? `${o.commitments} open · ${o.overdueSilent} overdue`
-      : `${o.commitments} open`;
+  count.textContent = `${o.commitments} open`;
+  if (o.overdueSilent > 0) {
+    count.appendChild(document.createTextNode(" · "));
+    const overdue = document.createElement("span");
+    overdue.className = "log-owner-overdue";
+    overdue.textContent = `${o.overdueSilent} overdue`;
+    count.appendChild(overdue);
+  }
   chip.appendChild(count);
   return chip;
 }
