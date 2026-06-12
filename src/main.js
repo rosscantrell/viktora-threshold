@@ -106,6 +106,8 @@ const VIEWS = [
   "view-connections",
   // WP-AUTO-IMPORT — designated-source auto-import
   "view-auto-import",
+  // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
+  "view-log",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -191,14 +193,31 @@ async function bootstrap() {
     // available (covers: user opened #tidbit manually with no pending,
     // pending was cleared by a previous view, IPC failure).
     if (window.location.hash === "#tidbit") {
+      // WP-THRESHOLD-LOG-UX — the post-capture panel is records-primary now.
+      // Fetch BOTH the pending records (the always-present body) and the
+      // pending tidbit (the amber insight card, when a marker fired). Each
+      // fetch is independent — one failing/absent doesn't block the other.
+      let records = null;
+      let tidbit = null;
       try {
-        const tidbit = await tauri.core.invoke("get_pending_tidbit");
-        enterTidbitView(tidbit);
-        return;
+        records = await tauri.core.invoke("get_pending_records");
+      } catch (err) {
+        console.warn("[main] get_pending_records failed:", err);
+      }
+      try {
+        tidbit = await tauri.core.invoke("get_pending_tidbit");
       } catch (err) {
         console.warn("[main] get_pending_tidbit failed:", err);
-        // Fall through to main view; better than a blank screen
       }
+      enterPostCaptureView(tidbit, records);
+      return;
+    }
+
+    // WP-THRESHOLD-LOG-UX — widget_expand("log") (the "Today" menu item or the
+    // ambient badge) navigates here with #log. Render the live decision log.
+    if (window.location.hash === "#log") {
+      enterLogView();
+      return;
     }
 
     // WP-PLAUD-04a — when widget_expand was invoked with
@@ -601,50 +620,117 @@ async function enterMainView(cfg) {
   // supported" toast (Linux, etc.) is emitted by run_screen_capture itself.
 }
 
-// ───────── Tidbit panel view (WP-Threshold-Tidbit-Return Phase B) ─────────
+// ───────── Post-capture panel (WP-THRESHOLD-LOG-UX, records-primary) ─────────
 
 /**
- * Render the tidbit panel view.
- *
- * Q4 empirical range: whyThisMatters runs 100-800 chars in the Apolla pilot
- * corpus. The body container caps its height via CSS (max-height + overflow-y
- * auto) so any prose length scrolls cleanly without overflowing the panel.
- *
- * Highlight chips: 1-3 per tidbit (Phase A ships 1 per FN-TIDB-15; future
- * work increases). Each chip shows the slug; corpus-overlap chips get a
- * "seen Nx" badge when priorCaptureCount is present.
- *
- * Failure-safe: when called with null/undefined (no pending tidbit), shows
- * an empty-state message instead of a blank panel.
- *
- * @param {object|null} tidbit
+ * Prettify a kebab-case person/entity slug for display:
+ * "dev-patel" → "Dev Patel", "q3-roadmap" → "Q3 Roadmap". Defensive against
+ * empty/odd input (returns the input unchanged).
  */
-function enterTidbitView(tidbit) {
+function prettySlug(slug) {
+  if (!slug || typeof slug !== "string") return "";
+  return slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** Format an ISO date (YYYY-MM-DD) as a short, friendly label. Falls back to
+ *  the raw string if it doesn't parse. */
+function formatDueDate(iso) {
+  if (!iso || typeof iso !== "string") return "";
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/**
+ * Render the post-capture panel — records-primary.
+ *
+ * The records list is the body (it populates on ~every capture once the
+ * decision log is enabled server-side). When a tidbit also exists (a marker
+ * fired), it renders as a single amber insight card at the top. When a capture
+ * produced neither, a quiet "captured & filed" line shows — never an apology.
+ *
+ * @param {object|null} tidbit         get_pending_tidbit payload (or null)
+ * @param {object|null} recordsResp    get_pending_records envelope (or null):
+ *                                     { records: [{record, lifecycle, state}], edges: [...] }
+ */
+function enterPostCaptureView(tidbit, recordsResp) {
   state.inWizard = false;
   showView("view-tidbit");
 
+  const items =
+    recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [];
+  const edges =
+    recordsResp && Array.isArray(recordsResp.edges) ? recordsResp.edges : [];
+
+  const hasTidbit = !!(tidbit && typeof tidbit === "object" && tidbit.title);
+  renderTidbitCard(hasTidbit ? tidbit : null);
+  renderRecords(items, edges);
+
+  const subEl = document.getElementById("postcapture-sub");
+  const filedEl = document.getElementById("postcapture-filed");
+
+  if (items.length > 0) {
+    const decisions = items.filter((it) => recordType(it) === "decision").length;
+    const commitments = items.length - decisions;
+    if (subEl) {
+      subEl.textContent = postCaptureSummaryLine(decisions, commitments);
+      subEl.hidden = false;
+    }
+    if (filedEl) filedEl.hidden = true;
+  } else if (hasTidbit) {
+    if (subEl) {
+      subEl.textContent = "A preview from this capture";
+      subEl.hidden = false;
+    }
+    if (filedEl) filedEl.hidden = true;
+  } else {
+    if (subEl) subEl.hidden = true;
+    if (filedEl) filedEl.hidden = false;
+  }
+}
+
+/** "2 decisions · 3 commitments", grammatically pluralized; either side
+ *  omitted when zero. */
+function postCaptureSummaryLine(decisions, commitments) {
+  const parts = [];
+  if (decisions > 0) parts.push(decisions + (decisions === 1 ? " decision" : " decisions"));
+  if (commitments > 0)
+    parts.push(commitments + (commitments === 1 ? " commitment" : " commitments"));
+  return parts.join(" · ");
+}
+
+/** Pull the record `type` from a {record, lifecycle, state} item OR a bare
+ *  record (tolerates both shapes). */
+function recordType(item) {
+  const rec = item && item.record ? item.record : item;
+  return rec && rec.type ? rec.type : "";
+}
+
+/**
+ * Render the tidbit amber insight card. Pass null to hide it. Reuses the
+ * existing tidbit-* element ids + chip markup (the tidbit content contract is
+ * unchanged); only its placement — a card atop the records — is new.
+ */
+function renderTidbitCard(tidbit) {
+  const cardEl = document.getElementById("tidbit-card");
   const titleEl = document.getElementById("tidbit-title");
   const bodyEl = document.getElementById("tidbit-body");
   const metaEl = document.getElementById("tidbit-meta");
   const highlightsEl = document.getElementById("tidbit-highlights");
   const deeplinkEl = document.getElementById("btn-tidbit-deeplink");
-  const emptyEl = document.getElementById("tidbit-empty");
 
   if (!tidbit || typeof tidbit !== "object") {
-    if (emptyEl) emptyEl.hidden = false;
-    if (titleEl) titleEl.textContent = "";
-    if (bodyEl) bodyEl.textContent = "";
-    if (metaEl) metaEl.hidden = true;
-    if (highlightsEl) highlightsEl.innerHTML = "";
-    if (deeplinkEl) deeplinkEl.style.visibility = "hidden";
+    if (cardEl) cardEl.hidden = true;
     return;
   }
+  if (cardEl) cardEl.hidden = false;
 
-  if (emptyEl) emptyEl.hidden = true;
-  if (deeplinkEl) deeplinkEl.style.visibility = "";
-
-  // textContent assignment is intentional — avoids any innerHTML injection
-  // path even though tidbit content comes from our own server.
+  // textContent throughout — no innerHTML injection path even though the
+  // content is from our own server.
   if (titleEl) titleEl.textContent = tidbit.title || "";
   if (bodyEl) bodyEl.textContent = tidbit.whyThisMatters || "";
 
@@ -684,14 +770,158 @@ function enterTidbitView(tidbit) {
     }
   }
 
-  if (deeplinkEl && tidbit.deepLink) {
-    deeplinkEl.href = tidbit.deepLink;
+  if (deeplinkEl) {
+    if (tidbit.deepLink) {
+      deeplinkEl.href = tidbit.deepLink;
+      deeplinkEl.style.visibility = "";
+    } else {
+      deeplinkEl.style.visibility = "hidden";
+    }
+  }
+}
+
+/**
+ * Render the records list into #records-list. `items` are {record, lifecycle,
+ * state} envelopes; `edges` are the cross-record relationships touching them,
+ * keyed onto each record for the conflict/supersession callouts.
+ */
+function renderRecords(items, edges) {
+  const listEl = document.getElementById("records-list");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  const edgesByRecord = new Map();
+  for (const e of Array.isArray(edges) ? edges : []) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+
+  for (const item of items) {
+    const rec = item && item.record ? item.record : item;
+    if (!rec) continue;
+    listEl.appendChild(
+      renderRecordCard(rec, item.state, item.lifecycle, edgesByRecord.get(rec.recordId) || []),
+    );
+  }
+}
+
+/** Build one record card element. Verbatim is rendered as a quotation ONLY
+ *  when verbatimVerified is true (an unverified quote is a hypothesis, never
+ *  shown as a quotation — the hard constraint). */
+function renderRecordCard(rec, recState, lifecycle, recEdges) {
+  const card = document.createElement("div");
+  card.className = "record-card";
+  card.dataset.type = rec.type || "";
+  if (recState) card.dataset.state = recState;
+
+  // Header: type chip + (state pill when not open).
+  const header = document.createElement("div");
+  header.className = "record-header";
+
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  header.appendChild(chip);
+
+  if (recState && recState !== "open") {
+    const statePill = document.createElement("span");
+    statePill.className = "record-state-pill";
+    statePill.dataset.state = recState;
+    statePill.textContent = recState === "superseded" ? "Superseded" : "Resolved";
+    header.appendChild(statePill);
+  }
+  card.appendChild(header);
+
+  // Summary.
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = rec.summary || "";
+  card.appendChild(summary);
+
+  // Meta: owner · due · silent-days (when overdue+silent).
+  const metaParts = [];
+  if (rec.owner) metaParts.push(prettySlug(rec.owner));
+  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
+  if (lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number") {
+    metaParts.push(lifecycle.silentDays + "d silent");
+  }
+  if (metaParts.length) {
+    const meta = document.createElement("p");
+    meta.className = "record-meta";
+    if (lifecycle && lifecycle.overdueSilent) meta.dataset.attention = "true";
+    meta.textContent = metaParts.join(" · ");
+    card.appendChild(meta);
+  }
+
+  // Verbatim — quotation ONLY when verified.
+  if (rec.verbatimVerified === true && rec.verbatim) {
+    const quote = document.createElement("blockquote");
+    quote.className = "record-quote";
+    quote.textContent = rec.verbatim;
+    card.appendChild(quote);
+  }
+
+  // Edge callouts (conflict / supersession / resolution / dependency).
+  for (const e of recEdges) {
+    const phrasing = edgePhrasing(e, rec.recordId);
+    if (!phrasing) continue;
+    const callout = document.createElement("p");
+    callout.className = "record-edge";
+    callout.dataset.kind = e.kind || "";
+    callout.dataset.severity = e.severity || "";
+    const icon = document.createElement("span");
+    icon.className = "record-edge-icon";
+    icon.textContent = phrasing.icon;
+    callout.appendChild(icon);
+    const label = document.createElement("span");
+    label.className = "record-edge-label";
+    label.textContent = phrasing.label;
+    callout.appendChild(label);
+    card.appendChild(callout);
+  }
+
+  return card;
+}
+
+/**
+ * Direction-aware phrasing for an edge relative to one record. Returns
+ * {icon, label} or null for an unknown kind. For supersedes/resolves/depends_on
+ * the direction matters (recordA is the later/acting record); contradicts and
+ * duplicates are symmetric.
+ */
+function edgePhrasing(edge, recId) {
+  const isA = edge.recordA === recId;
+  const otherSummary = (isA ? edge.recordBSummary : edge.recordASummary) || "another record";
+  switch (edge.kind) {
+    case "contradicts":
+      return { icon: "⚠️", label: "Conflicts with: " + otherSummary };
+    case "supersedes":
+      return isA
+        ? { icon: "⤳", label: "Supersedes: " + otherSummary }
+        : { icon: "⤳", label: "Superseded by: " + otherSummary };
+    case "resolves":
+      return isA
+        ? { icon: "✓", label: "Resolves: " + otherSummary }
+        : { icon: "✓", label: "Resolved by: " + otherSummary };
+    case "duplicates":
+      return { icon: "⧉", label: "Duplicate of: " + otherSummary };
+    case "depends_on":
+      return isA
+        ? { icon: "↳", label: "Depends on: " + otherSummary }
+        : { icon: "↰", label: "Blocks: " + otherSummary };
+    default:
+      return null;
   }
 }
 
 // Back-to-widget button — collapses the expanded UI back to the floating
-// pill. Also clears the pending tidbit so a stale wow-loop doesn't re-fire
-// the next time the user expands for an unrelated reason (e.g. Settings).
+// pill. Also clears the pending tidbit AND the pending records so a stale
+// post-capture panel doesn't re-fire the next time the user expands for an
+// unrelated reason (e.g. Settings).
 const tidbitBackBtn = document.getElementById("btn-tidbit-back");
 if (tidbitBackBtn) {
   tidbitBackBtn.addEventListener("click", async () => {
@@ -701,10 +931,270 @@ if (tidbitBackBtn) {
       console.warn("[main] clear_pending_tidbit failed:", err);
     }
     try {
+      await tauri.core.invoke("clear_pending_records");
+    } catch (err) {
+      console.warn("[main] clear_pending_records failed:", err);
+    }
+    try {
       await tauri.core.invoke("widget_collapse");
     } catch (err) {
       console.warn("[main] widget_collapse failed:", err);
     }
+  });
+}
+
+// "Open Today →" button in the post-capture panel footer — jump straight from
+// the just-captured records into the full decision log.
+const postcaptureLogBtn = document.getElementById("btn-postcapture-log");
+if (postcaptureLogBtn) {
+  postcaptureLogBtn.addEventListener("click", () => {
+    enterLogView();
+  });
+}
+
+// ───────── Today view — the decision/commitment log (WP-THRESHOLD-LOG-UX) ─────────
+
+/**
+ * Render the "Today" view from the live /api/decision-log (via the
+ * fetch_decision_log IPC). Sections, in attention order: needs-attention,
+ * contradictions, state counts, owner load. Handles the empty log and a
+ * server-unreachable error without leaving a blank screen.
+ */
+async function enterLogView() {
+  state.inWizard = false;
+  showView("view-log");
+
+  const statusEl = document.getElementById("log-status");
+  const attentionList = document.getElementById("log-attention-list");
+  const attentionEmpty = document.getElementById("log-attention-empty");
+  const contradictionsSection = document.getElementById("log-contradictions-section");
+  const contradictionsList = document.getElementById("log-contradictions-list");
+  const ownersSection = document.getElementById("log-owners-section");
+  const ownersStrip = document.getElementById("log-owners-strip");
+  const statesStrip = document.getElementById("log-states-strip");
+  const subEl = document.getElementById("log-sub");
+
+  // Loading state.
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading the log…";
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_decision_log");
+  } catch (err) {
+    console.warn("[main] fetch_decision_log failed:", err);
+    if (attentionList) attentionList.innerHTML = "";
+    if (attentionEmpty) attentionEmpty.hidden = true;
+    if (contradictionsSection) contradictionsSection.hidden = true;
+    if (ownersSection) ownersSection.hidden = true;
+    if (statesStrip) statesStrip.hidden = true;
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
+    }
+    return;
+  }
+
+  if (statusEl) statusEl.hidden = true;
+
+  const summary = data && data.summary ? data.summary : {};
+  const states = summary.states || {};
+  const needsAttention = Array.isArray(data && data.needsAttention) ? data.needsAttention : [];
+  const relationships = (data && data.relationships) || {};
+  const contradictions = Array.isArray(relationships.contradictions)
+    ? relationships.contradictions
+    : [];
+  const ownerLoad = Array.isArray(summary.ownerLoad) ? summary.ownerLoad : [];
+
+  // Subtitle reflects the live total.
+  if (subEl) {
+    const total = typeof summary.total === "number" ? summary.total : 0;
+    subEl.textContent =
+      total > 0
+        ? `${needsAttention.length} need attention · ${total} tracked`
+        : "What needs your attention";
+  }
+
+  // States strip (open / resolved / superseded).
+  if (statesStrip) {
+    statesStrip.innerHTML = "";
+    const order = [
+      { key: "open", label: "Open" },
+      { key: "resolved", label: "Resolved" },
+      { key: "superseded", label: "Superseded" },
+    ];
+    let any = false;
+    for (const s of order) {
+      const n = typeof states[s.key] === "number" ? states[s.key] : 0;
+      const pill = document.createElement("span");
+      pill.className = "log-state-pill";
+      pill.dataset.state = s.key;
+      pill.textContent = `${n} ${s.label.toLowerCase()}`;
+      statesStrip.appendChild(pill);
+      if (n > 0) any = true;
+    }
+    statesStrip.hidden = !any;
+  }
+
+  // Needs-attention list.
+  if (attentionList) {
+    attentionList.innerHTML = "";
+    for (const entry of needsAttention) {
+      attentionList.appendChild(renderAttentionRow(entry));
+    }
+    if (attentionEmpty) attentionEmpty.hidden = needsAttention.length > 0;
+  }
+
+  // Contradictions.
+  if (contradictionsSection && contradictionsList) {
+    contradictionsList.innerHTML = "";
+    if (contradictions.length > 0) {
+      for (const edge of contradictions) {
+        contradictionsList.appendChild(renderContradictionRow(edge));
+      }
+      contradictionsSection.hidden = false;
+    } else {
+      contradictionsSection.hidden = true;
+    }
+  }
+
+  // Owner load.
+  if (ownersSection && ownersStrip) {
+    ownersStrip.innerHTML = "";
+    if (ownerLoad.length > 0) {
+      for (const o of ownerLoad.slice(0, 8)) {
+        ownersStrip.appendChild(renderOwnerChip(o));
+      }
+      ownersSection.hidden = false;
+    } else {
+      ownersSection.hidden = true;
+    }
+  }
+}
+
+/** One needs-attention row: summary, subject, owner, due, silent-days. */
+function renderAttentionRow(entry) {
+  const rec = (entry && entry.record) || {};
+  const lc = (entry && entry.lifecycle) || {};
+  const row = document.createElement("div");
+  row.className = "log-attention-row";
+  row.dataset.type = rec.type || "";
+
+  const head = document.createElement("div");
+  head.className = "log-row-head";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(chip);
+  if (rec.primaryEntity) {
+    const subj = document.createElement("span");
+    subj.className = "log-row-subject";
+    subj.textContent = prettySlug(rec.primaryEntity);
+    head.appendChild(subj);
+  }
+  row.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "log-row-summary";
+  summary.textContent = rec.summary || "";
+  row.appendChild(summary);
+
+  const metaParts = [];
+  if (rec.owner) metaParts.push(prettySlug(rec.owner));
+  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
+  if (typeof lc.silentDays === "number") metaParts.push(lc.silentDays + "d silent");
+  if (metaParts.length) {
+    const meta = document.createElement("p");
+    meta.className = "log-row-meta";
+    meta.dataset.attention = "true";
+    meta.textContent = metaParts.join(" · ");
+    row.appendChild(meta);
+  }
+  return row;
+}
+
+/** One contradiction row: the two record summaries with a conflict marker. */
+function renderContradictionRow(edge) {
+  const row = document.createElement("div");
+  row.className = "log-contradiction-row";
+  row.dataset.severity = edge.severity || "";
+
+  const head = document.createElement("div");
+  head.className = "log-row-head";
+  const icon = document.createElement("span");
+  icon.className = "record-edge-icon";
+  icon.textContent = "⚠️";
+  head.appendChild(icon);
+  const sev = document.createElement("span");
+  sev.className = "log-contradiction-sev";
+  sev.dataset.severity = edge.severity || "";
+  sev.textContent = (edge.severity || "").toUpperCase();
+  head.appendChild(sev);
+  row.appendChild(head);
+
+  const pair = document.createElement("p");
+  pair.className = "log-contradiction-pair";
+  pair.textContent = `${edge.recordASummary || "—"}  ⟷  ${edge.recordBSummary || "—"}`;
+  row.appendChild(pair);
+
+  if (edge.explanation) {
+    const why = document.createElement("p");
+    why.className = "log-contradiction-why";
+    why.textContent = edge.explanation;
+    row.appendChild(why);
+  }
+  return row;
+}
+
+/** One owner-load chip: owner, open commitments, overdue+silent count. */
+function renderOwnerChip(o) {
+  const chip = document.createElement("div");
+  chip.className = "log-owner-chip";
+  if (o.overdueSilent > 0) chip.dataset.attention = "true";
+  const name = document.createElement("span");
+  name.className = "log-owner-name";
+  name.textContent = prettySlug(o.owner);
+  chip.appendChild(name);
+  const count = document.createElement("span");
+  count.className = "log-owner-count";
+  count.textContent =
+    o.overdueSilent > 0
+      ? `${o.commitments} open · ${o.overdueSilent} overdue`
+      : `${o.commitments} open`;
+  chip.appendChild(count);
+  return chip;
+}
+
+// Today-view buttons: back-to-widget, refresh, and the view-main / post-capture
+// entry points.
+const logBackBtn = document.getElementById("btn-log-back");
+if (logBackBtn) {
+  logBackBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("widget_collapse");
+    } catch (err) {
+      console.warn("[main] widget_collapse (log-back) failed:", err);
+    }
+  });
+}
+
+const logRefreshBtn = document.getElementById("btn-log-refresh");
+if (logRefreshBtn) {
+  logRefreshBtn.addEventListener("click", () => {
+    enterLogView();
+  });
+}
+
+const openLogBtn = document.getElementById("btn-open-log");
+if (openLogBtn) {
+  openLogBtn.addEventListener("click", () => {
+    enterLogView();
   });
 }
 

@@ -171,6 +171,13 @@ pub struct AppState {
     /// overwritten by a newer capture's tidbit. Single-value (not a queue):
     /// the wow-loop wants "what just happened," not history.
     pub pending_tidbit: Mutex<Option<Tidbit>>,
+    /// WP-THRESHOLD-LOG-UX — most recent decision/commitment records returned
+    /// by `poll_for_records` for the just-captured document. Parallel to
+    /// `pending_tidbit` (never a modification of it): populated when a capture's
+    /// records land, read by the post-capture panel via `get_pending_records`,
+    /// cleared by `clear_pending_records`. Single-value, same rationale as the
+    /// tidbit slot — the panel shows "what this capture produced," not history.
+    pub pending_records: Mutex<Option<DecisionRecordsResponse>>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1357,6 +1364,277 @@ fn clear_pending_tidbit(state: tauri::State<AppState>) {
         .expect("pending_tidbit mutex poisoned") = None;
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-THRESHOLD-LOG-UX — decision/commitment records polling (parallel path)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the tidbit polling path (poll_for_tidbit above) but for the
+// marker-INDEPENDENT decision/commitment log: polls
+// /api/documents/:id/decision-records, which returns the records extracted from
+// a capture once enrichment completes (records fire on ~every capture, unlike
+// tidbits which need a marker). This is a SEPARATE path — `poll_for_tidbit` and
+// the `TidbitStatus` contract are never touched. Both polls run concurrently
+// after a successful ingest; whichever produces content lights the post-capture
+// badge, and the panel renders both when both exist.
+
+/// Mirror of the GET /api/documents/:id/decision-records envelope. Records and
+/// edges are kept as raw JSON values: the Rust layer only needs to know whether
+/// records exist (to decide whether to surface the panel) and the `enabled`
+/// flag (to stop polling when the log is off server-side); the frontend reads
+/// the record/edge fields it renders. Keeping them opaque means a server-side
+/// field addition never forces a client struct change.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionRecordsResponse {
+    pub document_id: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub editor_enabled: bool,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(default)]
+    pub records: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub edges: Vec<serde_json::Value>,
+}
+
+const RECORDS_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const RECORDS_POLL_MAX_WAIT: Duration = Duration::from_secs(60);
+
+/// Spawn `poll_for_records` as a detached task when an ingestion succeeded.
+/// Same gating as `dispatch_tidbit_poll_if_success` (success-only; idempotent
+/// captures and failures skip) and called from the SAME dispatch points, so the
+/// records poll runs alongside the tidbit poll on every capture.
+fn dispatch_records_poll_if_success(
+    app_handle: &tauri::AppHandle,
+    outcome: &IngestionOutcome,
+    cfg: &AppConfig,
+    document_id: String,
+) {
+    if outcome.kind != "success" {
+        return;
+    }
+    let cfg_clone = cfg.clone();
+    let handle_clone = app_handle.clone();
+    tauri::async_runtime::spawn(async move {
+        poll_for_records(handle_clone, cfg_clone, document_id).await;
+    });
+}
+
+/// Poll `/api/documents/:id/decision-records` until records appear (up to 60s).
+///
+/// Termination:
+///   - records non-empty  → cache + emit `threshold://records-arrived` → done.
+///   - `enabled == false` → the decision log is off server-side; nothing will
+///     ever appear, so stop silently (no badge, no spam — mirrors the tidbit
+///     `no-marker` silent omission, so behavior on today's flag-off production
+///     is identical to the current no-op).
+///   - `enabled == true` but still empty → enrichment in flight; keep polling.
+///   - HTTP/parse errors, timeout → silent omission.
+///
+/// Network blips inside the window log + continue (one transient miss shouldn't
+/// kill the panel), exactly like the tidbit loop.
+async fn poll_for_records(app_handle: tauri::AppHandle, cfg: AppConfig, document_id: String) {
+    let url = format!(
+        "{}/api/documents/{}/decision-records",
+        cfg.base_url.trim_end_matches('/'),
+        document_id
+    );
+
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("[records-poll] HTTP client init failed: {e}");
+            return;
+        }
+    };
+
+    let start = std::time::Instant::now();
+    log::info!("[records-poll] starting for doc {document_id}");
+
+    loop {
+        if start.elapsed() >= RECORDS_POLL_MAX_WAIT {
+            log::info!(
+                "[records-poll] 60s timeout reached for doc {document_id}; silent omission"
+            );
+            return;
+        }
+
+        match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<DecisionRecordsResponse>().await {
+                    Ok(parsed) => {
+                        if !parsed.records.is_empty() {
+                            handle_records_ready(&app_handle, parsed).await;
+                            return;
+                        }
+                        if !parsed.enabled {
+                            log::info!(
+                                "[records-poll] decision log disabled server-side for doc \
+                                 {document_id}; silent omission"
+                            );
+                            return;
+                        }
+                        // enabled, still empty → enrichment in progress; keep polling.
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[records-poll] response parse failed for doc {document_id}: {e}; \
+                             silent omission"
+                        );
+                        return;
+                    }
+                }
+            }
+            Ok(resp) => {
+                log::warn!(
+                    "[records-poll] HTTP {} from {} for doc {document_id}; silent omission",
+                    resp.status().as_u16(),
+                    url
+                );
+                return;
+            }
+            Err(e) => {
+                log::debug!(
+                    "[records-poll] transient request error for doc {document_id}: {e}; \
+                     will retry on next interval"
+                );
+                // Don't return; retry on the next interval.
+            }
+        }
+
+        tokio::time::sleep(RECORDS_POLL_INTERVAL).await;
+    }
+}
+
+/// Cache the records in AppState (so the panel's `get_pending_records` IPC can
+/// read them after `widget_expand("tidbit")` reloads the webview) and emit the
+/// `threshold://records-arrived` event the widget listens for to light the
+/// post-capture badge.
+async fn handle_records_ready(app_handle: &tauri::AppHandle, records: DecisionRecordsResponse) {
+    log::info!(
+        "[records] received — doc={}, records={}, edges={}",
+        records.document_id,
+        records.records.len(),
+        records.edges.len()
+    );
+
+    let state = app_handle.state::<AppState>();
+    *state
+        .pending_records
+        .lock()
+        .expect("pending_records mutex poisoned") = Some(records.clone());
+
+    if let Err(e) = app_handle.emit("threshold://records-arrived", records) {
+        log::warn!("[records] failed to emit records-arrived event: {e}");
+    }
+}
+
+/// Frontend reads this on `index.html#tidbit` mount to populate the records
+/// section of the post-capture panel. Returns None when no records are pending.
+#[tauri::command]
+fn get_pending_records(state: tauri::State<AppState>) -> Option<DecisionRecordsResponse> {
+    state
+        .pending_records
+        .lock()
+        .expect("pending_records mutex poisoned")
+        .clone()
+}
+
+/// Frontend invokes this when the user collapses the post-capture panel so a
+/// stale records set doesn't re-populate on the next unrelated expand. Parallels
+/// `clear_pending_tidbit`.
+#[tauri::command]
+fn clear_pending_records(state: tauri::State<AppState>) {
+    *state
+        .pending_records
+        .lock()
+        .expect("pending_records mutex poisoned") = None;
+}
+
+/// WP-THRESHOLD-LOG-UX — the ambient widget badge count. Proxies
+/// GET /api/decision-log and returns just `summary.overdueSilent` (open items
+/// that are overdue AND silent — what needs attention). Best-effort: any error
+/// (not configured, unreachable, parse) returns 0 so the badge simply stays
+/// hidden rather than surfacing an error on the always-on widget.
+#[tauri::command]
+async fn get_decision_log_summary(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    let cfg = match current_config(&state) {
+        Ok(c) => c,
+        Err(_) => return Ok(0),
+    };
+    let url = format!("{}/api/decision-log", cfg.base_url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(0),
+    };
+    let resp = match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Ok(0),
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Ok(0),
+    };
+    let count = body
+        .get("summary")
+        .and_then(|s| s.get("overdueSilent"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    Ok(count)
+}
+
+/// WP-THRESHOLD-LOG-UX — full decision-log payload for the Today view
+/// (`view-log`). Proxies GET /api/decision-log and returns the raw JSON
+/// (summary, needsAttention, relationships, states) for the frontend to render.
+/// Unlike the badge command this surfaces errors so the view can show an
+/// unreachable state instead of a silent blank.
+#[tauri::command]
+async fn fetch_decision_log(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/decision-log", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
+}
+
 /// Helper: pull the current config out of AppState; error if not configured.
 fn current_config(state: &tauri::State<AppState>) -> Result<AppConfig, String> {
     state
@@ -1395,7 +1673,8 @@ async fn ingest_files(
         IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
         if let Some(content) = content_for_id.as_deref() {
             let document_id = compute_document_id(content);
-            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id.clone());
+            dispatch_records_poll_if_success(&app_handle, &outcome, &cfg, document_id);
         }
         // Emit a structured toast event (D-12-18)
         let _ = app_handle.emit("threshold://toast", outcome);
@@ -3971,6 +4250,12 @@ const MENU_CONNECTIONS: &str = "menu.connections";
 /// + Plaud devices). Same widget_expand mechanism as Connections; main.js's
 /// hash-router calls enterAutoImportView() on `#auto-import`.
 const MENU_AUTO_IMPORT: &str = "menu.auto_import";
+/// WP-THRESHOLD-LOG-UX — opens the "Today" decision/commitment-log view
+/// (`view-log`). Same widget_expand mechanism as the other panes; main.js's
+/// hash-router calls enterLogView() on `#log`. Sits at the top of the review
+/// group (just below the capture surfaces) since it's the always-on "what needs
+/// attention" entry point.
+const MENU_LOG: &str = "menu.log";
 /// WP-ONENOTE-EXPORT-05 — disabled menu item that surfaces the live
 /// "Sent today: N pages" counter from the auto-watch loop. Disabled
 /// (un-clickable) per brief §3.5 — it's a visual indicator, not an
@@ -3995,6 +4280,10 @@ fn build_widget_menu(
     let capture = MenuItem::with_id(app, MENU_CAPTURE, "Capture Screen", true, None::<&str>)?;
     let pick_file = MenuItem::with_id(app, MENU_PICK_FILE, "Pick File…", true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
+    // WP-THRESHOLD-LOG-UX — "Today" review surface. Sits first in the review
+    // group (above Plaud Sync Queue) since it's the always-on "what needs
+    // attention" entry point. Routes to enterLogView() via the #log fragment.
+    let today = MenuItem::with_id(app, MENU_LOG, "Today", true, None::<&str>)?;
     // WP-PLAUD-04a — sits between Pick File and Expand so the high-frequency
     // capture surfaces stay at the top of the menu.
     let plaud_queue = MenuItem::with_id(app, MENU_PLAUD_QUEUE, "Plaud Sync Queue", true, None::<&str>)?;
@@ -4071,6 +4360,7 @@ fn build_widget_menu(
                 &capture,
                 &pick_file,
                 &sep1,
+                &today,
                 &plaud_queue,
                 &onenote_send_current_page,
                 &onenote_send_section,
@@ -4095,6 +4385,7 @@ fn build_widget_menu(
             &capture,
             &pick_file,
             &sep1,
+            &today,
             &plaud_queue,
             &onenote_send_current_page,
             &onenote_send_section,
@@ -4350,7 +4641,8 @@ async fn run_screen_capture_mac(app_handle: tauri::AppHandle, cfg: AppConfig) {
                 Some("__screen_capture__".into()),
             )
             .await;
-            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id.clone());
+            dispatch_records_poll_if_success(&app_handle, &outcome, &cfg, document_id);
             outcome
         }
         Err(ocr_mac::CaptureError::CancelledByUser) => IngestionOutcome {
@@ -4410,7 +4702,8 @@ async fn run_screen_capture_windows(app_handle: tauri::AppHandle, cfg: AppConfig
                 Some("__screen_capture__".into()),
             )
             .await;
-            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id);
+            dispatch_tidbit_poll_if_success(&app_handle, &outcome, &cfg, document_id.clone());
+            dispatch_records_poll_if_success(&app_handle, &outcome, &cfg, document_id);
             outcome
         }
         Err(ocr_windows::CaptureError::Timeout) => IngestionOutcome {
@@ -4605,6 +4898,7 @@ pub fn run() {
             app.manage(AppState {
                 config: Mutex::new(preloaded_cfg.clone()),
                 pending_tidbit: Mutex::new(None),
+                pending_records: Mutex::new(None),
             });
 
             // WP-ONENOTE-EXPORT-03 — register the OneNote global hotkey.
@@ -4833,6 +5127,11 @@ pub fn run() {
             // WP-Threshold-Tidbit-Return Phase B
             get_pending_tidbit,
             clear_pending_tidbit,
+            // WP-THRESHOLD-LOG-UX — decision/commitment records + Today view
+            get_pending_records,
+            clear_pending_records,
+            get_decision_log_summary,
+            fetch_decision_log,
             // WP-PLAUD-04a — Plaud Sync Queue
             plaud_discover,
             plaud_get_inbox,
@@ -4930,6 +5229,19 @@ pub fn run() {
                             Some("auto-import".into()),
                         ) {
                             log::warn!("menu auto_import failed: {e}");
+                        }
+                    }
+                    MENU_LOG => {
+                        // WP-THRESHOLD-LOG-UX — expand into the "Today" view.
+                        // The "log" target_tab flows through to main.js as the
+                        // #log URL fragment; main.js's bootstrap hash-router
+                        // calls enterLogView() on match.
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("log".into()),
+                        ) {
+                            log::warn!("menu log (Today) failed: {e}");
                         }
                     }
                     MENU_PLAUD_QUEUE => {
