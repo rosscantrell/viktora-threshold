@@ -1342,28 +1342,18 @@ function renderReceiptsCurrentState(items, _edges) {
     return;
   }
   const rec = derived.item.record || {};
+  // "Current state:" label (dim) + the standing summary, one line, lighter than
+  // the records below.
   const label = document.createElement("span");
-  label.className = "receipts-current-label";
-  label.textContent = derived.standing ? "Current state" : "Last record";
+  label.className = "label";
+  label.textContent = (derived.standing ? "Current state: " : "Last record: ");
   el.appendChild(label);
-
-  const text = document.createElement("span");
-  text.className = "receipts-current-text";
-  text.textContent = rec.summary || "";
-  el.appendChild(text);
-
-  const st = derived.item.state || "open";
-  if (st !== "open") {
-    const pill = document.createElement("span");
-    pill.className = "record-state-pill";
-    pill.dataset.state = st;
-    pill.textContent = st === "superseded" ? "Superseded" : "Resolved";
-    el.appendChild(pill);
-  }
+  el.appendChild(document.createTextNode(rec.summary || ""));
   el.hidden = false;
 }
 
-/** Render the chronological chain — one node per record. */
+/** Render the chronological chain — a single absolute rail + one .rec per
+ *  record (date in the meta line, no left date column). */
 function renderReceiptsChain(items, edges, baseUrl) {
   const chainEl = document.getElementById("receipts-chain");
   if (!chainEl) return;
@@ -1378,6 +1368,13 @@ function renderReceiptsChain(items, edges, baseUrl) {
     }
   }
 
+  // One continuous rail behind the icons (only meaningful with ≥2 records).
+  if (items.length > 1) {
+    const rail = document.createElement("div");
+    rail.className = "chain-rail";
+    chainEl.appendChild(rail);
+  }
+
   for (const item of items) {
     const rec = item.record || item;
     chainEl.appendChild(
@@ -1388,67 +1385,50 @@ function renderReceiptsChain(items, edges, baseUrl) {
 
 function renderReceiptNode(rec, recState, recEdges, baseUrl) {
   const node = document.createElement("div");
-  node.className = "receipts-node";
+  node.className = "rec";
   if (recState) node.dataset.state = recState;
 
-  // Rail: date + connector dot.
-  const rail = document.createElement("div");
-  rail.className = "receipts-rail";
-  const dot = document.createElement("span");
-  dot.className = "receipts-dot";
-  dot.dataset.type = rec.type || "";
-  rail.appendChild(dot);
-  const date = document.createElement("span");
-  date.className = "receipts-date";
-  date.textContent = rec.date ? formatDueDate(rec.date) : "";
-  rail.appendChild(date);
-  node.appendChild(rail);
+  // Icon — the type node on the rail (decision blue / commitment green).
+  const icon = document.createElement("div");
+  icon.className = "rec-icon";
+  icon.dataset.type = rec.type || "";
+  icon.textContent = rec.type === "decision" ? "D" : "C";
+  node.appendChild(icon);
 
-  // Body.
   const body = document.createElement("div");
-  body.className = "receipts-node-body";
+  body.className = "rec-body";
 
-  const head = document.createElement("div");
-  head.className = "receipts-node-head";
-  const chip = document.createElement("span");
-  chip.className = "record-chip";
-  chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
-  head.appendChild(chip);
-  if (rec.owner) {
-    const owner = document.createElement("span");
-    owner.className = "receipts-owner";
-    owner.textContent = prettySlug(rec.owner);
-    head.appendChild(owner);
-  }
-  if (recState && recState !== "open") {
-    const pill = document.createElement("span");
-    pill.className = "record-state-pill";
-    pill.dataset.state = recState;
-    pill.textContent = recState === "superseded" ? "Superseded" : "Resolved";
-    head.appendChild(pill);
-  }
-  body.appendChild(head);
+  // Meta — date · type · owner (the date lives HERE, not a left column).
+  const metaBits = [];
+  if (rec.date) metaBits.push(formatDueDate(rec.date));
+  if (rec.type) metaBits.push(rec.type);
+  if (rec.owner) metaBits.push(prettySlug(rec.owner));
+  const meta = document.createElement("p");
+  meta.className = "rec-meta";
+  meta.textContent = metaBits.join(" · ");
+  body.appendChild(meta);
 
-  const summary = document.createElement("p");
-  summary.className = "receipts-summary";
-  summary.textContent = rec.summary || "";
-  body.appendChild(summary);
+  // Title (the summary).
+  const title = document.createElement("p");
+  title.className = "rec-title";
+  title.textContent = rec.summary || "";
+  body.appendChild(title);
 
-  // Verbatim quote — ONLY when verified (the trust property).
+  // Verbatim quote — ONLY when verified (the trust property). Border-left only,
+  // no box.
   if (rec.verbatimVerified === true && rec.verbatim) {
     const quote = document.createElement("blockquote");
-    quote.className = "record-quote";
+    quote.className = "rec-quote";
     quote.textContent = rec.verbatim;
     body.appendChild(quote);
   }
 
-  // Edge chips.
+  // Edge chips — supersession/conflict (red family), resolution (green).
   for (const e of recEdges) {
     const phrasing = edgePhrasing(e, rec.recordId);
     if (!phrasing) continue;
     const chipEl = document.createElement("span");
-    chipEl.className = "receipts-edge-chip";
+    chipEl.className = "rec-edge";
     chipEl.dataset.kind = e.kind || "";
     chipEl.textContent = `${phrasing.icon} ${phrasing.label}`;
     body.appendChild(chipEl);
@@ -1458,7 +1438,7 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl) {
   const link = receiptsDeepLink(baseUrl, rec.documentId);
   if (link) {
     const a = document.createElement("a");
-    a.className = "receipts-source-link";
+    a.className = "rec-source";
     a.href = link;
     a.target = "_blank";
     a.rel = "noopener";

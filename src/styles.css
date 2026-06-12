@@ -1967,63 +1967,59 @@ code {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- * WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier), migrated onto the
- * glass.css token system. Deterministic render; shared primitives in glass.css.
+ * WP-THRESHOLD-LOG-UX — Receipts. Implemented against the mockup CSS skeleton
+ * (DESIGN CORRECTION 2): one 640px column; the chain is a single absolute rail
+ * with the date IN the meta line (no left date column); quotes are border-left
+ * only (no box); records sit flush (no per-record card). Density target: a full
+ * record ≈100px, the whole 3-record view ≈600px.
  * ══════════════════════════════════════════════════════════════════════════ */
 
+/* ── view chrome ── */
 .view-receipts {
-  max-width: 600px;
+  padding: 0;
+}
+
+.receipts-content {
+  max-width: 640px;
   margin: 0 auto;
-  padding: 26px 28px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
 
 .receipts-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.receipts-eyebrow {
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--glass-text-faint);
-  margin: 0 0 3px;
+.receipts-header-text {
+  min-width: 0;
 }
 
 .receipts-title {
-  font-size: 16px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--glass-text);
+  font-size: 14px;
+  font-weight: 500;
+  color: #e8eaed;
   margin: 0;
 }
 
 .receipts-sub {
   font-size: 11.5px;
-  font-weight: 400;
-  color: var(--glass-text-dim);
-  margin: 3px 0 0;
+  color: #9aa0a6;
+  margin: 0;
 }
 
-.receipts-header-actions {
-  flex-shrink: 0;
-}
-
-/* Copy — the one primary action, amber-tinted (glass brief button system). */
+/* Copy — amber-tint, no outer glow. */
 .view-receipts #btn-receipts-copy {
+  flex-shrink: 0;
   font-size: 12px;
   font-weight: 600;
   padding: 6px 16px;
   background: rgba(255, 196, 64, 0.14);
   border: 1px solid rgba(255, 196, 64, 0.35);
-  color: var(--glass-accent);
-  border-radius: var(--glass-radius-sm);
+  color: #ffc440;
+  border-radius: 8px;
+  box-shadow: none;
 }
 
 .view-receipts #btn-receipts-copy:hover {
@@ -2034,203 +2030,169 @@ code {
   opacity: 0.7;
 }
 
-.view-receipts #btn-receipts-back {
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 5px 12px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border-strong);
-  color: var(--glass-text);
-  border-radius: var(--glass-radius-sm);
+/* ── current state: a strip, not a card; above the chain, lighter than records ── */
+.state-strip {
+  margin: 14px 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #e8eaed;
 }
 
-/* Current-state strip — the derived "where this stands now" line. */
-.receipts-current {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border-strong);
-  border-radius: var(--glass-radius-md);
+.state-strip .label {
+  color: #9aa0a6;
 }
 
-.receipts-current-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--glass-text-faint);
+/* ── the chain: timeline and content are ONE unit ── */
+.chain {
+  padding: 16px 18px;
+  position: relative;
 }
 
-.receipts-current-text {
-  flex: 1;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--glass-text);
-  word-break: break-word;
+.chain-rail {
+  position: absolute;
+  left: 27px;
+  top: 20px;
+  bottom: 14px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.10);
 }
 
-/* Chain timeline. */
-.receipts-chain {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.receipts-node {
+.rec {
   display: flex;
   gap: 14px;
-  padding: 0 0 14px;
-}
-
-.receipts-node:last-child {
-  padding-bottom: 0;
-}
-
-.receipts-rail {
+  margin-bottom: 16px;
   position: relative;
-  flex-shrink: 0;
-  width: 76px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
-  padding-top: 2px;
 }
 
-/* Vertical connector line down the rail between dots. */
-.receipts-node:not(:last-child) .receipts-rail::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 14px;
-  bottom: -14px;
-  width: 1px;
-  background: var(--glass-border-strong);
+.rec:last-child {
+  margin-bottom: 0;
 }
 
-.receipts-dot {
-  width: 9px;
-  height: 9px;
+.rec-icon {
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: var(--glass-text-faint);
-  box-shadow: 0 0 0 3px var(--glass-bg);
-  z-index: 1;
-}
-
-.receipts-dot[data-type="decision"] { background: var(--glass-link); }
-.receipts-dot[data-type="commitment"] { background: var(--glass-success); }
-
-.receipts-date {
-  font-size: 10.5px;
-  font-weight: 500;
-  color: var(--glass-text-faint);
-}
-
-.receipts-node-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 12px 14px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-md);
-}
-
-.receipts-node[data-state="superseded"] .receipts-node-body {
-  opacity: 0.7;
-}
-
-.receipts-node-head {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.receipts-owner {
+  justify-content: center;
   font-size: 11px;
-  font-weight: 500;
-  color: var(--glass-text-dim);
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: #9aa0a6;
 }
 
-.receipts-summary {
+.rec-icon[data-type="decision"] {
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: #7fb3e8;
+}
+
+.rec-icon[data-type="commitment"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: #5dcaa5;
+}
+
+.rec-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-meta {
+  font-size: 11.5px;
+  color: #9aa0a6;
+  margin: 0 0 3px;
+}
+
+.rec-title {
   font-size: 13px;
-  line-height: 1.45;
-  color: var(--glass-text);
-  margin: 0;
+  color: #e8eaed;
+  margin: 0 0 4px;
   word-break: break-word;
 }
 
-/* Edge chips — ghost tints (contradiction danger, resolution success, else dim). */
-.receipts-edge-chip {
+.rec-quote {
+  font-size: 13px;
+  color: #e8eaed;
+  font-style: italic;
+  margin: 0 0 4px;
+  border-left: 2px solid rgba(255, 255, 255, 0.18);
+  padding-left: 10px;
+  word-break: break-word;
+}
+
+.rec-edge {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
   gap: 6px;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  color: var(--glass-text-dim);
+  border-radius: 7px;
+  padding: 5px 9px;
+  margin: 6px 0;
+  font-size: 11.5px;
+  background: rgba(240, 149, 149, 0.10);
+  border: 1px solid rgba(240, 149, 149, 0.3);
+  color: #f0b5b5;
 }
 
-.receipts-edge-chip[data-kind="contradicts"] {
-  background: rgba(240, 149, 149, 0.1);
-  border-color: rgba(240, 149, 149, 0.3);
-  color: var(--glass-danger);
+.rec-edge[data-kind="resolves"] {
+  background: rgba(93, 202, 165, 0.12);
+  border-color: rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
 }
 
-.receipts-edge-chip[data-kind="resolves"] {
-  background: rgba(93, 202, 165, 0.15);
-  border-color: rgba(93, 202, 165, 0.5);
-  color: var(--glass-success);
-}
-
-.receipts-source-link {
-  align-self: flex-start;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--glass-link);
+.rec-source {
+  display: block;
+  font-size: 11.5px;
+  color: #7fb3e8;
   text-decoration: none;
 }
 
-.receipts-source-link:hover {
+.rec-source:hover {
   text-decoration: underline;
 }
 
 .receipts-status {
-  font-size: 12px;
-  text-align: center;
-  margin: 6px 0;
+  margin: 14px 18px;
   padding: 14px;
-  border-radius: var(--glass-radius-md);
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  color: var(--glass-text-dim);
+  text-align: center;
+  font-size: 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #9aa0a6;
 }
 
 .receipts-status[data-kind="error"] {
-  background: rgba(240, 149, 149, 0.1);
+  background: rgba(240, 149, 149, 0.10);
   border-color: rgba(240, 149, 149, 0.3);
-  color: var(--glass-danger);
+  color: #f0b5b5;
 }
 
-.receipts-footer-note {
-  font-size: 11px;
-  color: var(--glass-text-faint);
-  text-align: center;
-  margin: 0;
-}
-
+/* ── footer ── */
 .receipts-footer {
-  display: flex;
-  padding-top: 2px;
+  padding: 9px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
+  color: #6b7178;
+}
+
+.receipts-actions {
+  padding: 10px 18px 14px;
+}
+
+.view-receipts #btn-receipts-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e8eaed;
+  border-radius: 8px;
 }
 
 /* "Show receipts" entry buttons on Today rows + record cards. */
