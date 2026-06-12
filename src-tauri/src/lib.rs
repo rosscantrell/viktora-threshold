@@ -142,6 +142,20 @@ static ONENOTE_AUTO_WATCH_ACTIVE: AtomicBool = AtomicBool::new(false);
 static ONENOTE_AUTO_WATCH_TRACKER: std::sync::LazyLock<Mutex<onenote_windows::AutoWatchTracker>> =
     std::sync::LazyLock::new(|| Mutex::new(onenote_windows::AutoWatchTracker::new()));
 
+/// WP-AUTO-IMPORT — true while the designated-source auto-import loop is
+/// running. Mirrors the auto-watch flag pattern: the loop self-terminates
+/// when this flips to false. Persisted intent lives in
+/// `AppConfig.auto_import.enabled`.
+static AUTO_IMPORT_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// WP-AUTO-IMPORT — process-global set of source-item keys already imported
+/// this session (`"onenote:<pageId>"` / `"plaud:<id>"`). Belt-and-suspenders
+/// against double-imports between an import succeeding and its watermark /
+/// decision persisting. Cleared on restart (the persisted watermark / `since`
+/// are the durable dedup; this only covers within-session races).
+static AUTO_IMPORT_SESSION_SENT: std::sync::LazyLock<Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
 // ───────────────────────────────────────────────────────────────────────────
 // AppState
 // ───────────────────────────────────────────────────────────────────────────
@@ -226,6 +240,15 @@ pub struct AppConfig {
     /// (additive-only schema delta — same pattern as widget_x / widget_y).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plaud_connect: Option<plaud_oauth::PlaudConnectStatus>,
+    /// WP-AUTO-IMPORT — designated-source background auto-import settings.
+    /// Distinct from `auto_watch` (which sends the page you're *currently
+    /// viewing*): this watches user-designated OneNote notebooks + Plaud
+    /// devices and silently pulls in anything *new* since the source was
+    /// designated. `#[serde(default)]` (struct-level) means legacy configs
+    /// without the field deserialize as `AutoImportConfig::default()`
+    /// (everything off / empty) — additive-only schema delta.
+    #[serde(default)]
+    pub auto_import: AutoImportConfig,
 }
 
 impl Default for AppConfig {
@@ -240,8 +263,67 @@ impl Default for AppConfig {
             onenote_hotkey: None,
             auto_watch: false,
             plaud_connect: None,
+            auto_import: AutoImportConfig::default(),
         }
     }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-AUTO-IMPORT — designated-source auto-import config
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Top-level auto-import settings persisted inside `AppConfig`. `enabled` is
+/// the master switch; individual sources also carry their own `enabled` flag
+/// so a user can keep a source designated but temporarily pause it.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AutoImportConfig {
+    /// Master on/off. The polling loop runs only when this is true AND at
+    /// least one source is enabled.
+    pub enabled: bool,
+    /// OneNote notebooks to auto-import new/changed pages from (Windows-only
+    /// at fire time; the list still persists + renders on Mac so the UI is
+    /// uniform).
+    pub onenote_notebooks: Vec<AutoImportOneNoteSource>,
+    /// Plaud devices (by serial number) to auto-import new recordings from.
+    pub plaud_devices: Vec<AutoImportPlaudSource>,
+}
+
+/// A single designated OneNote notebook.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoImportOneNoteSource {
+    pub notebook_id: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// High-water mark: the newest page `lastModifiedTime` (RFC3339) we've
+    /// already imported. Pages strictly newer than this are "new". `None`
+    /// means "not yet baselined" — the first poll seeds it to the notebook's
+    /// current newest page and imports nothing, so designating a notebook
+    /// never bulk-imports its back-catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<String>,
+}
+
+/// A single designated Plaud device.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoImportPlaudSource {
+    pub serial_number: String,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Designation timestamp (RFC3339). Only inbox items discovered *after*
+    /// this import automatically, so designating a device doesn't sweep in
+    /// its existing pending backlog. Stamped server-of-record-side in
+    /// `set_auto_import_config` when first seen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// WP-ONENOTE-EXPORT-03 — default global hotkey for "send current OneNote
@@ -2892,6 +2974,560 @@ fn auto_watch_counter_label() -> String {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-AUTO-IMPORT — designated-source background auto-import
+// ───────────────────────────────────────────────────────────────────────────
+//
+// A single polling loop (cadence AUTO_IMPORT_POLL_INTERVAL) sweeps the user's
+// designated sources and silently pulls in anything new:
+//   - Plaud devices (by serial): import pending inbox items discovered after
+//     the device's `since` timestamp. Cross-platform — works on Mac.
+//   - OneNote notebooks (by id): import pages whose lastModifiedTime is newer
+//     than the per-notebook `watermark`. Windows-only at fire time (the COM
+//     enumerate returns PlatformUnsupported on Mac/Linux, so the loop no-ops
+//     that half).
+// Each import emits a `threshold://toast` so the user sees what landed.
+
+/// Poll cadence. Heavier than the 2s auto-watch tick (this hits the Plaud
+/// server + enumerates the full OneNote hierarchy), so 90s keeps load modest
+/// while still surfacing new items within a couple of minutes.
+const AUTO_IMPORT_POLL_INTERVAL: Duration = Duration::from_secs(90);
+
+/// Parse an RFC3339 / ISO8601 timestamp (OneNote emits e.g.
+/// `2026-05-27T12:00:00.000Z`; Plaud emits RFC3339). `None` on failure.
+fn parse_ts(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(s.trim()).ok()
+}
+
+/// True iff `a` is strictly later than `b`. Parses both as RFC3339; on parse
+/// failure falls back to byte comparison (zero-padded ISO8601 UTC strings
+/// sort chronologically as bytes).
+fn ts_after(a: &str, b: &str) -> bool {
+    match (parse_ts(a), parse_ts(b)) {
+        (Some(x), Some(y)) => x > y,
+        _ => a.trim() > b.trim(),
+    }
+}
+
+fn auto_import_seen(key: &str) -> bool {
+    AUTO_IMPORT_SESSION_SENT
+        .lock()
+        .map(|s| s.contains(key))
+        .unwrap_or(false)
+}
+
+fn auto_import_mark(key: &str) {
+    if let Ok(mut s) = AUTO_IMPORT_SESSION_SENT.lock() {
+        s.insert(key.to_string());
+    }
+}
+
+fn auto_import_has_enabled_source(cfg: &AppConfig) -> bool {
+    cfg.auto_import.onenote_notebooks.iter().any(|n| n.enabled)
+        || cfg.auto_import.plaud_devices.iter().any(|d| d.enabled)
+}
+
+/// Read-modify-write the persisted OneNote watermark for a single notebook.
+/// Locks AppState, mutates the matching source, writes to disk + refreshes the
+/// in-memory cache. Quiet on the no-match / lock-poisoned paths (best-effort).
+fn auto_import_persist_onenote_watermark(
+    app: &tauri::AppHandle,
+    notebook_id: &str,
+    watermark: &str,
+) {
+    let state = app.state::<AppState>();
+    let mut guard = match state.config.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let mut cfg = guard.clone().unwrap_or_default();
+    let mut changed = false;
+    for src in cfg.auto_import.onenote_notebooks.iter_mut() {
+        if src.notebook_id == notebook_id {
+            src.watermark = Some(watermark.to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        if let Err(e) = save_config_to_disk(&cfg) {
+            log::warn!("WP-AUTO-IMPORT: persist watermark failed: {}", e);
+        }
+        *guard = Some(cfg);
+    }
+}
+
+// ── Plaud HTTP helpers (take &AppConfig so the loop can call them without
+//    the Tauri State the #[tauri::command] wrappers require) ────────────────
+
+async fn auto_import_plaud_discover(cfg: &AppConfig) -> Result<(), String> {
+    let url = format!("{}/api/plaud/discover", cfg.base_url.trim_end_matches('/'));
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+        .map_err(|e| format!("{}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body));
+    }
+    Ok(())
+}
+
+async fn auto_import_plaud_inbox(cfg: &AppConfig) -> Result<Vec<PlaudInboxItem>, String> {
+    let url = format!("{}/api/plaud/inbox", cfg.base_url.trim_end_matches('/'));
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("{}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body));
+    }
+    let parsed: PlaudInboxResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse inbox: {}", e))?;
+    Ok(parsed.items)
+}
+
+/// Decide-import + ingest for one recording (mirrors the JS handlePlaudImport
+/// two-step). Returns the ingest result on success.
+async fn auto_import_plaud_one(cfg: &AppConfig, id: &str) -> Result<PlaudIngestResult, String> {
+    let decide_url = format!(
+        "{}/api/plaud/inbox/{}/decide",
+        cfg.base_url.trim_end_matches('/'),
+        urlencoding_minimal(id)
+    );
+    let client = build_plaud_http_client()?;
+    let resp = client
+        .post(&decide_url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .body("{\"action\":\"import\"}")
+        .send()
+        .await
+        .map_err(|e| format!("{}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &decide_url, &body));
+    }
+
+    let ingest_url = format!("{}/api/plaud/ingest", cfg.base_url.trim_end_matches('/'));
+    // Ingest is slow (Plaud getFile + LLM extraction); use the same 120s
+    // override the plaud_ingest command uses.
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {}", e))?;
+    let resp = client
+        .post(&ingest_url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .body(format!("{{\"id\":\"{}\"}}", id.replace('"', "\\\"")))
+        .send()
+        .await
+        .map_err(|e| format!("{}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &ingest_url, &body));
+    }
+    resp.json::<PlaudIngestResult>()
+        .await
+        .map_err(|e| format!("parse ingest: {}", e))
+}
+
+/// WP-AUTO-IMPORT — kick off the polling loop. Idempotent (mirrors
+/// start_auto_watch_loop).
+fn start_auto_import_loop(app: tauri::AppHandle) {
+    if AUTO_IMPORT_ACTIVE.swap(true, Ordering::SeqCst) {
+        log::info!("WP-AUTO-IMPORT: loop already running; start is no-op");
+        return;
+    }
+    log::info!("WP-AUTO-IMPORT: starting auto-import loop");
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            if !AUTO_IMPORT_ACTIVE.load(Ordering::SeqCst) {
+                log::info!("WP-AUTO-IMPORT: loop self-terminating");
+                return;
+            }
+            tick_auto_import(&app_handle).await;
+            tokio::time::sleep(AUTO_IMPORT_POLL_INTERVAL).await;
+        }
+    });
+}
+
+/// WP-AUTO-IMPORT — request loop stop; next tick self-terminates. Idempotent.
+fn stop_auto_import_loop() {
+    if AUTO_IMPORT_ACTIVE.swap(false, Ordering::SeqCst) {
+        log::info!("WP-AUTO-IMPORT: loop stop requested");
+    }
+}
+
+/// One polling tick: Plaud then OneNote. Bails early when auto-import is off.
+async fn tick_auto_import(app: &tauri::AppHandle) {
+    let cfg = match current_config_opt(app) {
+        Some(c) => c,
+        None => return,
+    };
+    if !cfg.auto_import.enabled {
+        return;
+    }
+    tick_auto_import_plaud(app, &cfg).await;
+    tick_auto_import_onenote(app, &cfg).await;
+}
+
+async fn tick_auto_import_plaud(app: &tauri::AppHandle, cfg: &AppConfig) {
+    let enabled: Vec<&AutoImportPlaudSource> = cfg
+        .auto_import
+        .plaud_devices
+        .iter()
+        .filter(|d| d.enabled)
+        .collect();
+    if enabled.is_empty() {
+        return;
+    }
+    if cfg.base_url.trim().is_empty() || cfg.bearer_token.trim().is_empty() {
+        return;
+    }
+    // Best-effort discover so brand-new recordings surface in the inbox.
+    if let Err(e) = auto_import_plaud_discover(cfg).await {
+        log::debug!("WP-AUTO-IMPORT: plaud discover failed (non-fatal): {}", e);
+    }
+    let inbox = match auto_import_plaud_inbox(cfg).await {
+        Ok(items) => items,
+        Err(e) => {
+            log::warn!("WP-AUTO-IMPORT: plaud inbox failed: {}", e);
+            return;
+        }
+    };
+    for item in inbox {
+        if item.state != "pending" {
+            continue;
+        }
+        let dev = match enabled.iter().find(|d| d.serial_number == item.serial_number) {
+            Some(d) => d,
+            None => continue,
+        };
+        if let Some(since) = dev.since.as_deref() {
+            if !ts_after(&item.discovered_at, since) {
+                continue;
+            }
+        }
+        let key = format!("plaud:{}", item.id);
+        if auto_import_seen(&key) {
+            continue;
+        }
+        match auto_import_plaud_one(cfg, &item.id).await {
+            Ok(_) => {
+                auto_import_mark(&key);
+                log::info!("WP-AUTO-IMPORT: auto-imported Plaud recording {}", item.id);
+                let _ = app.emit(
+                    "threshold://toast",
+                    IngestionOutcome {
+                        kind: "success".into(),
+                        title: "Auto-imported from Plaud".into(),
+                        body: Some(format!("“{}” added to your Apolla workspace.", item.name)),
+                        source_path: None,
+                    },
+                );
+            }
+            Err(e) => log::warn!("WP-AUTO-IMPORT: plaud import {} failed: {}", item.id, e),
+        }
+    }
+}
+
+async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
+    let sources: Vec<AutoImportOneNoteSource> = cfg
+        .auto_import
+        .onenote_notebooks
+        .iter()
+        .filter(|n| n.enabled)
+        .cloned()
+        .collect();
+    if sources.is_empty() {
+        return;
+    }
+    // Enumerate once per tick; filter to designated notebooks below. On
+    // Mac/Linux this returns PlatformUnsupported → we skip silently.
+    let tree = match tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy).await
+    {
+        Ok(Ok(t)) => t,
+        Ok(Err(_)) => return,
+        Err(e) => {
+            log::warn!("WP-AUTO-IMPORT: enumerate join error: {}", e);
+            return;
+        }
+    };
+    for src in sources {
+        let notebook = match tree.notebooks.iter().find(|n| n.notebook_id == src.notebook_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        // (page_id, lastModifiedTime) for every timestamped page.
+        let mut pages: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = Vec::new();
+        for section in &notebook.sections {
+            for page in &section.pages {
+                if let Some(dt) = page.last_modified_time.as_deref().and_then(parse_ts) {
+                    pages.push((page.page_id.clone(), dt));
+                }
+            }
+        }
+        if pages.is_empty() {
+            continue;
+        }
+        let newest = pages.iter().map(|(_, d)| *d).max().unwrap();
+        let watermark = match src.watermark.as_deref().and_then(parse_ts) {
+            None => {
+                // First sight of this notebook: baseline to the current
+                // newest page and import nothing (no back-catalogue sweep).
+                auto_import_persist_onenote_watermark(
+                    app,
+                    &src.notebook_id,
+                    &newest.to_rfc3339(),
+                );
+                log::info!(
+                    "WP-AUTO-IMPORT: baselined OneNote notebook '{}' at {}",
+                    src.name,
+                    newest.to_rfc3339()
+                );
+                continue;
+            }
+            Some(w) => w,
+        };
+        let mut fresh: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = pages
+            .into_iter()
+            .filter(|(id, d)| *d > watermark && !auto_import_seen(&format!("onenote:{}", id)))
+            .collect();
+        fresh.sort_by_key(|(_, d)| *d);
+        let mut max_seen = watermark;
+        for (page_id, d) in fresh {
+            let key = format!("onenote:{}", page_id);
+            let outcome = run_onenote_send_inline(cfg.clone(), Some(page_id.clone())).await;
+            let ok = matches!(outcome.kind.as_str(), "success" | "idempotent");
+            let toast = IngestionOutcome {
+                kind: outcome.kind.clone(),
+                title: if ok {
+                    "Auto-imported from OneNote".into()
+                } else {
+                    outcome.title.clone()
+                },
+                body: outcome.body.clone(),
+                source_path: None,
+            };
+            let _ = app.emit("threshold://toast", toast);
+            // Mark seen regardless of outcome: success/idempotent shouldn't
+            // re-fire, and a hard failure (e.g. handwriting-only page)
+            // shouldn't retry every 90s. The watermark only advances past
+            // successes, so a failed page below the new mark is dropped after
+            // its single attempt — matching the silent best-effort contract.
+            auto_import_mark(&key);
+            if ok && d > max_seen {
+                max_seen = d;
+            }
+            if ok {
+                log::info!("WP-AUTO-IMPORT: auto-imported OneNote page {}", page_id);
+            } else {
+                log::info!(
+                    "WP-AUTO-IMPORT: OneNote page {} send failed ({})",
+                    page_id,
+                    outcome.kind
+                );
+            }
+        }
+        if max_seen > watermark {
+            auto_import_persist_onenote_watermark(app, &src.notebook_id, &max_seen.to_rfc3339());
+        }
+    }
+}
+
+// ── Auto-import IPC surface ────────────────────────────────────────────────
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct AutoImportSourceOption {
+    id: String,
+    name: String,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+struct AutoImportAvailable {
+    onenote: Vec<AutoImportSourceOption>,
+    plaud: Vec<AutoImportSourceOption>,
+    /// Whether OneNote auto-import can actually fire on this OS (Windows COM).
+    /// The UI shows a "Windows-only" note when false.
+    onenote_supported: bool,
+    /// Whether Plaud is connected (UX hint — guides the user to Connections).
+    plaud_connected: bool,
+}
+
+/// WP-AUTO-IMPORT — read the persisted auto-import config for the UI.
+#[tauri::command]
+fn get_auto_import_config(state: tauri::State<AppState>) -> Result<AutoImportConfig, String> {
+    Ok(state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .as_ref()
+        .map(|c| c.auto_import.clone())
+        .unwrap_or_default())
+}
+
+/// WP-AUTO-IMPORT — persist the full auto-import config (the JS round-trips
+/// the whole object on every add/remove/toggle) and (re)start or stop the
+/// loop to match. Stamps `since` on newly-designated Plaud devices and
+/// preserves OneNote watermarks across edits. Returns the stored config so
+/// the UI can pick up the stamped fields.
+#[tauri::command]
+async fn set_auto_import_config(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    config: AutoImportConfig,
+) -> Result<AutoImportConfig, String> {
+    let mut full = state
+        .config
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_default();
+
+    let mut incoming = config;
+    let now = Utc::now().to_rfc3339();
+    for d in incoming.plaud_devices.iter_mut() {
+        if d.since.is_none() {
+            d.since = Some(now.clone());
+        }
+    }
+    // Carry forward persisted watermarks so a UI edit never resets a baseline.
+    for src in incoming.onenote_notebooks.iter_mut() {
+        if src.watermark.is_none() {
+            if let Some(prev) = full
+                .auto_import
+                .onenote_notebooks
+                .iter()
+                .find(|p| p.notebook_id == src.notebook_id)
+            {
+                src.watermark = prev.watermark.clone();
+            }
+        }
+    }
+    full.auto_import = incoming;
+
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    full.last_used = Some(Utc::now().to_rfc3339());
+    let json =
+        serde_json::to_string_pretty(&full).map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    let stored = full.auto_import.clone();
+    *state.config.lock().expect("config mutex poisoned") = Some(full);
+    log::info!(
+        "WP-AUTO-IMPORT: config saved (enabled={}, onenote={}, plaud={})",
+        stored.enabled,
+        stored.onenote_notebooks.len(),
+        stored.plaud_devices.len()
+    );
+
+    if stored.enabled && auto_import_has_enabled_source_owned(&stored) {
+        start_auto_import_loop(app);
+    } else {
+        stop_auto_import_loop();
+    }
+    Ok(stored)
+}
+
+/// Same predicate as `auto_import_has_enabled_source` but over an owned
+/// `AutoImportConfig` (the command holds the config directly, not a full
+/// AppConfig).
+fn auto_import_has_enabled_source_owned(c: &AutoImportConfig) -> bool {
+    c.onenote_notebooks.iter().any(|n| n.enabled) || c.plaud_devices.iter().any(|d| d.enabled)
+}
+
+/// True when `s` looks like a genuine Plaud device serial rather than the
+/// start-time epoch-ms the server stamps into `serialNumber` when the real
+/// serial is missing (observed on ross.viktora.ai: 38 of 40 distinct
+/// "serials" were 13-digit start timestamps, e.g. `1781161206381` ==
+/// `startAt` 2026-06-11T07:00:06.381). Real serials are alphanumeric
+/// (`8810B30273641222`) or hex UUIDs; the bogus ones are pure long numerics.
+/// This is a client-side guard around an upstream data-quality issue — the
+/// authoritative fix is to populate `serialNumber` correctly server-side.
+fn is_plausible_plaud_serial(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    // Reject pure-numeric values of timestamp length (≥12 digits) — no real
+    // Plaud serial in the field is a bare 12+ digit number, but every epoch-ms
+    // timestamp is.
+    if s.len() >= 12 && s.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    true
+}
+
+/// WP-AUTO-IMPORT — enumerate sources the user can designate: OneNote
+/// notebooks (via COM, empty on Mac) and Plaud devices (distinct serials seen
+/// in the inbox). Drives the "Add a source" picker.
+#[tauri::command]
+async fn auto_import_available_sources(
+    state: tauri::State<'_, AppState>,
+) -> Result<AutoImportAvailable, String> {
+    let cfg = current_config(&state)?;
+    let onenote =
+        match tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy).await {
+            Ok(Ok(tree)) => tree
+                .notebooks
+                .into_iter()
+                .map(|n| AutoImportSourceOption {
+                    id: n.notebook_id,
+                    name: n.name,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+    let plaud_connected = cfg.plaud_connect.is_some();
+    let plaud = match auto_import_plaud_inbox(&cfg).await {
+        Ok(items) => {
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::new();
+            for it in items {
+                // Skip the timestamp-as-serial noise (see is_plausible_plaud_serial)
+                // so the picker lists real recorders, not one row per recording.
+                if is_plausible_plaud_serial(&it.serial_number)
+                    && seen.insert(it.serial_number.clone())
+                {
+                    out.push(AutoImportSourceOption {
+                        id: it.serial_number.clone(),
+                        name: format!("Plaud {}", it.serial_number),
+                    });
+                }
+            }
+            out
+        }
+        Err(_) => Vec::new(),
+    };
+    Ok(AutoImportAvailable {
+        onenote,
+        plaud,
+        onenote_supported: cfg!(target_os = "windows"),
+        plaud_connected,
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-ONENOTE-EXPORT-04 — bulk-send-section IPC + progress / cancel
 // ───────────────────────────────────────────────────────────────────────────
 //
@@ -3331,6 +3967,10 @@ const MENU_ONENOTE_BROWSE: &str = "menu.onenote_browse";
 /// widget_expand mechanism as Plaud-queue / Settings; URL fragment
 /// routes main.js's bootstrap to enterConnectionsView().
 const MENU_CONNECTIONS: &str = "menu.connections";
+/// WP-AUTO-IMPORT — opens the Auto-import pane (designated OneNote notebooks
+/// + Plaud devices). Same widget_expand mechanism as Connections; main.js's
+/// hash-router calls enterAutoImportView() on `#auto-import`.
+const MENU_AUTO_IMPORT: &str = "menu.auto_import";
 /// WP-ONENOTE-EXPORT-05 — disabled menu item that surfaces the live
 /// "Sent today: N pages" counter from the auto-watch loop. Disabled
 /// (un-clickable) per brief §3.5 — it's a visual indicator, not an
@@ -3408,6 +4048,9 @@ fn build_widget_menu(
     // Lives below Settings so the high-frequency capture/send items stay
     // at the top of the menu.
     let connections = MenuItem::with_id(app, MENU_CONNECTIONS, "Connections…", true, None::<&str>)?;
+    // WP-AUTO-IMPORT — sits next to Connections (both are "set up where your
+    // content comes from" surfaces).
+    let auto_import = MenuItem::with_id(app, MENU_AUTO_IMPORT, "Auto-import…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
 
@@ -3436,6 +4079,7 @@ fn build_widget_menu(
                 &expand,
                 &settings,
                 &connections,
+                &auto_import,
                 &sep2,
                 &quit,
                 &sep_dev,
@@ -3459,6 +4103,7 @@ fn build_widget_menu(
             &expand,
             &settings,
             &connections,
+            &auto_import,
             &sep2,
             &quit,
         ],
@@ -3509,11 +4154,15 @@ fn widget_expand(
         *cfg_guard = Some(cfg);
     }
 
-    // Step 2: resize.
+    // Step 2: resize. Sized to hug the main-view content (golden-ratio tile
+    // pair + header + drop hint) rather than leave it swimming in an 800×600
+    // frame. The webview layout is responsive, so the other expanded views
+    // (Configure, Connections, Auto-import — all max-width 720 and scrollable)
+    // adapt cleanly to the smaller frame.
     window
         .set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 800.0,
-            height: 600.0,
+            width: 720.0,
+            height: 560.0,
         }))
         .map_err(|e| format!("set_size failed: {e}"))?;
 
@@ -4109,6 +4758,24 @@ pub fn run() {
                 start_auto_watch_loop(app.handle().clone());
             }
 
+            // WP-AUTO-IMPORT — if the persisted config has auto-import enabled
+            // with at least one enabled source, start the polling loop at
+            // launch so designated sources keep syncing across restarts.
+            // Cross-platform: the Plaud half works everywhere; the OneNote
+            // half no-ops on Mac/Linux (COM enumerate returns
+            // PlatformUnsupported).
+            if preloaded_cfg
+                .as_ref()
+                .map(|c| c.auto_import.enabled && auto_import_has_enabled_source(c))
+                .unwrap_or(false)
+            {
+                log::info!(
+                    "WP-AUTO-IMPORT: auto-import enabled in persisted config; \
+                     starting polling loop at app launch"
+                );
+                start_auto_import_loop(app.handle().clone());
+            }
+
             Ok(())
         })
         // D-12-02 + D-12-02-AMEND: quit-on-window-close, waiting for in-flight
@@ -4187,6 +4854,10 @@ pub fn run() {
             // WP-ONENOTE-EXPORT-05 — opt-in auto-watch toggle + status
             onenote_set_auto_watch,
             onenote_auto_watch_status,
+            // WP-AUTO-IMPORT — designated-source background auto-import
+            get_auto_import_config,
+            set_auto_import_config,
+            auto_import_available_sources,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -4247,6 +4918,18 @@ pub fn run() {
                             Some("connections".into()),
                         ) {
                             log::warn!("menu connections failed: {e}");
+                        }
+                    }
+                    MENU_AUTO_IMPORT => {
+                        // WP-AUTO-IMPORT — open the Auto-import pane. main.js's
+                        // hash-router calls enterAutoImportView() on
+                        // #auto-import.
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("auto-import".into()),
+                        ) {
+                            log::warn!("menu auto_import failed: {e}");
                         }
                     }
                     MENU_PLAUD_QUEUE => {
@@ -4654,6 +5337,7 @@ mod tests {
             onenote_hotkey: None,
             auto_watch: false,
             plaud_connect: None,
+            auto_import: AutoImportConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4717,6 +5401,7 @@ mod tests {
             onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
             auto_watch: false,
             plaud_connect: None,
+            auto_import: AutoImportConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -4755,6 +5440,7 @@ mod tests {
             onenote_hotkey: None,
             auto_watch: true,
             plaud_connect: None,
+            auto_import: AutoImportConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         // The auto_watch field must appear in serialized JSON (no
