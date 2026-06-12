@@ -31,6 +31,8 @@ The Apolla server now runs a marker-INDEPENDENT decision/commitment log (flag-ga
 4. **Ambient widget signal.** Second badge (amber, distinct from the yellow tidbit badge) showing `summary.overdueSilent` count; fetched on widget start + after each capture + hourly; click → `widget_expand("log")`. No notification spam — badge only (P1).
 5. **Design tokens for the new surfaces:** extend the widget's dark/glassy language into `view-log` and the records panel (new CSS scoped to these views). Do NOT restyle existing views in P1.
 
+6. **Receipts (the evidence dossier).** `view-receipts`: for a subject entity, the chronological chain of its records — date, type, owner, verbatim quote (ONLY when `verbatimVerified`), source doc title — annotated with edges (⚠️ conflicts-with, ✓ resolved-by, supersession chains) and a derived "current state" line from the record state machine. Entry points: "Show receipts" on log rows/contradictions; scope expansion = records sharing subject entities (one hop). **Copy as Markdown / Copy as plain text** via the Tauri clipboard API — the clipboard IS the share mechanism (P1: no share links beyond the existing Apolla deeplink). The receipt render is 100% DETERMINISTIC — no LLM in the chain; that is the trust property and must be preserved. Footer: "compiled by Threshold from meeting captures · every quote verbatim from source." Server: one additive endpoint `GET /api/decision-log/receipts?entity=X` (records-by-subject + edges + states, chronological; ~40 lines beside /api/decision-log); Markdown render client-side. Adds ~1–1.5 ED.
+
 **OUT (later phases):** entity-card popovers (needs WP-DEF1), weekly digest view (needs WP-SYN1), full app restyle, any change to `TidbitStatus` enum or the tidbit polling contract (HARD CONSTRAINT — shipped clients depend on it), edge confirm/dismiss UI, Windows-specific polish beyond compile-clean.
 
 ## Rollout prerequisite (operator, ~$2, do FIRST so the UX has data)
@@ -43,6 +45,7 @@ On the target Apolla instance: `npx tsx scripts/backfill-decision-log.ts` → `n
 - [ ] `view-log` renders live `/api/decision-log` (needs-attention, contradictions, states); handles empty log and server-unreachable.
 - [ ] Widget amber badge count == `summary.overdueSilent`; click opens `#log`; tidbit badge behavior unchanged.
 - [ ] **Tidbit regression proof:** existing tidbit flow byte-identical in behavior (`poll_for_tidbit` untouched; statuses `ready|pending|no-marker|failed` handled as today).
+- [ ] Receipts: chain renders chronologically with edge annotations; copy-as-Markdown pastes cleanly into Slack/Notion; unverified verbatims excluded; output is deterministic (byte-identical for identical inputs).
 - [ ] Server endpoint: golden master byte-unchanged; additive only.
 - [ ] `cargo check` + frontend build clean on mac (Windows compile-clean); version triple bumped per repo convention.
 - [ ] Demo: live capture → records panel → Today view → badge, recorded against Ross's instance.
