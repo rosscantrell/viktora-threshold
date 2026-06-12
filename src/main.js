@@ -108,6 +108,8 @@ const VIEWS = [
   "view-auto-import",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
+  "view-receipts",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -884,6 +886,19 @@ function renderRecordCard(rec, recState, lifecycle, recEdges) {
     card.appendChild(callout);
   }
 
+  // "Show receipts" — the subject's full evidence chain.
+  if (rec.primaryEntity) {
+    const actions = document.createElement("div");
+    actions.className = "record-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    actions.appendChild(btn);
+    card.appendChild(actions);
+  }
+
   return card;
 }
 
@@ -1116,6 +1131,19 @@ function renderAttentionRow(entry) {
     meta.textContent = metaParts.join(" · ");
     row.appendChild(meta);
   }
+
+  // "Show receipts" — open the subject's evidence dossier.
+  if (rec.primaryEntity) {
+    const footer = document.createElement("div");
+    footer.className = "log-row-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    footer.appendChild(btn);
+    row.appendChild(footer);
+  }
   return row;
 }
 
@@ -1194,6 +1222,402 @@ if (logRefreshBtn) {
 const openLogBtn = document.getElementById("btn-open-log");
 if (openLogBtn) {
   openLogBtn.addEventListener("click", () => {
+    enterLogView();
+  });
+}
+
+// ───────── Receipts — the evidence dossier (WP-THRESHOLD-LOG-UX) ─────────
+
+// The receipts payload currently rendered, stashed so the Copy button can
+// rebuild the Markdown + HTML deterministically from the same data.
+let currentReceipts = null;
+
+/**
+ * Open the Receipts view for a subject entity. Fetches
+ * /api/decision-log/receipts?entity=X via the fetch_receipts IPC and renders
+ * the deterministic chain. Also resolves the configured base URL so per-record
+ * source links reuse the tidbit deepLink scheme ({base}/document/{documentId}).
+ */
+async function enterReceiptsView(entity) {
+  state.inWizard = false;
+  showView("view-receipts");
+
+  const titleEl = document.getElementById("receipts-title");
+  const subEl = document.getElementById("receipts-sub");
+  const currentEl = document.getElementById("receipts-current");
+  const chainEl = document.getElementById("receipts-chain");
+  const statusEl = document.getElementById("receipts-status");
+
+  if (titleEl) titleEl.textContent = prettySlug(entity);
+  if (subEl) subEl.hidden = true;
+  if (currentEl) currentEl.hidden = true;
+  if (chainEl) chainEl.innerHTML = "";
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Compiling the receipts…";
+  }
+  currentReceipts = null;
+
+  // Base URL for source-doc deep links (best-effort; links are insider-only).
+  let baseUrl = "";
+  try {
+    const cfg = await tauri.core.invoke("load_config");
+    baseUrl = (cfg && cfg.base_url) || "";
+  } catch (_e) {
+    /* links simply omitted if config is unavailable */
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_receipts", { entity });
+  } catch (err) {
+    console.warn("[main] fetch_receipts failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then try again.";
+    }
+    return;
+  }
+
+  const items = Array.isArray(data && data.records) ? data.records : [];
+  const edges = Array.isArray(data && data.edges) ? data.edges : [];
+
+  if (statusEl) {
+    if (items.length === 0) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No records reference this subject yet.";
+    } else {
+      statusEl.hidden = true;
+    }
+  }
+
+  if (subEl) {
+    subEl.textContent =
+      items.length === 1 ? "1 record" : `${items.length} records, oldest first`;
+    subEl.hidden = items.length === 0;
+  }
+
+  currentReceipts = { entity, items, edges, baseUrl };
+  renderReceiptsCurrentState(items, edges);
+  renderReceiptsChain(items, edges, baseUrl);
+}
+
+/** Build the source-doc deep link for a record, reusing the tidbit scheme.
+ *  Returns "" when no base URL is configured. */
+function receiptsDeepLink(baseUrl, documentId) {
+  if (!baseUrl || !documentId) return "";
+  return `${baseUrl.replace(/\/+$/, "")}/document/${encodeURIComponent(documentId)}`;
+}
+
+/**
+ * Derive the current-state line deterministically from the record states: the
+ * most recent record still 'open' is the standing position; if none are open,
+ * the most recent record and its terminal state. No LLM, pure data.
+ */
+function deriveReceiptsCurrentState(items) {
+  if (!items.length) return null;
+  // items arrive chronological asc; scan from newest backwards for an open one.
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].state === "open") return { item: items[i], standing: true };
+  }
+  return { item: items[items.length - 1], standing: false };
+}
+
+function renderReceiptsCurrentState(items, _edges) {
+  const el = document.getElementById("receipts-current");
+  if (!el) return;
+  el.innerHTML = "";
+  const derived = deriveReceiptsCurrentState(items);
+  if (!derived) {
+    el.hidden = true;
+    return;
+  }
+  const rec = derived.item.record || {};
+  const label = document.createElement("span");
+  label.className = "receipts-current-label";
+  label.textContent = derived.standing ? "Current state" : "Last record";
+  el.appendChild(label);
+
+  const text = document.createElement("span");
+  text.className = "receipts-current-text";
+  text.textContent = rec.summary || "";
+  el.appendChild(text);
+
+  const st = derived.item.state || "open";
+  if (st !== "open") {
+    const pill = document.createElement("span");
+    pill.className = "record-state-pill";
+    pill.dataset.state = st;
+    pill.textContent = st === "superseded" ? "Superseded" : "Resolved";
+    el.appendChild(pill);
+  }
+  el.hidden = false;
+}
+
+/** Render the chronological chain — one node per record. */
+function renderReceiptsChain(items, edges, baseUrl) {
+  const chainEl = document.getElementById("receipts-chain");
+  if (!chainEl) return;
+  chainEl.innerHTML = "";
+
+  const edgesByRecord = new Map();
+  for (const e of Array.isArray(edges) ? edges : []) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+
+  for (const item of items) {
+    const rec = item.record || item;
+    chainEl.appendChild(
+      renderReceiptNode(rec, item.state, edgesByRecord.get(rec.recordId) || [], baseUrl),
+    );
+  }
+}
+
+function renderReceiptNode(rec, recState, recEdges, baseUrl) {
+  const node = document.createElement("div");
+  node.className = "receipts-node";
+  if (recState) node.dataset.state = recState;
+
+  // Rail: date + connector dot.
+  const rail = document.createElement("div");
+  rail.className = "receipts-rail";
+  const dot = document.createElement("span");
+  dot.className = "receipts-dot";
+  dot.dataset.type = rec.type || "";
+  rail.appendChild(dot);
+  const date = document.createElement("span");
+  date.className = "receipts-date";
+  date.textContent = rec.date ? formatDueDate(rec.date) : "";
+  rail.appendChild(date);
+  node.appendChild(rail);
+
+  // Body.
+  const body = document.createElement("div");
+  body.className = "receipts-node-body";
+
+  const head = document.createElement("div");
+  head.className = "receipts-node-head";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(chip);
+  if (rec.owner) {
+    const owner = document.createElement("span");
+    owner.className = "receipts-owner";
+    owner.textContent = prettySlug(rec.owner);
+    head.appendChild(owner);
+  }
+  if (recState && recState !== "open") {
+    const pill = document.createElement("span");
+    pill.className = "record-state-pill";
+    pill.dataset.state = recState;
+    pill.textContent = recState === "superseded" ? "Superseded" : "Resolved";
+    head.appendChild(pill);
+  }
+  body.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "receipts-summary";
+  summary.textContent = rec.summary || "";
+  body.appendChild(summary);
+
+  // Verbatim quote — ONLY when verified (the trust property).
+  if (rec.verbatimVerified === true && rec.verbatim) {
+    const quote = document.createElement("blockquote");
+    quote.className = "record-quote";
+    quote.textContent = rec.verbatim;
+    body.appendChild(quote);
+  }
+
+  // Edge chips.
+  for (const e of recEdges) {
+    const phrasing = edgePhrasing(e, rec.recordId);
+    if (!phrasing) continue;
+    const chipEl = document.createElement("span");
+    chipEl.className = "receipts-edge-chip";
+    chipEl.dataset.kind = e.kind || "";
+    chipEl.textContent = `${phrasing.icon} ${phrasing.label}`;
+    body.appendChild(chipEl);
+  }
+
+  // Source-doc link (insider verification path).
+  const link = receiptsDeepLink(baseUrl, rec.documentId);
+  if (link) {
+    const a = document.createElement("a");
+    a.className = "receipts-source-link";
+    a.href = link;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "source ↗";
+    body.appendChild(a);
+  }
+
+  node.appendChild(body);
+  return node;
+}
+
+// ── Deterministic Markdown + HTML builders (no LLM; byte-identical per input) ──
+// HTML escaping reuses the existing escapeHtml() helper (escapes & < >); the
+// only attribute interpolation is href, whose value is URL-encoded upstream.
+
+/** Direction-aware plain-text edge phrasing for export (no emoji icon). */
+function edgeExportLabel(edge, recId) {
+  const p = edgePhrasing(edge, recId);
+  return p ? p.label : "";
+}
+
+function buildReceiptsMarkdown(entity, items, edges, baseUrl) {
+  const edgesByRecord = new Map();
+  for (const e of edges) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+  const lines = [];
+  lines.push(`# Receipts — ${prettySlug(entity)}`);
+  lines.push("> compiled by Threshold from meeting captures · every quote verbatim from source");
+  lines.push("");
+
+  for (const item of items) {
+    const rec = item.record || item;
+    const typeLabel = rec.type === "decision" ? "Decision" : "Commitment";
+    const dateLabel = rec.date ? formatDueDate(rec.date) : "";
+    const header = [dateLabel, typeLabel, rec.owner ? prettySlug(rec.owner) : ""]
+      .filter(Boolean)
+      .join(" · ");
+    lines.push(`## ${header}`);
+    if (rec.summary) lines.push(rec.summary);
+    if (rec.verbatimVerified === true && rec.verbatim) {
+      lines.push(`> "${rec.verbatim}"`);
+    }
+    for (const e of edgesByRecord.get(rec.recordId) || []) {
+      const label = edgeExportLabel(e, rec.recordId);
+      if (label) lines.push(`- ${label}`);
+    }
+    const state = item.state || "open";
+    if (state !== "open") lines.push(`_(${state})_`);
+    const link = receiptsDeepLink(baseUrl, rec.documentId);
+    if (link) lines.push(`[source](${link})`);
+    lines.push("");
+  }
+
+  const derived = deriveReceiptsCurrentState(items);
+  if (derived) {
+    const rec = derived.item.record || {};
+    lines.push("---");
+    const tag = derived.standing ? "Current state" : "Last record";
+    lines.push(`**${tag}:** ${rec.summary || ""}`);
+  }
+  return lines.join("\n");
+}
+
+function buildReceiptsHtml(entity, items, edges, baseUrl) {
+  const edgesByRecord = new Map();
+  for (const e of edges) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+  const out = [];
+  out.push(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1c1e26;max-width:640px">`,
+  );
+  out.push(`<h1 style="font-size:20px;margin:0 0 4px">Receipts — ${escapeHtml(prettySlug(entity))}</h1>`);
+  out.push(
+    `<p style="font-size:12px;color:#6b7280;margin:0 0 16px">compiled by Threshold from meeting captures · every quote verbatim from source</p>`,
+  );
+
+  for (const item of items) {
+    const rec = item.record || item;
+    const typeLabel = rec.type === "decision" ? "Decision" : "Commitment";
+    const dateLabel = rec.date ? formatDueDate(rec.date) : "";
+    const header = [dateLabel, typeLabel, rec.owner ? prettySlug(rec.owner) : ""]
+      .filter(Boolean)
+      .join(" · ");
+    out.push(`<div style="margin:0 0 16px;padding:0 0 0 12px;border-left:3px solid #d0d3da">`);
+    out.push(`<div style="font-size:12px;font-weight:600;color:#6b7280">${escapeHtml(header)}</div>`);
+    if (rec.summary)
+      out.push(`<div style="font-size:15px;margin:2px 0 6px">${escapeHtml(rec.summary)}</div>`);
+    if (rec.verbatimVerified === true && rec.verbatim) {
+      out.push(
+        `<blockquote style="margin:6px 0;padding:6px 12px;border-left:2px solid #c0c4cc;color:#444;font-style:italic">${escapeHtml(
+          rec.verbatim,
+        )}</blockquote>`,
+      );
+    }
+    for (const e of edgesByRecord.get(rec.recordId) || []) {
+      const label = edgeExportLabel(e, rec.recordId);
+      if (label) out.push(`<div style="font-size:13px;color:#9a3412">• ${escapeHtml(label)}</div>`);
+    }
+    const state = item.state || "open";
+    if (state !== "open")
+      out.push(`<div style="font-size:12px;color:#6b7280">(${escapeHtml(state)})</div>`);
+    const link = receiptsDeepLink(baseUrl, rec.documentId);
+    if (link)
+      out.push(
+        `<div style="font-size:12px;margin-top:4px"><a href="${escapeHtml(link)}" style="color:#2f7ae5">source ↗</a></div>`,
+      );
+    out.push(`</div>`);
+  }
+
+  const derived = deriveReceiptsCurrentState(items);
+  if (derived) {
+    const rec = derived.item.record || {};
+    const tag = derived.standing ? "Current state" : "Last record";
+    out.push(
+      `<p style="font-size:14px;margin:12px 0 0;padding-top:12px;border-top:1px solid #e5e7eb"><strong>${tag}:</strong> ${escapeHtml(
+        rec.summary || "",
+      )}</p>`,
+    );
+  }
+  out.push(`</div>`);
+  return out.join("");
+}
+
+// Receipts view buttons: Copy (dual-format) + back-to-Today.
+const receiptsCopyBtn = document.getElementById("btn-receipts-copy");
+if (receiptsCopyBtn) {
+  receiptsCopyBtn.addEventListener("click", async () => {
+    if (!currentReceipts || !currentReceipts.items.length) return;
+    const { entity, items, edges, baseUrl } = currentReceipts;
+    const markdown = buildReceiptsMarkdown(entity, items, edges, baseUrl);
+    const html = buildReceiptsHtml(entity, items, edges, baseUrl);
+    try {
+      await tauri.core.invoke("copy_receipts", { html, markdown });
+      const original = receiptsCopyBtn.textContent;
+      receiptsCopyBtn.textContent = "Copied ✓";
+      receiptsCopyBtn.disabled = true;
+      setTimeout(() => {
+        receiptsCopyBtn.textContent = original;
+        receiptsCopyBtn.disabled = false;
+      }, 1600);
+    } catch (err) {
+      console.warn("[main] copy_receipts failed:", err);
+      const original = receiptsCopyBtn.textContent;
+      receiptsCopyBtn.textContent = "Copy failed";
+      setTimeout(() => {
+        receiptsCopyBtn.textContent = original;
+      }, 1600);
+    }
+  });
+}
+
+const receiptsBackBtn = document.getElementById("btn-receipts-back");
+if (receiptsBackBtn) {
+  receiptsBackBtn.addEventListener("click", () => {
     enterLogView();
   });
 }

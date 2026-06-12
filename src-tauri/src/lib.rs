@@ -1635,6 +1635,63 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
+/// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
+/// JSON (records chronological + edges + derived states) for the client to
+/// render deterministically. Surfaces errors so the view can show an
+/// unreachable state. `entity` is URL-encoded so slugs with reserved chars are
+/// transmitted intact.
+#[tauri::command]
+async fn fetch_receipts(
+    state: tauri::State<'_, AppState>,
+    entity: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(entity.as_bytes()).collect();
+    let url = format!(
+        "{}/api/decision-log/receipts?entity={}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_receipts: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-LOG-UX (Receipts) — dual-format clipboard write for the one
+/// "Copy" button. Writes the HTML rendering AND a Markdown plain-text fallback
+/// in a single atomic clipboard operation via `arboard::set_html(html,
+/// Some(markdown))`: rich-text targets (Gmail/Outlook/Word/Notion) take the
+/// HTML flavor, plain-text targets (Slack/terminals) take the Markdown. One
+/// button, no format picker. NSPasteboard (macOS) / clipboard-win (Windows) are
+/// thread-safe, so this runs fine off the main thread.
+#[tauri::command]
+fn copy_receipts(html: String, markdown: String) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clipboard
+        .set_html(html, Some(markdown))
+        .map_err(|e| format!("clipboard write failed: {e}"))?;
+    Ok(())
+}
+
 /// Helper: pull the current config out of AppState; error if not configured.
 fn current_config(state: &tauri::State<AppState>) -> Result<AppConfig, String> {
     state
@@ -5132,6 +5189,9 @@ pub fn run() {
             clear_pending_records,
             get_decision_log_summary,
             fetch_decision_log,
+            // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
+            fetch_receipts,
+            copy_receipts,
             // WP-PLAUD-04a — Plaud Sync Queue
             plaud_discover,
             plaud_get_inbox,
