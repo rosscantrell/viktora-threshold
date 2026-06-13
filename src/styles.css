@@ -1515,59 +1515,57 @@ code {
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- * WP-THRESHOLD-LOG-UX — post-capture panel (records-primary) + Today view.
- * Scoped to .view-postcapture and .view-log only — existing views untouched.
- * Composes the dark/glassy :root token system shipped in the v0.6.1 redesign
- * (no new palette): decision → accent, commitment → success, attention/overdue
- * → warn, conflict → danger, superseded → tertiary.
+ * WP-THRESHOLD-LOG-UX — post-capture panel (records-primary), migrated onto the
+ * glass.css token system (WP-THRESHOLD-GLASS alignment). Shared primitives
+ * (.record-chip, .record-state-pill, .record-quote) live in glass.css; this is
+ * the panel's own layout + the amber tidbit insight card.
  * ══════════════════════════════════════════════════════════════════════════ */
 
 /* ───────── Post-capture panel ───────── */
 
 .view-postcapture {
-  max-width: 720px;
+  max-width: 560px;
   margin: 0 auto;
-  padding: 56px 36px 36px;
+  padding: 26px 26px 22px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .postcapture-header {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .postcapture-title {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--glass-text);
   margin: 0;
 }
 
 .postcapture-sub {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--glass-text-dim);
   margin: 0;
 }
 
-/* Amber insight card — the tidbit, when a marker fired. Amber matches the
- * tidbit-badge vocabulary (Ross's decision); a left accent bar + warm-tinted
- * surface set it apart from the neutral record cards below. */
+/* Amber insight card — the tidbit, when a marker fired. Amber is the brand
+ * accent (Ross's decision); a 2px left bar + faint amber tint set it apart from
+ * the neutral record cards below. */
 .tidbit-card {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px 18px 22px;
-  background: var(--warn-soft);
-  border: 1px solid rgba(245, 181, 68, 0.32);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  gap: 12px;
+  padding: 14px 16px 14px 18px;
+  background: rgba(255, 196, 64, 0.08);
+  border: 1px solid rgba(255, 196, 64, 0.22);
+  border-left: 2px solid var(--glass-accent);
+  border-radius: var(--glass-radius-md);
 }
 
 .tidbit-card[hidden] {
@@ -1579,27 +1577,66 @@ code {
   text-decoration: none;
 }
 
+/* Panel buttons — scoped glass (the global button system lands with the
+ * WP-THRESHOLD-GLASS migration). The deeplink + back are secondary glass;
+ * "Open Today" is a link. */
+.view-postcapture #btn-tidbit-deeplink,
+.view-postcapture #btn-tidbit-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 6px 13px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+  text-decoration: none;
+}
+
+.view-postcapture #btn-tidbit-deeplink:hover,
+.view-postcapture #btn-tidbit-back:hover {
+  background: var(--glass-surface-hover);
+}
+
+.view-postcapture #btn-postcapture-log {
+  font-size: 11.5px;
+  color: var(--glass-link);
+}
+
+/* Tidbit highlight chips — glassify the amber insight card's own chips so the
+ * card reads as one glass surface (the tidbit VIEW's broader restyle is
+ * WP-THRESHOLD-GLASS). Overlap chips stay info-blue; new chips stay dim. */
+.tidbit-card .tidbit-chip {
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+  color: var(--glass-text);
+}
+
+.tidbit-card .tidbit-chip[data-overlap="true"] {
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: var(--glass-link);
+}
+
 /* ───────── Records list ───────── */
 
 .records-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .record-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px 18px;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
 }
 
 .record-card[data-state="superseded"] {
-  opacity: 0.72;
+  opacity: 0.7;
 }
 
 .record-header {
@@ -1609,123 +1646,55 @@ code {
   flex-wrap: wrap;
 }
 
-/* Type chip — decision (accent/blue) vs commitment (success/teal). Shared
- * between the records list and the Today needs-attention rows. */
-.record-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 10px;
-  border-radius: var(--radius-pill);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-}
-
-.record-chip[data-type="decision"] {
-  background: var(--accent-soft);
-  border-color: var(--accent-ring);
-  color: #cfe0ff;
-}
-
-.record-chip[data-type="commitment"] {
-  background: var(--success-soft);
-  border-color: rgba(52, 208, 88, 0.4);
-  color: var(--success-text);
-}
-
-.record-state-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 9px;
-  border-radius: var(--radius-pill);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border: 1px solid var(--border-subtle);
-  background: var(--surface-1);
-  color: var(--text-tertiary);
-}
-
-.record-state-pill[data-state="resolved"] {
-  background: var(--success-soft);
-  border-color: rgba(52, 208, 88, 0.4);
-  color: var(--success-text);
-}
-
-.record-state-pill[data-state="superseded"] {
-  text-decoration: line-through;
-}
-
 .record-summary {
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--glass-text);
   margin: 0;
   word-break: break-word;
 }
 
+/* Metadata is dim; only the overdue/silent count is amber (JS span). */
 .record-meta {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--glass-text-dim);
   margin: 0;
 }
 
-.record-meta[data-attention="true"] {
-  color: var(--warn-text);
+.record-meta-overdue {
+  color: var(--glass-accent);
 }
 
-/* Verbatim quotation — rendered ONLY when verbatimVerified (main.js gate);
- * the inset, italic styling reads unmistakably as a source quote. */
-.record-quote {
-  margin: 0;
-  padding: 10px 14px;
-  font-size: 13.5px;
-  line-height: 1.5;
-  font-style: italic;
-  color: var(--text-secondary);
-  background: var(--surface-inset);
-  border-left: 2px solid var(--border-strong);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  word-break: break-word;
-}
-
-/* Edge callout — conflict (danger), supersession (neutral), resolution
- * (success), dependency (neutral). */
+/* Edge callout — conflict (danger), resolution (success), else dim. */
 .record-edge {
   display: flex;
   align-items: baseline;
-  gap: 7px;
+  gap: 6px;
   margin: 0;
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1.45;
-  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--glass-text-dim);
 }
 
 .record-edge-icon {
   flex-shrink: 0;
 }
 
-.record-edge[data-kind="contradicts"] { color: var(--danger-text); }
-.record-edge[data-kind="resolves"] { color: var(--success-text); }
-.record-edge[data-kind="supersedes"] { color: var(--text-secondary); }
+.record-edge[data-kind="contradicts"] { color: var(--glass-danger); }
+.record-edge[data-kind="resolves"] { color: var(--glass-success); }
 
 .postcapture-filed {
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5;
-  color: var(--text-secondary);
+  color: var(--glass-text-dim);
   text-align: center;
-  margin: 12px 0;
-  padding: 24px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin: 8px 0;
+  padding: 18px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
 }
 
 .postcapture-footer {
@@ -1733,7 +1702,7 @@ code {
   gap: 12px;
   justify-content: space-between;
   align-items: center;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 /* view-main header action group (Today + Configure). */
@@ -1743,101 +1712,127 @@ code {
   gap: 14px;
 }
 
-/* ───────── Today view ───────── */
+/* ───────── Today view — rebuilt on glass.css tokens (WP-THRESHOLD-GLASS) ─────────
+ * Compact, desktop-dense (fits 800×600). Amber (#ffc440) is reserved: the 2px
+ * needs-attention left border, overdue/silent counts, and the one primary
+ * action button. Everything else dims to var(--glass-text-dim). Chips + pills
+ * are tinted ghosts, never filled. Selectors stay scoped to .view-log so the
+ * other views are untouched until the WP-THRESHOLD-GLASS migration. */
 
 .view-log {
-  max-width: 720px;
+  max-width: 560px;
   margin: 0 auto;
-  padding: 56px 36px 36px;
+  padding: 26px 26px 22px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .log-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
 .log-title {
-  font-size: 24px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   line-height: 1.2;
-  color: var(--text-primary);
+  color: var(--glass-text);
   margin: 0;
 }
 
 .log-sub {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin: 4px 0 0;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--glass-text-dim);
+  margin: 3px 0 0;
 }
 
+/* Refresh + back — secondary glass buttons, scoped (global button system lands
+ * with the WP-THRESHOLD-GLASS migration). */
+.view-log #btn-log-refresh,
+.view-log #btn-log-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+}
+
+.view-log #btn-log-refresh:hover,
+.view-log #btn-log-back:hover {
+  background: var(--glass-surface-hover);
+}
+
+/* State strip — ghost-tint pills, colored text only. */
 .log-states-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .log-state-pill {
   display: inline-flex;
   align-items: center;
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  font-size: 12px;
-  font-weight: 600;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
 }
 
 .log-state-pill[data-state="open"] {
-  background: var(--accent-soft);
-  border-color: var(--accent-ring);
-  color: #cfe0ff;
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: #7fb3e8;
 }
 
 .log-state-pill[data-state="resolved"] {
-  background: var(--success-soft);
-  border-color: rgba(52, 208, 88, 0.4);
-  color: var(--success-text);
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: #5dcaa5;
 }
 
 .log-section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 
 .log-section-title {
-  font-size: 12px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
+  letter-spacing: 0.07em;
+  color: var(--glass-text-faint);
   margin: 0;
 }
 
-.log-attention-list,
-.log-contradictions-list {
+/* Type chips (.record-chip) are the shared glass.css component — no view-log
+ * override needed. */
+
+/* Needs-attention rows — glass cards, 2px amber left border. */
+.log-attention-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .log-attention-row {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--warn);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  gap: 5px;
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-left: 2px solid var(--glass-accent);
+  border-radius: var(--glass-radius-md);
 }
 
 .log-row-head {
@@ -1848,369 +1843,368 @@ code {
 }
 
 .log-row-subject {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--glass-text-dim);
 }
 
 .log-row-summary {
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--glass-text);
   margin: 0;
   word-break: break-word;
 }
 
+/* Metadata is dim; only the overdue/silent count is amber. */
 .log-row-meta {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--glass-text-dim);
   margin: 0;
 }
 
-.log-row-meta[data-attention="true"] {
-  color: var(--warn-text);
+.log-meta-overdue {
+  color: var(--glass-accent);
 }
 
 .log-empty {
-  font-size: 13.5px;
-  color: var(--text-secondary);
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
   margin: 0;
-  padding: 16px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+}
+
+/* Contradictions — compact inline warning chips, not panels. */
+.log-contradictions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .log-contradiction-row {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
   gap: 7px;
-  padding: 14px 16px;
-  background: var(--danger-soft);
-  border: 1px solid rgba(255, 105, 97, 0.32);
-  border-radius: var(--radius-md);
+  padding: 5px 9px;
+  background: rgba(240, 149, 149, 0.10);
+  border: 1px solid rgba(240, 149, 149, 0.3);
+  border-radius: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #f0b5b5;
 }
 
 .log-contradiction-sev {
-  font-size: 10px;
+  flex-shrink: 0;
+  font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--danger-text);
+  letter-spacing: 0.05em;
+  color: #f09595;
 }
 
-.log-contradiction-pair {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--text-primary);
-  margin: 0;
+.log-contradiction-text {
+  color: #f0b5b5;
   word-break: break-word;
 }
 
-.log-contradiction-why {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
+/* Owner load — small ghost cards; overdue count amber. */
 .log-owners-strip {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .log-owner-chip {
   display: inline-flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 14px;
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-}
-
-.log-owner-chip[data-attention="true"] {
-  background: var(--warn-soft);
-  border-color: rgba(245, 181, 68, 0.32);
+  gap: 1px;
+  padding: 7px 11px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
 }
 
 .log-owner-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--glass-text-dim);
 }
 
 .log-owner-count {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--glass-text-faint);
 }
 
-.log-owner-chip[data-attention="true"] .log-owner-count {
-  color: var(--warn-text);
+.log-owner-overdue {
+  color: var(--glass-accent);
 }
 
 .log-status {
-  font-size: 13.5px;
+  font-size: 12px;
   text-align: center;
-  margin: 8px 0;
-  padding: 18px;
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  margin: 6px 0;
+  padding: 14px;
+  border-radius: var(--glass-radius-md);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
 }
 
 .log-status[data-kind="error"] {
-  background: var(--danger-soft);
-  border-color: rgba(255, 105, 97, 0.32);
-  color: var(--danger-text);
+  background: rgba(240, 149, 149, 0.10);
+  border-color: rgba(240, 149, 149, 0.3);
+  color: #f0b5b5;
 }
 
 .log-footer {
   display: flex;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
- * WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier). Scoped to
- * .view-receipts; reuses the dark/glassy :root tokens. Deterministic render.
+ * WP-THRESHOLD-LOG-UX — Receipts. Implemented against the mockup CSS skeleton
+ * (DESIGN CORRECTION 2): one 640px column; the chain is a single absolute rail
+ * with the date IN the meta line (no left date column); quotes are border-left
+ * only (no box); records sit flush (no per-record card). Density target: a full
+ * record ≈100px, the whole 3-record view ≈600px.
  * ══════════════════════════════════════════════════════════════════════════ */
 
+/* ── view chrome ── */
 .view-receipts {
-  max-width: 720px;
+  padding: 0;
+}
+
+.receipts-content {
+  max-width: 640px;
   margin: 0 auto;
-  padding: 56px 36px 36px;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
 }
 
 .receipts-header {
   display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.receipts-eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-tertiary);
-  margin: 0 0 4px;
+.receipts-header-text {
+  min-width: 0;
 }
 
 .receipts-title {
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  color: #e8eaed;
   margin: 0;
 }
 
 .receipts-sub {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin: 4px 0 0;
-}
-
-.receipts-header-actions {
-  flex-shrink: 0;
-}
-
-/* Current-state strip — the derived "where this stands now" line. */
-.receipts-current {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 14px 18px;
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-}
-
-.receipts-current-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-}
-
-.receipts-current-text {
-  flex: 1;
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--text-primary);
-  word-break: break-word;
-}
-
-/* Chain timeline. */
-.receipts-chain {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.receipts-node {
-  display: flex;
-  gap: 16px;
-  padding: 0 0 18px;
-}
-
-.receipts-node:last-child {
-  padding-bottom: 0;
-}
-
-.receipts-rail {
-  position: relative;
-  flex-shrink: 0;
-  width: 84px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding-top: 2px;
-}
-
-/* Vertical connector line down the rail between dots. */
-.receipts-node:not(:last-child) .receipts-rail::before {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 16px;
-  bottom: -18px;
-  width: 1px;
-  background: var(--border-strong);
-}
-
-.receipts-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-  box-shadow: 0 0 0 3px var(--bg-base);
-  z-index: 1;
-}
-
-.receipts-dot[data-type="decision"] { background: var(--accent); }
-.receipts-dot[data-type="commitment"] { background: var(--success); }
-
-.receipts-date {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-}
-
-.receipts-node-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px 16px;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
-}
-
-.receipts-node[data-state="superseded"] .receipts-node-body {
-  opacity: 0.72;
-}
-
-.receipts-node-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.receipts-owner {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.receipts-summary {
-  font-size: 14.5px;
-  line-height: 1.5;
-  color: var(--text-primary);
+  font-size: 11.5px;
+  color: #9aa0a6;
   margin: 0;
+}
+
+/* Copy — amber-tint, no outer glow. */
+.view-receipts #btn-receipts-copy {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 16px;
+  background: rgba(255, 196, 64, 0.14);
+  border: 1px solid rgba(255, 196, 64, 0.35);
+  color: #ffc440;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.view-receipts #btn-receipts-copy:hover {
+  background: rgba(255, 196, 64, 0.2);
+}
+
+.view-receipts #btn-receipts-copy:disabled {
+  opacity: 0.7;
+}
+
+/* ── current state: a strip, not a card; above the chain, lighter than records ── */
+.state-strip {
+  margin: 14px 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: #e8eaed;
+}
+
+.state-strip .label {
+  color: #9aa0a6;
+}
+
+/* ── the chain: timeline and content are ONE unit ── */
+.chain {
+  padding: 16px 18px;
+  position: relative;
+}
+
+.chain-rail {
+  position: absolute;
+  left: 27px;
+  top: 20px;
+  bottom: 14px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.rec {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.rec:last-child {
+  margin-bottom: 0;
+}
+
+.rec-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: #9aa0a6;
+}
+
+.rec-icon[data-type="decision"] {
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: #7fb3e8;
+}
+
+.rec-icon[data-type="commitment"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: #5dcaa5;
+}
+
+.rec-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.rec-meta {
+  font-size: 11.5px;
+  color: #9aa0a6;
+  margin: 0 0 3px;
+}
+
+.rec-title {
+  font-size: 13px;
+  color: #e8eaed;
+  margin: 0 0 4px;
   word-break: break-word;
 }
 
-.receipts-edge-chip {
-  display: inline-flex;
+.rec-quote {
+  font-size: 13px;
+  color: #e8eaed;
+  font-style: italic;
+  margin: 0 0 4px;
+  border-left: 2px solid rgba(255, 255, 255, 0.18);
+  padding-left: 10px;
+  word-break: break-word;
+}
+
+/* Edge chips are annotations, not banners. NEUTRAL by default (supersedes /
+ * superseded-by); RED reserved for contradicts ONLY; resolves = green. Each on
+ * its own line (block-level, hugs content), never inline beside the source. */
+.rec-edge {
+  display: flex;
+  width: fit-content;
   align-items: center;
-  align-self: flex-start;
   gap: 6px;
-  padding: 4px 10px;
-  border-radius: var(--radius-pill);
-  font-size: 12px;
-  font-weight: 500;
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  border-radius: 7px;
+  padding: 3px 8px;
+  margin: 6px 0;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #9aa0a6;
 }
 
-.receipts-edge-chip[data-kind="contradicts"] {
-  background: var(--danger-soft);
-  border-color: rgba(255, 105, 97, 0.32);
-  color: var(--danger-text);
+.rec-edge[data-kind="contradicts"] {
+  background: rgba(240, 149, 149, 0.10);
+  border-color: rgba(240, 149, 149, 0.3);
+  color: #f0b5b5;
 }
 
-.receipts-edge-chip[data-kind="resolves"] {
-  background: var(--success-soft);
-  border-color: rgba(52, 208, 88, 0.4);
-  color: var(--success-text);
+.rec-edge[data-kind="resolves"] {
+  background: rgba(93, 202, 165, 0.12);
+  border-color: rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
 }
 
-.receipts-source-link {
-  align-self: flex-start;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--accent-hover);
+.rec-source {
+  display: block;
+  font-size: 11.5px;
+  color: #7fb3e8;
   text-decoration: none;
 }
 
-.receipts-source-link:hover {
+.rec-source:hover {
   text-decoration: underline;
 }
 
 .receipts-status {
-  font-size: 13.5px;
+  margin: 14px 18px;
+  padding: 14px;
   text-align: center;
-  margin: 8px 0;
-  padding: 18px;
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
+  font-size: 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #9aa0a6;
 }
 
 .receipts-status[data-kind="error"] {
-  background: var(--danger-soft);
-  border-color: rgba(255, 105, 97, 0.32);
-  color: var(--danger-text);
+  background: rgba(240, 149, 149, 0.10);
+  border-color: rgba(240, 149, 149, 0.3);
+  color: #f0b5b5;
 }
 
-.receipts-footer-note {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  text-align: center;
-  margin: 0;
-}
-
+/* ── footer ── */
 .receipts-footer {
-  display: flex;
-  padding-top: 4px;
+  padding: 9px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 10.5px;
+  color: #6b7178;
+}
+
+/* "Back to Today" sits 24px below the footer line, inside the content column;
+ * the content block is top-anchored with a 24px bottom pad (no half-window void
+ * — the empty space below is just the window, not floating content). */
+.receipts-actions {
+  padding: 24px 18px;
+}
+
+.view-receipts #btn-receipts-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e8eaed;
+  border-radius: 8px;
 }
 
 /* "Show receipts" entry buttons on Today rows + record cards. */
@@ -2222,5 +2216,73 @@ code {
 
 .receipts-entry-btn {
   padding: 0;
-  font-size: 12.5px;
+  font-size: 11.5px;
+  color: var(--glass-link);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-N1 (S1 sharing elements) — capture attribution, co-sign chip, Mine/Everyone
+ * filter. All invisible-by-absence (rendered only when the data is present).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* #6 attribution — muted, in the meta line (panel + Today rows). */
+.record-meta-attr,
+.log-meta-attr {
+  color: var(--glass-text-dim);
+}
+
+/* #7 co-sign chip (receipts) — green family; confirmed solid, proposed dimmer. */
+.rec-cosign {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 3px 8px;
+  margin: 6px 0;
+  font-size: 11px;
+  background: rgba(93, 202, 165, 0.12);
+  border: 1px solid rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
+}
+
+.rec-cosign[data-status="proposed"] {
+  background: rgba(93, 202, 165, 0.08);
+  border-color: rgba(93, 202, 165, 0.25);
+  color: rgba(93, 202, 165, 0.7);
+}
+
+/* #8 Mine / Everyone — ghost segmented control in the Today header row. */
+.log-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.log-filter {
+  display: inline-flex;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.log-filter[hidden] {
+  display: none;
+}
+
+.log-filter-btn {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--glass-text-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.log-filter-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--glass-text);
 }

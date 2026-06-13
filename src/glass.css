@@ -1,0 +1,103 @@
+/* ════════════════════════════════════════════════════════════════════════════
+ * glass.css — the frozen Threshold design-system token set.
+ *
+ * Single source of truth for the dark/glassy language across the expanded
+ * window. The :root block below is VERBATIM from WP-THRESHOLD-GLASS-BRIEF.md §
+ * "The token system". WP-THRESHOLD-LOG-UX establishes this file and builds its
+ * new views (view-log first) on it; WP-THRESHOLD-GLASS migrates the existing
+ * views + adds full-window vibrancy.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  --glass-bg:            rgba(28, 30, 38, 0.97);   /* window surface (see vibrancy below) */
+  --glass-surface:       rgba(255, 255, 255, 0.05); /* cards, strips */
+  --glass-surface-hover: rgba(255, 255, 255, 0.08);
+  --glass-border:        rgba(255, 255, 255, 0.10);
+  --glass-border-strong: rgba(255, 255, 255, 0.14);
+  --glass-text:          #e8eaed;                   /* primary */
+  --glass-text-dim:      #9aa0a6;                   /* secondary */
+  --glass-text-faint:    #6b7178;                   /* tertiary/footers */
+  --glass-accent:        #ffc440;                   /* amber — tidbit/brand accent */
+  --glass-success:       #5dcaa5;  --glass-success-strong: #4ade80;
+  --glass-danger:        #f09595;  --glass-danger-strong:  #f87171;
+  --glass-link:          #7fb3e8;                   /* evidence links, info */
+  --glass-radius-sm: 8px; --glass-radius-md: 9px; --glass-radius-lg: 14px;
+}
+
+/* Window surface — the expanded window is dark glass, not flat black (delta #1).
+ * Full-window vibrancy (NSVisualEffectView / acrylic) lands with the
+ * WP-THRESHOLD-GLASS migration; this establishes the solid fallback value. */
+html,
+body {
+  background: var(--glass-bg);
+}
+
+/* ── Component layer — shared glassy primitives across the LOG-UX views
+ *    (post-capture panel, Today, Receipts). Tinted ghosts, never filled. ── */
+
+/* Type chip — decision (blue) / commitment (green). */
+.record-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+}
+
+.record-chip[data-type="decision"] {
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: var(--glass-link);
+}
+
+.record-chip[data-type="commitment"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+
+/* State pill — open / resolved / superseded; ghost tints, colored text only. */
+.record-state-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-faint);
+}
+
+.record-state-pill[data-state="resolved"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+
+.record-state-pill[data-state="superseded"] {
+  text-decoration: line-through;
+}
+
+/* Verbatim quotation — only ever rendered when verbatimVerified (JS gate).
+ * Inset + italic reads unmistakably as a source quote. */
+.record-quote {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--glass-text-dim);
+  background: rgba(0, 0, 0, 0.22);
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
+  word-break: break-word;
+}

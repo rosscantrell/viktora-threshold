@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
+    <!-- glass.css = the frozen design-system tokens (WP-THRESHOLD-GLASS-BRIEF).
+         Loaded after styles.css so its window-surface + tokenized rules win. -->
+    <link rel="stylesheet" href="glass.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Viktora Threshold</title>
     <script type="module" src="/main.js" defer></script>
@@ -366,7 +369,15 @@
           <h1 class="log-title">Today</h1>
           <p class="log-sub" id="log-sub">What needs your attention</p>
         </div>
-        <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
+        <div class="log-header-actions">
+          <!-- WP-N1 #8 — Mine/Everyone filter. Hidden until the viewer has an
+               identity (set in enterLogView); default Everyone. -->
+          <div class="log-filter" id="log-filter" role="group" aria-label="Filter" hidden>
+            <button type="button" class="log-filter-btn" data-filter="everyone" aria-pressed="true">Everyone</button>
+            <button type="button" class="log-filter-btn" data-filter="mine" aria-pressed="false">Mine</button>
+          </div>
+          <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
       </header>
 
       <div class="log-states-strip" id="log-states-strip" hidden>
@@ -412,33 +423,32 @@
          Markdown (fallback) in one clipboard write (copy_receipts IPC).
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-receipts" class="view view-receipts" hidden>
-      <header class="receipts-header">
-        <div class="receipts-header-text">
-          <p class="receipts-eyebrow">Receipts</p>
-          <h1 class="receipts-title" id="receipts-title">—</h1>
-          <p class="receipts-sub" id="receipts-sub" hidden></p>
+      <div class="receipts-content">
+        <header class="receipts-header">
+          <div class="receipts-header-text">
+            <h1 class="receipts-title" id="receipts-title">—</h1>
+            <p class="receipts-sub" id="receipts-sub" hidden></p>
+          </div>
+          <button type="button" id="btn-receipts-copy" class="btn">Copy</button>
+        </header>
+
+        <!-- Derived current-state strip (deterministic). Answer-first, above
+             the chain; styled lighter than records. -->
+        <div class="state-strip" id="receipts-current" hidden></div>
+
+        <!-- The chain: a single absolute rail + one .rec per record. Date lives
+             in .rec-meta, not a left column. Rendered by main.js. -->
+        <div class="chain" id="receipts-chain"></div>
+
+        <p class="receipts-status" id="receipts-status" hidden></p>
+
+        <footer class="receipts-footer">
+          compiled by Threshold from meeting captures · every quote verbatim from source
+        </footer>
+
+        <div class="receipts-actions">
+          <button type="button" id="btn-receipts-back" class="btn">← Back to Today</button>
         </div>
-        <div class="receipts-header-actions">
-          <button type="button" id="btn-receipts-copy" class="btn btn-primary">Copy</button>
-        </div>
-      </header>
-
-      <!-- Derived current-state strip (deterministic, from the record states). -->
-      <div class="receipts-current" id="receipts-current" hidden></div>
-
-      <!-- Chronological chain timeline, rendered by main.js. -->
-      <div class="receipts-chain" id="receipts-chain"></div>
-
-      <p class="receipts-status" id="receipts-status" hidden></p>
-
-      <p class="receipts-footer-note">
-        compiled by Threshold from meeting captures · every quote verbatim from source
-      </p>
-
-      <div class="receipts-footer">
-        <button type="button" id="btn-receipts-back" class="btn btn-secondary">
-          ← Back to Today
-        </button>
       </div>
     </section>
 
