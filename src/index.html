@@ -401,6 +401,48 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier).
+         Reached in-app via "Show receipts" on a Today needs-attention row or a
+         post-capture record card (enterReceiptsView(entity)). The render is
+         100% DETERMINISTIC — no LLM in the chain — and that is the trust
+         property: the chronological chain of a subject's records, each with a
+         verbatim quote (ONLY when verbatimVerified) and a source-doc link, the
+         conflict/supersession edges among them, and a derived current-state
+         line. The Copy button writes BOTH text/html (rich paste) and text/plain
+         Markdown (fallback) in one clipboard write (copy_receipts IPC).
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-receipts" class="view view-receipts" hidden>
+      <header class="receipts-header">
+        <div class="receipts-header-text">
+          <p class="receipts-eyebrow">Receipts</p>
+          <h1 class="receipts-title" id="receipts-title">—</h1>
+          <p class="receipts-sub" id="receipts-sub" hidden></p>
+        </div>
+        <div class="receipts-header-actions">
+          <button type="button" id="btn-receipts-copy" class="btn btn-primary">Copy</button>
+        </div>
+      </header>
+
+      <!-- Derived current-state strip (deterministic, from the record states). -->
+      <div class="receipts-current" id="receipts-current" hidden></div>
+
+      <!-- Chronological chain timeline, rendered by main.js. -->
+      <div class="receipts-chain" id="receipts-chain"></div>
+
+      <p class="receipts-status" id="receipts-status" hidden></p>
+
+      <p class="receipts-footer-note">
+        compiled by Threshold from meeting captures · every quote verbatim from source
+      </p>
+
+      <div class="receipts-footer">
+        <button type="button" id="btn-receipts-back" class="btn btn-secondary">
+          ← Back to Today
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          WP-PLAUD-04a — Plaud Sync Queue view.
          Reached via right-click menu → "Plaud Sync Queue" (fires
          widget_expand with target_tab="plaud-queue"). main.js's bootstrap

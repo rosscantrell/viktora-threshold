@@ -1973,3 +1973,254 @@ code {
   display: flex;
   padding-top: 4px;
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier). Scoped to
+ * .view-receipts; reuses the dark/glassy :root tokens. Deterministic render.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+.view-receipts {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.receipts-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.receipts-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary);
+  margin: 0 0 4px;
+}
+
+.receipts-title {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.receipts-sub {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
+
+.receipts-header-actions {
+  flex-shrink: 0;
+}
+
+/* Current-state strip — the derived "where this stands now" line. */
+.receipts-current {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 18px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.receipts-current-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.receipts-current-text {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+/* Chain timeline. */
+.receipts-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.receipts-node {
+  display: flex;
+  gap: 16px;
+  padding: 0 0 18px;
+}
+
+.receipts-node:last-child {
+  padding-bottom: 0;
+}
+
+.receipts-rail {
+  position: relative;
+  flex-shrink: 0;
+  width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* Vertical connector line down the rail between dots. */
+.receipts-node:not(:last-child) .receipts-rail::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 16px;
+  bottom: -18px;
+  width: 1px;
+  background: var(--border-strong);
+}
+
+.receipts-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  box-shadow: 0 0 0 3px var(--bg-base);
+  z-index: 1;
+}
+
+.receipts-dot[data-type="decision"] { background: var(--accent); }
+.receipts-dot[data-type="commitment"] { background: var(--success); }
+
+.receipts-date {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.receipts-node-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.receipts-node[data-state="superseded"] .receipts-node-body {
+  opacity: 0.72;
+}
+
+.receipts-node-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.receipts-owner {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.receipts-summary {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin: 0;
+  word-break: break-word;
+}
+
+.receipts-edge-chip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.receipts-edge-chip[data-kind="contradicts"] {
+  background: var(--danger-soft);
+  border-color: rgba(255, 105, 97, 0.32);
+  color: var(--danger-text);
+}
+
+.receipts-edge-chip[data-kind="resolves"] {
+  background: var(--success-soft);
+  border-color: rgba(52, 208, 88, 0.4);
+  color: var(--success-text);
+}
+
+.receipts-source-link {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-hover);
+  text-decoration: none;
+}
+
+.receipts-source-link:hover {
+  text-decoration: underline;
+}
+
+.receipts-status {
+  font-size: 13.5px;
+  text-align: center;
+  margin: 8px 0;
+  padding: 18px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.receipts-status[data-kind="error"] {
+  background: var(--danger-soft);
+  border-color: rgba(255, 105, 97, 0.32);
+  color: var(--danger-text);
+}
+
+.receipts-footer-note {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  text-align: center;
+  margin: 0;
+}
+
+.receipts-footer {
+  display: flex;
+  padding-top: 4px;
+}
+
+/* "Show receipts" entry buttons on Today rows + record cards. */
+.log-row-actions,
+.record-actions {
+  display: flex;
+  padding-top: 2px;
+}
+
+.receipts-entry-btn {
+  padding: 0;
+  font-size: 12.5px;
+}
