@@ -348,4 +348,89 @@ listen("threshold://tidbit-arrived", async (event) => {
   });
 });
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-THRESHOLD-LOG-UX — records-arrived event + ambient "Today" badge
+// ───────────────────────────────────────────────────────────────────────────
+//
+// records-arrived fires from the Rust `poll_for_records` loop when a capture's
+// decision/commitment records land (≈every capture once the log is enabled
+// server-side). It reuses the SAME post-capture indicator badge as the tidbit
+// path — one click opens the records-primary panel — but fires NO OS
+// notification (records land on every capture; a notification each time would
+// be spam). It also refreshes the ambient badge, since a new capture can change
+// what needs attention.
+
+listen("threshold://records-arrived", async (event) => {
+  const payload = event.payload || {};
+  const records = Array.isArray(payload.records) ? payload.records : [];
+  console.log("[widget] records arrived:", records.length);
+
+  if (tidbitIndicator) {
+    tidbitIndicator.hidden = false;
+    tidbitIndicator.title =
+      records.length === 1
+        ? "1 decision/commitment captured — tap to view"
+        : `${records.length} decisions/commitments captured — tap to view`;
+  }
+
+  // Pulse the widget (same attention signal as the tidbit path).
+  const widgetEl = document.getElementById("widget");
+  if (widgetEl) {
+    widgetEl.classList.remove("tidbit-pulse");
+    void widgetEl.offsetWidth;
+    widgetEl.classList.add("tidbit-pulse");
+    setTimeout(() => widgetEl.classList.remove("tidbit-pulse"), 2200);
+  }
+
+  // A fresh capture can shift the needs-attention count — refresh the badge.
+  refreshLogBadge();
+});
+
+// Ambient "needs attention" badge (top-left, amber-orange, count-bearing).
+const logIndicator = document.getElementById("log-indicator");
+
+if (logIndicator) {
+  logIndicator.addEventListener("click", async (e) => {
+    if (dragInitiated) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await invoke("widget_expand", { targetTab: "log" });
+    } catch (err) {
+      console.warn("[widget] log expand failed:", err);
+    }
+  });
+}
+
+/**
+ * Fetch summary.overdueSilent via the get_decision_log_summary IPC and reflect
+ * it on the badge. Best-effort: the Rust command returns 0 on any error, so the
+ * badge simply stays hidden rather than surfacing an error on the always-on
+ * widget. Hidden at zero; capped display at "99+".
+ */
+async function refreshLogBadge() {
+  if (!logIndicator) return;
+  try {
+    const count = await invoke("get_decision_log_summary");
+    const n = typeof count === "number" ? count : 0;
+    if (n > 0) {
+      logIndicator.textContent = n > 99 ? "99+" : String(n);
+      logIndicator.hidden = false;
+      logIndicator.title = `${n} item${n === 1 ? "" : "s"} need attention — open Today`;
+    } else {
+      logIndicator.hidden = true;
+    }
+  } catch (err) {
+    console.warn("[widget] log summary fetch failed:", err);
+    logIndicator.hidden = true;
+  }
+}
+
+// Fetch the badge count now and hourly thereafter (per-capture refresh is wired
+// in the records-arrived handler above). 60 min keeps the always-on widget
+// quiet while still catching due-date rollovers on a long-running session.
+const LOG_BADGE_REFRESH_MS = 60 * 60 * 1000;
+refreshLogBadge();
+setInterval(refreshLogBadge, LOG_BADGE_REFRESH_MS);
+
 init();

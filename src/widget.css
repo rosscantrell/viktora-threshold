@@ -185,3 +185,63 @@ html, body {
                 0 0 0 0px rgba(255, 196, 64, 0);
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * WP-THRESHOLD-LOG-UX — ambient "needs attention" badge
+ * ──────────────────────────────────────────────────────────────────────── */
+
+/* Distinct from the gold tidbit badge by THREE axes: position (top-LEFT vs the
+ * tidbit's top-right), hue (amber-orange #f59e42 vs the tidbit's gold #ffc440),
+ * and content (a count number vs the 💡 glyph). Shows the overdue+silent count;
+ * hidden at zero. Auto-sizes for 1–3 digits via min-width + horizontal padding
+ * (pill, not circle, when the count is "99+"). */
+#log-indicator {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: rgba(245, 158, 66, 0.95);
+  border: 1px solid rgba(250, 175, 90, 0.95);
+  color: #1c1e26;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
+              0 0 0 2px rgba(245, 158, 66, 0.18);
+  /* Same breathing cadence as the tidbit badge, amber-orange tint, so the two
+   * read as a matched family rather than two unrelated dots. */
+  animation: log-breathe 2.4s ease-in-out infinite;
+  z-index: 2;
+}
+
+#log-indicator[hidden] {
+  display: none;
+}
+
+#log-indicator:hover {
+  background: rgba(250, 170, 80, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+              0 0 0 3px rgba(245, 158, 66, 0.32);
+}
+
+#log-indicator:active {
+  transform: scale(0.92);
+}
+
+@keyframes log-breathe {
+  0%, 100% {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
+                0 0 0 2px rgba(245, 158, 66, 0.18);
+  }
+  50% {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+                0 0 0 5px rgba(245, 158, 66, 0.28);
+  }
+}

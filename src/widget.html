@@ -82,6 +82,24 @@
       >
         💡
       </button>
+
+      <!--
+        WP-THRESHOLD-LOG-UX — ambient "needs attention" badge. Distinct from the
+        gold tidbit badge (top-right): this one is amber-orange, top-LEFT, and
+        carries a count — the number of open, overdue-and-silent decision/
+        commitment-log items (summary.overdueSilent). widget.js fetches the
+        count on start, hourly, and after each capture via the
+        get_decision_log_summary IPC; the badge is hidden at zero. Clicking it
+        invokes widget_expand("log") to open the Today view. No notifications —
+        badge only (P1).
+      -->
+      <button
+        id="log-indicator"
+        type="button"
+        title="Items need attention — open Today"
+        aria-label="Open Today (items need attention)"
+        hidden
+      ></button>
     </div>
   </body>
 </html>

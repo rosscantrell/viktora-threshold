@@ -1513,3 +1513,463 @@ code {
   font-size: 11px;
   color: var(--text-tertiary);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-LOG-UX — post-capture panel (records-primary) + Today view.
+ * Scoped to .view-postcapture and .view-log only — existing views untouched.
+ * Composes the dark/glassy :root token system shipped in the v0.6.1 redesign
+ * (no new palette): decision → accent, commitment → success, attention/overdue
+ * → warn, conflict → danger, superseded → tertiary.
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ───────── Post-capture panel ───────── */
+
+.view-postcapture {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.postcapture-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.postcapture-title {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.postcapture-sub {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+/* Amber insight card — the tidbit, when a marker fired. Amber matches the
+ * tidbit-badge vocabulary (Ross's decision); a left accent bar + warm-tinted
+ * surface set it apart from the neutral record cards below. */
+.tidbit-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 18px 22px;
+  background: var(--warn-soft);
+  border: 1px solid rgba(245, 181, 68, 0.32);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.tidbit-card[hidden] {
+  display: none;
+}
+
+.tidbit-card-link {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+/* ───────── Records list ───────── */
+
+.records-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.record-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.record-card[data-state="superseded"] {
+  opacity: 0.72;
+}
+
+.record-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Type chip — decision (accent/blue) vs commitment (success/teal). Shared
+ * between the records list and the Today needs-attention rows. */
+.record-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.record-chip[data-type="decision"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-ring);
+  color: #cfe0ff;
+}
+
+.record-chip[data-type="commitment"] {
+  background: var(--success-soft);
+  border-color: rgba(52, 208, 88, 0.4);
+  color: var(--success-text);
+}
+
+.record-state-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+}
+
+.record-state-pill[data-state="resolved"] {
+  background: var(--success-soft);
+  border-color: rgba(52, 208, 88, 0.4);
+  color: var(--success-text);
+}
+
+.record-state-pill[data-state="superseded"] {
+  text-decoration: line-through;
+}
+
+.record-summary {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin: 0;
+  word-break: break-word;
+}
+
+.record-meta {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.record-meta[data-attention="true"] {
+  color: var(--warn-text);
+}
+
+/* Verbatim quotation — rendered ONLY when verbatimVerified (main.js gate);
+ * the inset, italic styling reads unmistakably as a source quote. */
+.record-quote {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  word-break: break-word;
+}
+
+/* Edge callout — conflict (danger), supersession (neutral), resolution
+ * (success), dependency (neutral). */
+.record-edge {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.record-edge-icon {
+  flex-shrink: 0;
+}
+
+.record-edge[data-kind="contradicts"] { color: var(--danger-text); }
+.record-edge[data-kind="resolves"] { color: var(--success-text); }
+.record-edge[data-kind="supersedes"] { color: var(--text-secondary); }
+
+.postcapture-filed {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 12px 0;
+  padding: 24px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.postcapture-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 4px;
+}
+
+/* view-main header action group (Today + Configure). */
+.main-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* ───────── Today view ───────── */
+
+.view-log {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 56px 36px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.log-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.log-title {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.log-sub {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
+
+.log-states-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.log-state-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.log-state-pill[data-state="open"] {
+  background: var(--accent-soft);
+  border-color: var(--accent-ring);
+  color: #cfe0ff;
+}
+
+.log-state-pill[data-state="resolved"] {
+  background: var(--success-soft);
+  border-color: rgba(52, 208, 88, 0.4);
+  color: var(--success-text);
+}
+
+.log-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.log-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.log-attention-list,
+.log-contradictions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.log-attention-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.log-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.log-row-subject {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.log-row-summary {
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin: 0;
+  word-break: break-word;
+}
+
+.log-row-meta {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.log-row-meta[data-attention="true"] {
+  color: var(--warn-text);
+}
+
+.log-empty {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0;
+  padding: 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.log-contradiction-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 16px;
+  background: var(--danger-soft);
+  border: 1px solid rgba(255, 105, 97, 0.32);
+  border-radius: var(--radius-md);
+}
+
+.log-contradiction-sev {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--danger-text);
+}
+
+.log-contradiction-pair {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--text-primary);
+  margin: 0;
+  word-break: break-word;
+}
+
+.log-contradiction-why {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.log-owners-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.log-owner-chip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+}
+
+.log-owner-chip[data-attention="true"] {
+  background: var(--warn-soft);
+  border-color: rgba(245, 181, 68, 0.32);
+}
+
+.log-owner-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.log-owner-count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.log-owner-chip[data-attention="true"] .log-owner-count {
+  color: var(--warn-text);
+}
+
+.log-status {
+  font-size: 13.5px;
+  text-align: center;
+  margin: 8px 0;
+  padding: 18px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.log-status[data-kind="error"] {
+  background: var(--danger-soft);
+  border-color: rgba(255, 105, 97, 0.32);
+  color: var(--danger-text);
+}
+
+.log-footer {
+  display: flex;
+  padding-top: 4px;
+}

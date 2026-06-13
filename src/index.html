@@ -266,7 +266,10 @@
       <header class="app-header">
         <h1>Viktora Threshold</h1>
         <p class="subtitle" id="main-subtitle">Connected</p>
-        <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
+        <div class="main-header-actions">
+          <button type="button" id="btn-open-log" class="btn btn-link">Today</button>
+          <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
+        </div>
       </header>
 
       <div class="capture-controls">
@@ -300,32 +303,101 @@
       shows an empty-state message and offers to collapse back to the
       widget.
     -->
-    <section id="view-tidbit" class="view view-tidbit" hidden>
-      <header class="tidbit-header">
-        <p class="tidbit-meta" id="tidbit-meta" hidden></p>
-        <h1 class="tidbit-title" id="tidbit-title"></h1>
+    <!--
+      WP-THRESHOLD-LOG-UX — post-capture panel, records-primary.
+      Reached via widget_expand("tidbit") (#tidbit). main.js bootstrap fetches
+      BOTH get_pending_records and get_pending_tidbit and calls
+      enterPostCaptureView(). The records list is the body (it populates on
+      ~every capture); the tidbit, when a marker fired, renders as a single
+      amber insight card at the top. No "no preview" empty state — a capture
+      that produced neither shows a quiet "captured & filed" line.
+      Section id stays "view-tidbit" so showView() + the #tidbit hash route are
+      unchanged (the tidbit polling contract is untouched).
+    -->
+    <section id="view-tidbit" class="view view-postcapture" hidden>
+      <header class="postcapture-header">
+        <h1 class="postcapture-title">Just captured</h1>
+        <p class="postcapture-sub" id="postcapture-sub" hidden></p>
       </header>
 
-      <div class="tidbit-body" id="tidbit-body"></div>
-
-      <div class="tidbit-highlights" id="tidbit-highlights" aria-label="Highlights">
-        <!-- TidbitHighlight chips rendered here by main.js. Each chip:
-             <span class="tidbit-chip" data-overlap="true|false">slug · n×</span> -->
-      </div>
-
-      <div class="tidbit-footer">
-        <button type="button" id="btn-tidbit-back" class="btn btn-secondary">
-          ← Back to widget
-        </button>
-        <a id="btn-tidbit-deeplink" class="btn btn-primary" target="_blank" rel="noopener">
+      <!-- Amber insight card — the tidbit, when one exists. -->
+      <div class="tidbit-card" id="tidbit-card" hidden>
+        <p class="tidbit-meta" id="tidbit-meta" hidden></p>
+        <h2 class="tidbit-title" id="tidbit-title"></h2>
+        <div class="tidbit-body" id="tidbit-body"></div>
+        <div class="tidbit-highlights" id="tidbit-highlights" aria-label="Highlights">
+          <!-- TidbitHighlight chips rendered by main.js:
+               <span class="tidbit-chip" data-overlap="true|false">slug · n×</span> -->
+        </div>
+        <a id="btn-tidbit-deeplink" class="btn btn-primary tidbit-card-link" target="_blank" rel="noopener">
           View full in Apolla →
         </a>
       </div>
 
-      <p class="tidbit-empty" id="tidbit-empty" hidden>
-        No preview available right now. It may have been viewed already or
-        timed out.
+      <!-- Records — the decisions & commitments this capture produced.
+           One .record-card per item, rendered by renderRecords() in main.js. -->
+      <div class="records-list" id="records-list" aria-label="Decisions and commitments"></div>
+
+      <!-- Graceful empty state: no records and no tidbit. No apology copy. -->
+      <p class="postcapture-filed" id="postcapture-filed" hidden>
+        Captured &amp; filed. Nothing in this one rose to a decision or commitment.
       </p>
+
+      <div class="postcapture-footer">
+        <button type="button" id="btn-tidbit-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+        <button type="button" id="btn-postcapture-log" class="btn btn-link">
+          Open Today →
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-LOG-UX — "Today" view (the decision/commitment log).
+         Reached via the widget right-click "Today" item or the Today button
+         on view-main (#log). main.js's enterLogView() fetches the live
+         /api/decision-log via the fetch_decision_log IPC and renders the
+         needs-attention list, contradictions, state counts, and owner load.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-log" class="view view-log" hidden>
+      <header class="log-header">
+        <div class="log-header-text">
+          <h1 class="log-title">Today</h1>
+          <p class="log-sub" id="log-sub">What needs your attention</p>
+        </div>
+        <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
+      </header>
+
+      <div class="log-states-strip" id="log-states-strip" hidden>
+        <!-- open / resolved / superseded count pills rendered by main.js -->
+      </div>
+
+      <section class="log-section" id="log-attention-section">
+        <h2 class="log-section-title">Needs attention</h2>
+        <div class="log-attention-list" id="log-attention-list"></div>
+        <p class="log-empty" id="log-attention-empty" hidden>
+          Nothing overdue and silent. You're on top of it.
+        </p>
+      </section>
+
+      <section class="log-section" id="log-contradictions-section" hidden>
+        <h2 class="log-section-title">Contradictions</h2>
+        <div class="log-contradictions-list" id="log-contradictions-list"></div>
+      </section>
+
+      <section class="log-section" id="log-owners-section" hidden>
+        <h2 class="log-section-title">Owner load</h2>
+        <div class="log-owners-strip" id="log-owners-strip"></div>
+      </section>
+
+      <p class="log-status" id="log-status" hidden></p>
+
+      <div class="log-footer">
+        <button type="button" id="btn-log-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
