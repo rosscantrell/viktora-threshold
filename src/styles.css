@@ -2219,3 +2219,70 @@ code {
   font-size: 11.5px;
   color: var(--glass-link);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-N1 (S1 sharing elements) — capture attribution, co-sign chip, Mine/Everyone
+ * filter. All invisible-by-absence (rendered only when the data is present).
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* #6 attribution — muted, in the meta line (panel + Today rows). */
+.record-meta-attr,
+.log-meta-attr {
+  color: var(--glass-text-dim);
+}
+
+/* #7 co-sign chip (receipts) — green family; confirmed solid, proposed dimmer. */
+.rec-cosign {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 3px 8px;
+  margin: 6px 0;
+  font-size: 11px;
+  background: rgba(93, 202, 165, 0.12);
+  border: 1px solid rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
+}
+
+.rec-cosign[data-status="proposed"] {
+  background: rgba(93, 202, 165, 0.08);
+  border-color: rgba(93, 202, 165, 0.25);
+  color: rgba(93, 202, 165, 0.7);
+}
+
+/* #8 Mine / Everyone — ghost segmented control in the Today header row. */
+.log-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.log-filter {
+  display: inline-flex;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.log-filter[hidden] {
+  display: none;
+}
+
+.log-filter-btn {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--glass-text-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.log-filter-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--glass-text);
+}

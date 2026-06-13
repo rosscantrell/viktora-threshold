@@ -369,7 +369,15 @@
           <h1 class="log-title">Today</h1>
           <p class="log-sub" id="log-sub">What needs your attention</p>
         </div>
-        <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
+        <div class="log-header-actions">
+          <!-- WP-N1 #8 — Mine/Everyone filter. Hidden until the viewer has an
+               identity (set in enterLogView); default Everyone. -->
+          <div class="log-filter" id="log-filter" role="group" aria-label="Filter" hidden>
+            <button type="button" class="log-filter-btn" data-filter="everyone" aria-pressed="true">Everyone</button>
+            <button type="button" class="log-filter-btn" data-filter="mine" aria-pressed="false">Mine</button>
+          </div>
+          <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
       </header>
 
       <div class="log-states-strip" id="log-states-strip" hidden>

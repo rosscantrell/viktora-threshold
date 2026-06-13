@@ -647,6 +647,59 @@ function formatDueDate(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+// ───────── WP-N1 (S1 sharing) — viewer identity helpers ─────────
+//
+// The viewer's authenticated email drives capture attribution + the Today
+// "Mine / Everyone" filter. Fetched once per expanded-window load (each
+// widget_expand is a fresh page) via get_whoami and cached. EVERY sharing
+// surface is invisible-by-absence: a null email (shared key / auth off / a
+// server too old for /api/whoami) means no attribution "you", no toggle — the
+// app looks identical to today.
+
+// undefined = not yet fetched · null = no identity · string = the viewer email.
+let _viewerEmail = undefined;
+
+async function getViewerEmail() {
+  if (_viewerEmail !== undefined) return _viewerEmail;
+  try {
+    const r = await tauri.core.invoke("get_whoami");
+    _viewerEmail = r && typeof r.email === "string" && r.email ? r.email : null;
+  } catch (err) {
+    console.warn("[main] get_whoami failed:", err);
+    _viewerEmail = null;
+  }
+  return _viewerEmail;
+}
+
+/** The local-part of an email ("dev.patel@x" → "dev.patel"); "" if absent. */
+function emailLocalPart(email) {
+  return email && typeof email === "string" ? email.split("@")[0] : "";
+}
+
+/** Normalize an email's local-part to a person-slug ("dev.patel" → "dev-patel")
+ *  for owner comparison in the Mine filter. */
+function emailToOwnerSlug(email) {
+  return emailLocalPart(email).toLowerCase().replace(/[._]+/g, "-");
+}
+
+/**
+ * Capture-attribution label for a document, from the documentId → submitter map:
+ *   - submitter == viewer            → "captured by you"
+ *   - submitter present, someone else → "captured by <local-part>"
+ *   - no submitter on the doc         → "" (omit — pre-flag / shared-key capture)
+ * Never renders an email or "unknown". `viewerEmail` may be null (no identity);
+ * then a present submitter always reads as the other person.
+ */
+function captureAttribution(documentId, submitterByDoc, viewerEmail) {
+  if (!documentId || !submitterByDoc) return "";
+  const submitter = submitterByDoc.get(documentId);
+  if (!submitter) return "";
+  if (viewerEmail && submitter.toLowerCase() === viewerEmail.toLowerCase()) {
+    return "captured by you";
+  }
+  return "captured by " + emailLocalPart(submitter);
+}
+
 /**
  * Render the post-capture panel — records-primary.
  *
@@ -659,7 +712,7 @@ function formatDueDate(iso) {
  * @param {object|null} recordsResp    get_pending_records envelope (or null):
  *                                     { records: [{record, lifecycle, state}], edges: [...] }
  */
-function enterPostCaptureView(tidbit, recordsResp) {
+async function enterPostCaptureView(tidbit, recordsResp) {
   state.inWizard = false;
   showView("view-tidbit");
 
@@ -670,7 +723,10 @@ function enterPostCaptureView(tidbit, recordsResp) {
 
   const hasTidbit = !!(tidbit && typeof tidbit === "object" && tidbit.title);
   renderTidbitCard(hasTidbit ? tidbit : null);
-  renderRecords(items, edges);
+  // WP-N1 #6 — this client made the capture, so attribution is "captured by
+  // you" when we have a viewer identity (whoami non-null); omitted otherwise.
+  const viewer = await getViewerEmail();
+  renderRecords(items, edges, viewer ? "captured by you" : null);
 
   const subEl = document.getElementById("postcapture-sub");
   const filedEl = document.getElementById("postcapture-filed");
@@ -787,7 +843,7 @@ function renderTidbitCard(tidbit) {
  * state} envelopes; `edges` are the cross-record relationships touching them,
  * keyed onto each record for the conflict/supersession callouts.
  */
-function renderRecords(items, edges) {
+function renderRecords(items, edges, attribution) {
   const listEl = document.getElementById("records-list");
   if (!listEl) return;
   listEl.innerHTML = "";
@@ -805,7 +861,13 @@ function renderRecords(items, edges) {
     const rec = item && item.record ? item.record : item;
     if (!rec) continue;
     listEl.appendChild(
-      renderRecordCard(rec, item.state, item.lifecycle, edgesByRecord.get(rec.recordId) || []),
+      renderRecordCard(
+        rec,
+        item.state,
+        item.lifecycle,
+        edgesByRecord.get(rec.recordId) || [],
+        attribution,
+      ),
     );
   }
 }
@@ -813,7 +875,7 @@ function renderRecords(items, edges) {
 /** Build one record card element. Verbatim is rendered as a quotation ONLY
  *  when verbatimVerified is true (an unverified quote is a hypothesis, never
  *  shown as a quotation — the hard constraint). */
-function renderRecordCard(rec, recState, lifecycle, recEdges) {
+function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   const card = document.createElement("div");
   card.className = "record-card";
   card.dataset.type = rec.type || "";
@@ -850,16 +912,25 @@ function renderRecordCard(rec, recState, lifecycle, recEdges) {
   if (rec.due) dimMeta.push("due " + formatDueDate(rec.due));
   const cardOverdue =
     lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number";
-  if (dimMeta.length || cardOverdue) {
+  if (dimMeta.length || cardOverdue || attribution) {
     const meta = document.createElement("p");
     meta.className = "record-meta";
     meta.textContent = dimMeta.join(" · ");
     if (cardOverdue) {
-      if (dimMeta.length) meta.appendChild(document.createTextNode(" · "));
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
       const overdue = document.createElement("span");
       overdue.className = "record-meta-overdue";
       overdue.textContent = lifecycle.silentDays + "d silent";
       meta.appendChild(overdue);
+    }
+    // WP-N1 #6 — capture attribution (e.g. "captured by you"), muted, in the
+    // meta line. Omitted entirely when absent (no identity → never shown).
+    if (attribution) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const attr = document.createElement("span");
+      attr.className = "record-meta-attr";
+      attr.textContent = attribution;
+      meta.appendChild(attr);
     }
     card.appendChild(meta);
   }
@@ -1061,14 +1132,37 @@ async function enterLogView() {
     statesStrip.hidden = !any;
   }
 
-  // Needs-attention list.
-  if (attentionList) {
-    attentionList.innerHTML = "";
-    for (const entry of needsAttention) {
-      attentionList.appendChild(renderAttentionRow(entry));
+  // WP-N1 #6/#8 — viewer identity (for attribution + the Mine filter) and the
+  // documentId → submitter map (for the Today attribution join). Both best-
+  // effort: a null identity hides the toggle + the "you" distinction; a failed
+  // /api/data join simply omits attribution. The documents array is already
+  // disclosure-sliced server-side, so the join never sees a hidden doc.
+  const viewerEmail = await getViewerEmail();
+  const submitterByDoc = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
+        submitterByDoc.set(d.id, d.submittedByEmail);
+      }
     }
-    if (attentionEmpty) attentionEmpty.hidden = needsAttention.length > 0;
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (attribution omitted):", err);
   }
+
+  _todayCtx = {
+    needsAttention,
+    submitterByDoc,
+    viewerEmail,
+    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
+  };
+
+  // The Mine / Everyone toggle exists only for an identified viewer.
+  const filterEl = document.getElementById("log-filter");
+  if (filterEl) filterEl.hidden = !viewerEmail;
+  setTodayFilter("everyone"); // default Everyone on each view load
+  renderTodayAttention();
 
   // Contradictions.
   if (contradictionsSection && contradictionsList) {
@@ -1097,8 +1191,54 @@ async function enterLogView() {
   }
 }
 
-/** One needs-attention row: summary, subject, owner, due, silent-days. */
-function renderAttentionRow(entry) {
+// WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
+// `_todayCtx` holds the last-fetched needs-attention list + the join maps so the
+// toggle re-renders without re-fetching.
+let _todayFilter = "everyone"; // "everyone" | "mine"
+let _todayCtx = null;
+
+/** Set the active filter + reflect it on the segmented control's buttons. */
+function setTodayFilter(filter) {
+  _todayFilter = filter === "mine" ? "mine" : "everyone";
+  for (const b of document.querySelectorAll(".log-filter-btn")) {
+    b.setAttribute("aria-pressed", b.dataset.filter === _todayFilter ? "true" : "false");
+  }
+}
+
+/** Render the needs-attention list under the current filter. "Mine" keeps only
+ *  rows whose owner slug matches the viewer's (email local-part → slug). */
+function renderTodayAttention() {
+  const ctx = _todayCtx;
+  const listEl = document.getElementById("log-attention-list");
+  const emptyEl = document.getElementById("log-attention-empty");
+  if (!ctx || !listEl) return;
+
+  let rows = ctx.needsAttention;
+  if (_todayFilter === "mine" && ctx.viewerSlug) {
+    rows = rows.filter((e) => {
+      const owner = ((e.record && e.record.owner) || "").toLowerCase();
+      return owner && owner === ctx.viewerSlug;
+    });
+  }
+
+  listEl.innerHTML = "";
+  for (const entry of rows) {
+    listEl.appendChild(renderAttentionRow(entry, ctx.submitterByDoc, ctx.viewerEmail));
+  }
+  if (emptyEl) {
+    emptyEl.hidden = rows.length > 0;
+    if (rows.length === 0) {
+      emptyEl.textContent =
+        _todayFilter === "mine"
+          ? "Nothing of yours is overdue and silent."
+          : "Nothing overdue and silent. You're on top of it.";
+    }
+  }
+}
+
+/** One needs-attention row: summary, subject, owner, due, silent-days, and
+ *  (WP-N1 #6) capture attribution joined from the documentId → submitter map. */
+function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   const rec = (entry && entry.record) || {};
   const lc = (entry && entry.lifecycle) || {};
   const row = document.createElement("div");
@@ -1130,16 +1270,27 @@ function renderAttentionRow(entry) {
   if (rec.owner) dimParts.push(prettySlug(rec.owner));
   if (rec.due) dimParts.push("due " + formatDueDate(rec.due));
   const hasSilent = typeof lc.silentDays === "number";
-  if (dimParts.length || hasSilent) {
+  // WP-N1 #6 — attribution from the join: "captured by you" (submitter == me),
+  // "captured by <local-part>" (someone else), or omitted (no submitter on the
+  // doc — pre-flag or shared-key capture). Never "unknown".
+  const attribution = captureAttribution(rec.documentId, submitterByDoc, viewerEmail);
+  if (dimParts.length || hasSilent || attribution) {
     const meta = document.createElement("p");
     meta.className = "log-row-meta";
     meta.textContent = dimParts.join(" · ");
     if (hasSilent) {
-      if (dimParts.length) meta.appendChild(document.createTextNode(" · "));
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
       const overdue = document.createElement("span");
       overdue.className = "log-meta-overdue";
       overdue.textContent = lc.silentDays + "d silent";
       meta.appendChild(overdue);
+    }
+    if (attribution) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const attr = document.createElement("span");
+      attr.className = "log-meta-attr";
+      attr.textContent = attribution;
+      meta.appendChild(attr);
     }
     row.appendChild(meta);
   }
@@ -1228,6 +1379,16 @@ const openLogBtn = document.getElementById("btn-open-log");
 if (openLogBtn) {
   openLogBtn.addEventListener("click", () => {
     enterLogView();
+  });
+}
+
+// WP-N1 #8 — Mine / Everyone segmented control. Wired once; re-renders the
+// needs-attention list under the chosen filter (no re-fetch). The control is
+// only visible when the viewer has an identity (set in enterLogView).
+for (const btn of document.querySelectorAll(".log-filter-btn")) {
+  btn.addEventListener("click", () => {
+    setTodayFilter(btn.dataset.filter);
+    renderTodayAttention();
   });
 }
 
@@ -1378,12 +1539,18 @@ function renderReceiptsChain(items, edges, baseUrl) {
   for (const item of items) {
     const rec = item.record || item;
     chainEl.appendChild(
-      renderReceiptNode(rec, item.state, edgesByRecord.get(rec.recordId) || [], baseUrl),
+      renderReceiptNode(
+        rec,
+        item.state,
+        edgesByRecord.get(rec.recordId) || [],
+        baseUrl,
+        item.coSign,
+      ),
     );
   }
 }
 
-function renderReceiptNode(rec, recState, recEdges, baseUrl) {
+function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
   const node = document.createElement("div");
   node.className = "rec";
   if (recState) node.dataset.state = recState;
@@ -1432,6 +1599,18 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl) {
     chipEl.dataset.kind = e.kind || "";
     chipEl.textContent = `${phrasing.icon} ${phrasing.label}`;
     body.appendChild(chipEl);
+  }
+
+  // WP-N1 #7 — count-only co-sign ("N captures corroborate"): independent
+  // capture corroboration, green-family chip. confirmed = solid, proposed =
+  // dimmer. Server emits it only at captureCount ≥ 2; absent ⇒ no chip. NEVER
+  // the corroborating emails — count only.
+  if (coSign && typeof coSign.captureCount === "number" && coSign.captureCount >= 2) {
+    const cs = document.createElement("span");
+    cs.className = "rec-cosign";
+    cs.dataset.status = coSign.status === "confirmed" ? "confirmed" : "proposed";
+    cs.textContent = `✓ ${coSign.captureCount} captures corroborate`;
+    body.appendChild(cs);
   }
 
   // Source-doc link (insider verification path).
