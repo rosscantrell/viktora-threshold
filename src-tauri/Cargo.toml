@@ -1,6 +1,6 @@
 [package]
 name = "viktora-threshold"
-version = "0.7.0"
+version = "0.7.3"
 description = "Viktora Threshold — Mac + Windows desktop capture app for Apolla workspaces (WP-OCR-12 + WP-OCR-13)"
 authors = ["Ross Cantrell"]
 edition = "2021"
@@ -82,6 +82,16 @@ quick-xml = "0.37"
 # bundle-size impact is sub-100KB.
 base64 = "0.22"
 rand = "0.8"
+
+# WP-THRESHOLD-LOG-UX — dual-format clipboard for Receipts copy. `arboard` is
+# the same crate Tauri's clipboard-manager plugin wraps, but exposed directly so
+# we can call `set_html(html, Some(markdown))` — which writes BOTH a `text/html`
+# flavor (rich paste into Gmail/Outlook/Word/Notion) AND a `text/plain` Markdown
+# fallback (Slack/terminals) in a single atomic clipboard write. The plugin's
+# `write_html` sets HTML only (no plain-text alt), so it can't satisfy the
+# one-button dual-format requirement. Cross-platform (NSPasteboard on macOS,
+# clipboard-win on Windows); objc2 family already in the tree via objc2-app-kit.
+arboard = "3"
 
 # WP-ONENOTE-EXPORT-03 — global hotkey for the OneNote send-current-page
 # flow (default Ctrl+Shift+O, user-configurable via Configure pane). Plugin

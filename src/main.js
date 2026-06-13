@@ -108,6 +108,8 @@ const VIEWS = [
   "view-auto-import",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
+  "view-receipts",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -645,6 +647,59 @@ function formatDueDate(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+// ───────── WP-N1 (S1 sharing) — viewer identity helpers ─────────
+//
+// The viewer's authenticated email drives capture attribution + the Today
+// "Mine / Everyone" filter. Fetched once per expanded-window load (each
+// widget_expand is a fresh page) via get_whoami and cached. EVERY sharing
+// surface is invisible-by-absence: a null email (shared key / auth off / a
+// server too old for /api/whoami) means no attribution "you", no toggle — the
+// app looks identical to today.
+
+// undefined = not yet fetched · null = no identity · string = the viewer email.
+let _viewerEmail = undefined;
+
+async function getViewerEmail() {
+  if (_viewerEmail !== undefined) return _viewerEmail;
+  try {
+    const r = await tauri.core.invoke("get_whoami");
+    _viewerEmail = r && typeof r.email === "string" && r.email ? r.email : null;
+  } catch (err) {
+    console.warn("[main] get_whoami failed:", err);
+    _viewerEmail = null;
+  }
+  return _viewerEmail;
+}
+
+/** The local-part of an email ("dev.patel@x" → "dev.patel"); "" if absent. */
+function emailLocalPart(email) {
+  return email && typeof email === "string" ? email.split("@")[0] : "";
+}
+
+/** Normalize an email's local-part to a person-slug ("dev.patel" → "dev-patel")
+ *  for owner comparison in the Mine filter. */
+function emailToOwnerSlug(email) {
+  return emailLocalPart(email).toLowerCase().replace(/[._]+/g, "-");
+}
+
+/**
+ * Capture-attribution label for a document, from the documentId → submitter map:
+ *   - submitter == viewer            → "captured by you"
+ *   - submitter present, someone else → "captured by <local-part>"
+ *   - no submitter on the doc         → "" (omit — pre-flag / shared-key capture)
+ * Never renders an email or "unknown". `viewerEmail` may be null (no identity);
+ * then a present submitter always reads as the other person.
+ */
+function captureAttribution(documentId, submitterByDoc, viewerEmail) {
+  if (!documentId || !submitterByDoc) return "";
+  const submitter = submitterByDoc.get(documentId);
+  if (!submitter) return "";
+  if (viewerEmail && submitter.toLowerCase() === viewerEmail.toLowerCase()) {
+    return "captured by you";
+  }
+  return "captured by " + emailLocalPart(submitter);
+}
+
 /**
  * Render the post-capture panel — records-primary.
  *
@@ -657,7 +712,7 @@ function formatDueDate(iso) {
  * @param {object|null} recordsResp    get_pending_records envelope (or null):
  *                                     { records: [{record, lifecycle, state}], edges: [...] }
  */
-function enterPostCaptureView(tidbit, recordsResp) {
+async function enterPostCaptureView(tidbit, recordsResp) {
   state.inWizard = false;
   showView("view-tidbit");
 
@@ -668,7 +723,10 @@ function enterPostCaptureView(tidbit, recordsResp) {
 
   const hasTidbit = !!(tidbit && typeof tidbit === "object" && tidbit.title);
   renderTidbitCard(hasTidbit ? tidbit : null);
-  renderRecords(items, edges);
+  // WP-N1 #6 — this client made the capture, so attribution is "captured by
+  // you" when we have a viewer identity (whoami non-null); omitted otherwise.
+  const viewer = await getViewerEmail();
+  renderRecords(items, edges, viewer ? "captured by you" : null);
 
   const subEl = document.getElementById("postcapture-sub");
   const filedEl = document.getElementById("postcapture-filed");
@@ -785,7 +843,7 @@ function renderTidbitCard(tidbit) {
  * state} envelopes; `edges` are the cross-record relationships touching them,
  * keyed onto each record for the conflict/supersession callouts.
  */
-function renderRecords(items, edges) {
+function renderRecords(items, edges, attribution) {
   const listEl = document.getElementById("records-list");
   if (!listEl) return;
   listEl.innerHTML = "";
@@ -803,7 +861,13 @@ function renderRecords(items, edges) {
     const rec = item && item.record ? item.record : item;
     if (!rec) continue;
     listEl.appendChild(
-      renderRecordCard(rec, item.state, item.lifecycle, edgesByRecord.get(rec.recordId) || []),
+      renderRecordCard(
+        rec,
+        item.state,
+        item.lifecycle,
+        edgesByRecord.get(rec.recordId) || [],
+        attribution,
+      ),
     );
   }
 }
@@ -811,7 +875,7 @@ function renderRecords(items, edges) {
 /** Build one record card element. Verbatim is rendered as a quotation ONLY
  *  when verbatimVerified is true (an unverified quote is a hypothesis, never
  *  shown as a quotation — the hard constraint). */
-function renderRecordCard(rec, recState, lifecycle, recEdges) {
+function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   const card = document.createElement("div");
   card.className = "record-card";
   card.dataset.type = rec.type || "";
@@ -842,18 +906,32 @@ function renderRecordCard(rec, recState, lifecycle, recEdges) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
-  // Meta: owner · due · silent-days (when overdue+silent).
-  const metaParts = [];
-  if (rec.owner) metaParts.push(prettySlug(rec.owner));
-  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
-  if (lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number") {
-    metaParts.push(lifecycle.silentDays + "d silent");
-  }
-  if (metaParts.length) {
+  // Meta: owner · due dim; the overdue/silent count amber (when overdue+silent).
+  const dimMeta = [];
+  if (rec.owner) dimMeta.push(prettySlug(rec.owner));
+  if (rec.due) dimMeta.push("due " + formatDueDate(rec.due));
+  const cardOverdue =
+    lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number";
+  if (dimMeta.length || cardOverdue || attribution) {
     const meta = document.createElement("p");
     meta.className = "record-meta";
-    if (lifecycle && lifecycle.overdueSilent) meta.dataset.attention = "true";
-    meta.textContent = metaParts.join(" · ");
+    meta.textContent = dimMeta.join(" · ");
+    if (cardOverdue) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const overdue = document.createElement("span");
+      overdue.className = "record-meta-overdue";
+      overdue.textContent = lifecycle.silentDays + "d silent";
+      meta.appendChild(overdue);
+    }
+    // WP-N1 #6 — capture attribution (e.g. "captured by you"), muted, in the
+    // meta line. Omitted entirely when absent (no identity → never shown).
+    if (attribution) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const attr = document.createElement("span");
+      attr.className = "record-meta-attr";
+      attr.textContent = attribution;
+      meta.appendChild(attr);
+    }
     card.appendChild(meta);
   }
 
@@ -882,6 +960,19 @@ function renderRecordCard(rec, recState, lifecycle, recEdges) {
     label.textContent = phrasing.label;
     callout.appendChild(label);
     card.appendChild(callout);
+  }
+
+  // "Show receipts" — the subject's full evidence chain.
+  if (rec.primaryEntity) {
+    const actions = document.createElement("div");
+    actions.className = "record-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    actions.appendChild(btn);
+    card.appendChild(actions);
   }
 
   return card;
@@ -1041,14 +1132,37 @@ async function enterLogView() {
     statesStrip.hidden = !any;
   }
 
-  // Needs-attention list.
-  if (attentionList) {
-    attentionList.innerHTML = "";
-    for (const entry of needsAttention) {
-      attentionList.appendChild(renderAttentionRow(entry));
+  // WP-N1 #6/#8 — viewer identity (for attribution + the Mine filter) and the
+  // documentId → submitter map (for the Today attribution join). Both best-
+  // effort: a null identity hides the toggle + the "you" distinction; a failed
+  // /api/data join simply omits attribution. The documents array is already
+  // disclosure-sliced server-side, so the join never sees a hidden doc.
+  const viewerEmail = await getViewerEmail();
+  const submitterByDoc = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
+        submitterByDoc.set(d.id, d.submittedByEmail);
+      }
     }
-    if (attentionEmpty) attentionEmpty.hidden = needsAttention.length > 0;
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (attribution omitted):", err);
   }
+
+  _todayCtx = {
+    needsAttention,
+    submitterByDoc,
+    viewerEmail,
+    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
+  };
+
+  // The Mine / Everyone toggle exists only for an identified viewer.
+  const filterEl = document.getElementById("log-filter");
+  if (filterEl) filterEl.hidden = !viewerEmail;
+  setTodayFilter("everyone"); // default Everyone on each view load
+  renderTodayAttention();
 
   // Contradictions.
   if (contradictionsSection && contradictionsList) {
@@ -1077,8 +1191,54 @@ async function enterLogView() {
   }
 }
 
-/** One needs-attention row: summary, subject, owner, due, silent-days. */
-function renderAttentionRow(entry) {
+// WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
+// `_todayCtx` holds the last-fetched needs-attention list + the join maps so the
+// toggle re-renders without re-fetching.
+let _todayFilter = "everyone"; // "everyone" | "mine"
+let _todayCtx = null;
+
+/** Set the active filter + reflect it on the segmented control's buttons. */
+function setTodayFilter(filter) {
+  _todayFilter = filter === "mine" ? "mine" : "everyone";
+  for (const b of document.querySelectorAll(".log-filter-btn")) {
+    b.setAttribute("aria-pressed", b.dataset.filter === _todayFilter ? "true" : "false");
+  }
+}
+
+/** Render the needs-attention list under the current filter. "Mine" keeps only
+ *  rows whose owner slug matches the viewer's (email local-part → slug). */
+function renderTodayAttention() {
+  const ctx = _todayCtx;
+  const listEl = document.getElementById("log-attention-list");
+  const emptyEl = document.getElementById("log-attention-empty");
+  if (!ctx || !listEl) return;
+
+  let rows = ctx.needsAttention;
+  if (_todayFilter === "mine" && ctx.viewerSlug) {
+    rows = rows.filter((e) => {
+      const owner = ((e.record && e.record.owner) || "").toLowerCase();
+      return owner && owner === ctx.viewerSlug;
+    });
+  }
+
+  listEl.innerHTML = "";
+  for (const entry of rows) {
+    listEl.appendChild(renderAttentionRow(entry, ctx.submitterByDoc, ctx.viewerEmail));
+  }
+  if (emptyEl) {
+    emptyEl.hidden = rows.length > 0;
+    if (rows.length === 0) {
+      emptyEl.textContent =
+        _todayFilter === "mine"
+          ? "Nothing of yours is overdue and silent."
+          : "Nothing overdue and silent. You're on top of it.";
+    }
+  }
+}
+
+/** One needs-attention row: summary, subject, owner, due, silent-days, and
+ *  (WP-N1 #6) capture attribution joined from the documentId → submitter map. */
+function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   const rec = (entry && entry.record) || {};
   const lc = (entry && entry.lifecycle) || {};
   const row = document.createElement("div");
@@ -1105,68 +1265,92 @@ function renderAttentionRow(entry) {
   summary.textContent = rec.summary || "";
   row.appendChild(summary);
 
-  const metaParts = [];
-  if (rec.owner) metaParts.push(prettySlug(rec.owner));
-  if (rec.due) metaParts.push("due " + formatDueDate(rec.due));
-  if (typeof lc.silentDays === "number") metaParts.push(lc.silentDays + "d silent");
-  if (metaParts.length) {
+  // Metadata: owner + due are dim; only the overdue/silent count is amber.
+  const dimParts = [];
+  if (rec.owner) dimParts.push(prettySlug(rec.owner));
+  if (rec.due) dimParts.push("due " + formatDueDate(rec.due));
+  const hasSilent = typeof lc.silentDays === "number";
+  // WP-N1 #6 — attribution from the join: "captured by you" (submitter == me),
+  // "captured by <local-part>" (someone else), or omitted (no submitter on the
+  // doc — pre-flag or shared-key capture). Never "unknown".
+  const attribution = captureAttribution(rec.documentId, submitterByDoc, viewerEmail);
+  if (dimParts.length || hasSilent || attribution) {
     const meta = document.createElement("p");
     meta.className = "log-row-meta";
-    meta.dataset.attention = "true";
-    meta.textContent = metaParts.join(" · ");
+    meta.textContent = dimParts.join(" · ");
+    if (hasSilent) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const overdue = document.createElement("span");
+      overdue.className = "log-meta-overdue";
+      overdue.textContent = lc.silentDays + "d silent";
+      meta.appendChild(overdue);
+    }
+    if (attribution) {
+      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const attr = document.createElement("span");
+      attr.className = "log-meta-attr";
+      attr.textContent = attribution;
+      meta.appendChild(attr);
+    }
     row.appendChild(meta);
+  }
+
+  // "Show receipts" — open the subject's evidence dossier.
+  if (rec.primaryEntity) {
+    const footer = document.createElement("div");
+    footer.className = "log-row-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    footer.appendChild(btn);
+    row.appendChild(footer);
   }
   return row;
 }
 
-/** One contradiction row: the two record summaries with a conflict marker. */
+/** One contradiction — a compact inline warning chip (severity tag + the two
+ *  record summaries). The full explanation lives in Receipts, not here. */
 function renderContradictionRow(edge) {
   const row = document.createElement("div");
   row.className = "log-contradiction-row";
   row.dataset.severity = edge.severity || "";
 
-  const head = document.createElement("div");
-  head.className = "log-row-head";
-  const icon = document.createElement("span");
-  icon.className = "record-edge-icon";
-  icon.textContent = "⚠️";
-  head.appendChild(icon);
-  const sev = document.createElement("span");
-  sev.className = "log-contradiction-sev";
-  sev.dataset.severity = edge.severity || "";
-  sev.textContent = (edge.severity || "").toUpperCase();
-  head.appendChild(sev);
-  row.appendChild(head);
-
-  const pair = document.createElement("p");
-  pair.className = "log-contradiction-pair";
-  pair.textContent = `${edge.recordASummary || "—"}  ⟷  ${edge.recordBSummary || "—"}`;
-  row.appendChild(pair);
-
-  if (edge.explanation) {
-    const why = document.createElement("p");
-    why.className = "log-contradiction-why";
-    why.textContent = edge.explanation;
-    row.appendChild(why);
+  if (edge.severity) {
+    const sev = document.createElement("span");
+    sev.className = "log-contradiction-sev";
+    sev.textContent = edge.severity.toUpperCase();
+    row.appendChild(sev);
   }
+
+  const text = document.createElement("span");
+  text.className = "log-contradiction-text";
+  text.textContent = `${edge.recordASummary || "—"} ⟷ ${edge.recordBSummary || "—"}`;
+  row.appendChild(text);
   return row;
 }
 
-/** One owner-load chip: owner, open commitments, overdue+silent count. */
+/** One owner-load chip: a small ghost card — owner + open count (dim), with the
+ *  overdue count in amber when present. */
 function renderOwnerChip(o) {
   const chip = document.createElement("div");
   chip.className = "log-owner-chip";
-  if (o.overdueSilent > 0) chip.dataset.attention = "true";
   const name = document.createElement("span");
   name.className = "log-owner-name";
   name.textContent = prettySlug(o.owner);
   chip.appendChild(name);
+
   const count = document.createElement("span");
   count.className = "log-owner-count";
-  count.textContent =
-    o.overdueSilent > 0
-      ? `${o.commitments} open · ${o.overdueSilent} overdue`
-      : `${o.commitments} open`;
+  count.textContent = `${o.commitments} open`;
+  if (o.overdueSilent > 0) {
+    count.appendChild(document.createTextNode(" · "));
+    const overdue = document.createElement("span");
+    overdue.className = "log-owner-overdue";
+    overdue.textContent = `${o.overdueSilent} overdue`;
+    count.appendChild(overdue);
+  }
   chip.appendChild(count);
   return chip;
 }
@@ -1194,6 +1378,410 @@ if (logRefreshBtn) {
 const openLogBtn = document.getElementById("btn-open-log");
 if (openLogBtn) {
   openLogBtn.addEventListener("click", () => {
+    enterLogView();
+  });
+}
+
+// WP-N1 #8 — Mine / Everyone segmented control. Wired once; re-renders the
+// needs-attention list under the chosen filter (no re-fetch). The control is
+// only visible when the viewer has an identity (set in enterLogView).
+for (const btn of document.querySelectorAll(".log-filter-btn")) {
+  btn.addEventListener("click", () => {
+    setTodayFilter(btn.dataset.filter);
+    renderTodayAttention();
+  });
+}
+
+// ───────── Receipts — the evidence dossier (WP-THRESHOLD-LOG-UX) ─────────
+
+// The receipts payload currently rendered, stashed so the Copy button can
+// rebuild the Markdown + HTML deterministically from the same data.
+let currentReceipts = null;
+
+/**
+ * Open the Receipts view for a subject entity. Fetches
+ * /api/decision-log/receipts?entity=X via the fetch_receipts IPC and renders
+ * the deterministic chain. Also resolves the configured base URL so per-record
+ * source links reuse the tidbit deepLink scheme ({base}/document/{documentId}).
+ */
+async function enterReceiptsView(entity) {
+  state.inWizard = false;
+  showView("view-receipts");
+
+  const titleEl = document.getElementById("receipts-title");
+  const subEl = document.getElementById("receipts-sub");
+  const currentEl = document.getElementById("receipts-current");
+  const chainEl = document.getElementById("receipts-chain");
+  const statusEl = document.getElementById("receipts-status");
+
+  if (titleEl) titleEl.textContent = prettySlug(entity);
+  if (subEl) subEl.hidden = true;
+  if (currentEl) currentEl.hidden = true;
+  if (chainEl) chainEl.innerHTML = "";
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Compiling the receipts…";
+  }
+  currentReceipts = null;
+
+  // Base URL for source-doc deep links (best-effort; links are insider-only).
+  let baseUrl = "";
+  try {
+    const cfg = await tauri.core.invoke("load_config");
+    baseUrl = (cfg && cfg.base_url) || "";
+  } catch (_e) {
+    /* links simply omitted if config is unavailable */
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_receipts", { entity });
+  } catch (err) {
+    console.warn("[main] fetch_receipts failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then try again.";
+    }
+    return;
+  }
+
+  const items = Array.isArray(data && data.records) ? data.records : [];
+  const edges = Array.isArray(data && data.edges) ? data.edges : [];
+
+  if (statusEl) {
+    if (items.length === 0) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No records reference this subject yet.";
+    } else {
+      statusEl.hidden = true;
+    }
+  }
+
+  if (subEl) {
+    subEl.textContent =
+      items.length === 1 ? "1 record" : `${items.length} records, oldest first`;
+    subEl.hidden = items.length === 0;
+  }
+
+  currentReceipts = { entity, items, edges, baseUrl };
+  renderReceiptsCurrentState(items, edges);
+  renderReceiptsChain(items, edges, baseUrl);
+}
+
+/** Build the source-doc deep link for a record, reusing the tidbit scheme.
+ *  Returns "" when no base URL is configured. */
+function receiptsDeepLink(baseUrl, documentId) {
+  if (!baseUrl || !documentId) return "";
+  return `${baseUrl.replace(/\/+$/, "")}/document/${encodeURIComponent(documentId)}`;
+}
+
+/**
+ * Derive the current-state line deterministically from the record states: the
+ * most recent record still 'open' is the standing position; if none are open,
+ * the most recent record and its terminal state. No LLM, pure data.
+ */
+function deriveReceiptsCurrentState(items) {
+  if (!items.length) return null;
+  // items arrive chronological asc; scan from newest backwards for an open one.
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].state === "open") return { item: items[i], standing: true };
+  }
+  return { item: items[items.length - 1], standing: false };
+}
+
+function renderReceiptsCurrentState(items, _edges) {
+  const el = document.getElementById("receipts-current");
+  if (!el) return;
+  el.innerHTML = "";
+  const derived = deriveReceiptsCurrentState(items);
+  if (!derived) {
+    el.hidden = true;
+    return;
+  }
+  const rec = derived.item.record || {};
+  // "Current state:" label (dim) + the standing summary, one line, lighter than
+  // the records below.
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = (derived.standing ? "Current state: " : "Last record: ");
+  el.appendChild(label);
+  el.appendChild(document.createTextNode(rec.summary || ""));
+  el.hidden = false;
+}
+
+/** Render the chronological chain — a single absolute rail + one .rec per
+ *  record (date in the meta line, no left date column). */
+function renderReceiptsChain(items, edges, baseUrl) {
+  const chainEl = document.getElementById("receipts-chain");
+  if (!chainEl) return;
+  chainEl.innerHTML = "";
+
+  const edgesByRecord = new Map();
+  for (const e of Array.isArray(edges) ? edges : []) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+
+  // One continuous rail behind the icons (only meaningful with ≥2 records).
+  if (items.length > 1) {
+    const rail = document.createElement("div");
+    rail.className = "chain-rail";
+    chainEl.appendChild(rail);
+  }
+
+  for (const item of items) {
+    const rec = item.record || item;
+    chainEl.appendChild(
+      renderReceiptNode(
+        rec,
+        item.state,
+        edgesByRecord.get(rec.recordId) || [],
+        baseUrl,
+        item.coSign,
+      ),
+    );
+  }
+}
+
+function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
+  const node = document.createElement("div");
+  node.className = "rec";
+  if (recState) node.dataset.state = recState;
+
+  // Icon — the type node on the rail (decision blue / commitment green).
+  const icon = document.createElement("div");
+  icon.className = "rec-icon";
+  icon.dataset.type = rec.type || "";
+  icon.textContent = rec.type === "decision" ? "D" : "C";
+  node.appendChild(icon);
+
+  const body = document.createElement("div");
+  body.className = "rec-body";
+
+  // Meta — date · type · owner (the date lives HERE, not a left column).
+  const metaBits = [];
+  if (rec.date) metaBits.push(formatDueDate(rec.date));
+  if (rec.type) metaBits.push(rec.type);
+  if (rec.owner) metaBits.push(prettySlug(rec.owner));
+  const meta = document.createElement("p");
+  meta.className = "rec-meta";
+  meta.textContent = metaBits.join(" · ");
+  body.appendChild(meta);
+
+  // Title (the summary).
+  const title = document.createElement("p");
+  title.className = "rec-title";
+  title.textContent = rec.summary || "";
+  body.appendChild(title);
+
+  // Verbatim quote — ONLY when verified (the trust property). Border-left only,
+  // no box.
+  if (rec.verbatimVerified === true && rec.verbatim) {
+    const quote = document.createElement("blockquote");
+    quote.className = "rec-quote";
+    quote.textContent = rec.verbatim;
+    body.appendChild(quote);
+  }
+
+  // Edge chips — supersession/conflict (red family), resolution (green).
+  for (const e of recEdges) {
+    const phrasing = edgePhrasing(e, rec.recordId);
+    if (!phrasing) continue;
+    const chipEl = document.createElement("span");
+    chipEl.className = "rec-edge";
+    chipEl.dataset.kind = e.kind || "";
+    chipEl.textContent = `${phrasing.icon} ${phrasing.label}`;
+    body.appendChild(chipEl);
+  }
+
+  // WP-N1 #7 — count-only co-sign ("N captures corroborate"): independent
+  // capture corroboration, green-family chip. confirmed = solid, proposed =
+  // dimmer. Server emits it only at captureCount ≥ 2; absent ⇒ no chip. NEVER
+  // the corroborating emails — count only.
+  if (coSign && typeof coSign.captureCount === "number" && coSign.captureCount >= 2) {
+    const cs = document.createElement("span");
+    cs.className = "rec-cosign";
+    cs.dataset.status = coSign.status === "confirmed" ? "confirmed" : "proposed";
+    cs.textContent = `✓ ${coSign.captureCount} captures corroborate`;
+    body.appendChild(cs);
+  }
+
+  // Source-doc link (insider verification path).
+  const link = receiptsDeepLink(baseUrl, rec.documentId);
+  if (link) {
+    const a = document.createElement("a");
+    a.className = "rec-source";
+    a.href = link;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "source ↗";
+    body.appendChild(a);
+  }
+
+  node.appendChild(body);
+  return node;
+}
+
+// ── Deterministic Markdown + HTML builders (no LLM; byte-identical per input) ──
+// HTML escaping reuses the existing escapeHtml() helper (escapes & < >); the
+// only attribute interpolation is href, whose value is URL-encoded upstream.
+
+/** Direction-aware plain-text edge phrasing for export (no emoji icon). */
+function edgeExportLabel(edge, recId) {
+  const p = edgePhrasing(edge, recId);
+  return p ? p.label : "";
+}
+
+function buildReceiptsMarkdown(entity, items, edges, baseUrl) {
+  const edgesByRecord = new Map();
+  for (const e of edges) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+  const lines = [];
+  lines.push(`# Receipts — ${prettySlug(entity)}`);
+  lines.push("> compiled by Threshold from meeting captures · every quote verbatim from source");
+  lines.push("");
+
+  for (const item of items) {
+    const rec = item.record || item;
+    const typeLabel = rec.type === "decision" ? "Decision" : "Commitment";
+    const dateLabel = rec.date ? formatDueDate(rec.date) : "";
+    const header = [dateLabel, typeLabel, rec.owner ? prettySlug(rec.owner) : ""]
+      .filter(Boolean)
+      .join(" · ");
+    lines.push(`## ${header}`);
+    if (rec.summary) lines.push(rec.summary);
+    if (rec.verbatimVerified === true && rec.verbatim) {
+      lines.push(`> "${rec.verbatim}"`);
+    }
+    for (const e of edgesByRecord.get(rec.recordId) || []) {
+      const label = edgeExportLabel(e, rec.recordId);
+      if (label) lines.push(`- ${label}`);
+    }
+    const state = item.state || "open";
+    if (state !== "open") lines.push(`_(${state})_`);
+    const link = receiptsDeepLink(baseUrl, rec.documentId);
+    if (link) lines.push(`[source](${link})`);
+    lines.push("");
+  }
+
+  const derived = deriveReceiptsCurrentState(items);
+  if (derived) {
+    const rec = derived.item.record || {};
+    lines.push("---");
+    const tag = derived.standing ? "Current state" : "Last record";
+    lines.push(`**${tag}:** ${rec.summary || ""}`);
+  }
+  return lines.join("\n");
+}
+
+function buildReceiptsHtml(entity, items, edges, baseUrl) {
+  const edgesByRecord = new Map();
+  for (const e of edges) {
+    for (const rid of [e.recordA, e.recordB]) {
+      if (!rid) continue;
+      if (!edgesByRecord.has(rid)) edgesByRecord.set(rid, []);
+      edgesByRecord.get(rid).push(e);
+    }
+  }
+  const out = [];
+  out.push(
+    `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1c1e26;max-width:640px">`,
+  );
+  out.push(`<h1 style="font-size:20px;margin:0 0 4px">Receipts — ${escapeHtml(prettySlug(entity))}</h1>`);
+  out.push(
+    `<p style="font-size:12px;color:#6b7280;margin:0 0 16px">compiled by Threshold from meeting captures · every quote verbatim from source</p>`,
+  );
+
+  for (const item of items) {
+    const rec = item.record || item;
+    const typeLabel = rec.type === "decision" ? "Decision" : "Commitment";
+    const dateLabel = rec.date ? formatDueDate(rec.date) : "";
+    const header = [dateLabel, typeLabel, rec.owner ? prettySlug(rec.owner) : ""]
+      .filter(Boolean)
+      .join(" · ");
+    out.push(`<div style="margin:0 0 16px;padding:0 0 0 12px;border-left:3px solid #d0d3da">`);
+    out.push(`<div style="font-size:12px;font-weight:600;color:#6b7280">${escapeHtml(header)}</div>`);
+    if (rec.summary)
+      out.push(`<div style="font-size:15px;margin:2px 0 6px">${escapeHtml(rec.summary)}</div>`);
+    if (rec.verbatimVerified === true && rec.verbatim) {
+      out.push(
+        `<blockquote style="margin:6px 0;padding:6px 12px;border-left:2px solid #c0c4cc;color:#444;font-style:italic">${escapeHtml(
+          rec.verbatim,
+        )}</blockquote>`,
+      );
+    }
+    for (const e of edgesByRecord.get(rec.recordId) || []) {
+      const label = edgeExportLabel(e, rec.recordId);
+      if (label) out.push(`<div style="font-size:13px;color:#9a3412">• ${escapeHtml(label)}</div>`);
+    }
+    const state = item.state || "open";
+    if (state !== "open")
+      out.push(`<div style="font-size:12px;color:#6b7280">(${escapeHtml(state)})</div>`);
+    const link = receiptsDeepLink(baseUrl, rec.documentId);
+    if (link)
+      out.push(
+        `<div style="font-size:12px;margin-top:4px"><a href="${escapeHtml(link)}" style="color:#2f7ae5">source ↗</a></div>`,
+      );
+    out.push(`</div>`);
+  }
+
+  const derived = deriveReceiptsCurrentState(items);
+  if (derived) {
+    const rec = derived.item.record || {};
+    const tag = derived.standing ? "Current state" : "Last record";
+    out.push(
+      `<p style="font-size:14px;margin:12px 0 0;padding-top:12px;border-top:1px solid #e5e7eb"><strong>${tag}:</strong> ${escapeHtml(
+        rec.summary || "",
+      )}</p>`,
+    );
+  }
+  out.push(`</div>`);
+  return out.join("");
+}
+
+// Receipts view buttons: Copy (dual-format) + back-to-Today.
+const receiptsCopyBtn = document.getElementById("btn-receipts-copy");
+if (receiptsCopyBtn) {
+  receiptsCopyBtn.addEventListener("click", async () => {
+    if (!currentReceipts || !currentReceipts.items.length) return;
+    const { entity, items, edges, baseUrl } = currentReceipts;
+    const markdown = buildReceiptsMarkdown(entity, items, edges, baseUrl);
+    const html = buildReceiptsHtml(entity, items, edges, baseUrl);
+    try {
+      await tauri.core.invoke("copy_receipts", { html, markdown });
+      const original = receiptsCopyBtn.textContent;
+      receiptsCopyBtn.textContent = "Copied ✓";
+      receiptsCopyBtn.disabled = true;
+      setTimeout(() => {
+        receiptsCopyBtn.textContent = original;
+        receiptsCopyBtn.disabled = false;
+      }, 1600);
+    } catch (err) {
+      console.warn("[main] copy_receipts failed:", err);
+      const original = receiptsCopyBtn.textContent;
+      receiptsCopyBtn.textContent = "Copy failed";
+      setTimeout(() => {
+        receiptsCopyBtn.textContent = original;
+      }, 1600);
+    }
+  });
+}
+
+const receiptsBackBtn = document.getElementById("btn-receipts-back");
+if (receiptsBackBtn) {
+  receiptsBackBtn.addEventListener("click", () => {
     enterLogView();
   });
 }

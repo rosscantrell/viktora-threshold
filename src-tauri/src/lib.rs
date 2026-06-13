@@ -1635,6 +1635,134 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
+/// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
+/// JSON (records chronological + edges + derived states) for the client to
+/// render deterministically. Surfaces errors so the view can show an
+/// unreachable state. `entity` is URL-encoded so slugs with reserved chars are
+/// transmitted intact.
+#[tauri::command]
+async fn fetch_receipts(
+    state: tauri::State<'_, AppState>,
+    entity: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(entity.as_bytes()).collect();
+    let url = format!(
+        "{}/api/decision-log/receipts?entity={}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_receipts: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-LOG-UX (Receipts) — dual-format clipboard write for the one
+/// "Copy" button. Writes the HTML rendering AND a Markdown plain-text fallback
+/// in a single atomic clipboard operation via `arboard::set_html(html,
+/// Some(markdown))`: rich-text targets (Gmail/Outlook/Word/Notion) take the
+/// HTML flavor, plain-text targets (Slack/terminals) take the Markdown. One
+/// button, no format picker. NSPasteboard (macOS) / clipboard-win (Windows) are
+/// thread-safe, so this runs fine off the main thread.
+#[tauri::command]
+fn copy_receipts(html: String, markdown: String) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clipboard
+        .set_html(html, Some(markdown))
+        .map_err(|e| format!("clipboard write failed: {e}"))?;
+    Ok(())
+}
+
+/// WP-N1 (S1 sharing) — the viewer's authenticated email, for capture
+/// attribution + the Today "Mine / Everyone" filter. Proxies GET /api/whoami and
+/// returns `{ email: string | null }`. Best-effort and intentionally never
+/// errors to the UI: any failure (not configured, unreachable, parse, or a
+/// server too old to have the endpoint → 404) collapses to `{ email: null }`,
+/// i.e. "no identity" — and the identity-gated surfaces simply hide themselves.
+/// This is what lets the client ship before the /api/whoami deploy lands.
+#[tauri::command]
+async fn get_whoami(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let null_identity = || serde_json::json!({ "email": serde_json::Value::Null });
+    let cfg = match current_config(&state) {
+        Ok(c) => c,
+        Err(_) => return Ok(null_identity()),
+    };
+    let url = format!("{}/api/whoami", cfg.base_url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(null_identity()),
+    };
+    match client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(v) => Ok(v),
+                Err(_) => Ok(null_identity()),
+            }
+        }
+        _ => Ok(null_identity()),
+    }
+}
+
+/// WP-N1 (S1 sharing) — full `/api/data` payload, used by the Today view to
+/// build a documentId → submittedByEmail map for capture attribution. The
+/// documents array is already disclosure-sliced server-side under the flag, so
+/// the join never sees a doc the viewer can't. Surfaces errors so the caller can
+/// degrade (attribution simply omitted) rather than blocking the view.
+#[tauri::command]
+async fn fetch_documents(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/data", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_documents: parse response failed: {e}"))
+}
+
 /// Helper: pull the current config out of AppState; error if not configured.
 fn current_config(state: &tauri::State<AppState>) -> Result<AppConfig, String> {
     state
@@ -5132,6 +5260,12 @@ pub fn run() {
             clear_pending_records,
             get_decision_log_summary,
             fetch_decision_log,
+            // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
+            fetch_receipts,
+            copy_receipts,
+            // WP-N1 (S1 sharing) — viewer identity + document attribution
+            get_whoami,
+            fetch_documents,
             // WP-PLAUD-04a — Plaud Sync Queue
             plaud_discover,
             plaud_get_inbox,
