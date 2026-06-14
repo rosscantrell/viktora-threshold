@@ -1386,6 +1386,14 @@ if (logRefreshBtn) {
   });
 }
 
+// "Links" — jump from Today to the cross-record edge graph (Connections view).
+const logEdgesBtn = document.getElementById("btn-log-edges");
+if (logEdgesBtn) {
+  logEdgesBtn.addEventListener("click", () => {
+    enterEdgesView();
+  });
+}
+
 const openLogBtn = document.getElementById("btn-open-log");
 if (openLogBtn) {
   openLogBtn.addEventListener("click", () => {
@@ -1505,7 +1513,7 @@ async function enterEdgesView() {
   _edgesRecordCount = byId.size;
   if (subEl) {
     subEl.textContent =
-      `${edges.length} ${edges.length === 1 ? "connection" : "connections"} across ${byId.size} records`;
+      `${edges.length} ${edges.length === 1 ? "link" : "links"} across ${byId.size} records`;
   }
 
   // Kinds strip — one count pill per present kind, in display order.

@@ -1733,6 +1733,9 @@ code {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  /* Reserve the top-right corner for the fixed "Collapse" chrome button so the
+     header actions never sit underneath it. */
+  padding-right: 64px;
 }
 
 .log-title {
@@ -1753,6 +1756,7 @@ code {
 /* Refresh + back — secondary glass buttons, scoped (global button system lands
  * with the WP-THRESHOLD-GLASS migration). */
 .view-log #btn-log-refresh,
+.view-log #btn-log-edges,
 .view-log #btn-log-back {
   font-size: 11.5px;
   font-weight: 500;
@@ -1761,9 +1765,11 @@ code {
   border: 1px solid var(--glass-border-strong);
   color: var(--glass-text);
   border-radius: var(--glass-radius-sm);
+  white-space: nowrap;
 }
 
 .view-log #btn-log-refresh:hover,
+.view-log #btn-log-edges:hover,
 .view-log #btn-log-back:hover {
   background: var(--glass-surface-hover);
 }
@@ -1988,7 +1994,9 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 18px;
+  /* Extra right padding reserves the top-right corner for the fixed "Collapse"
+     chrome button, so the Copy/Definition actions don't tuck under it. */
+  padding: 14px 80px 14px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -2215,6 +2223,13 @@ code {
 }
 
 .receipts-entry-btn {
+  /* Override the legacy global `.btn-link { position:absolute; top:4px; right:0 }`
+     rule. These buttons live in flex footers (.log-row-actions / .record-actions)
+     whose rows aren't positioned, so the inherited absolute made every "Show
+     receipts" anchor to the WINDOW's top-right corner and pile onto the Collapse
+     button. Static lets them flow in their footer as intended. */
+  position: static;
+  align-self: flex-start;
   padding: 0;
   font-size: 11.5px;
   color: var(--glass-link);
@@ -2304,6 +2319,8 @@ code {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  /* Clear the fixed "Collapse" chrome button (top-right). */
+  padding-right: 64px;
 }
 
 .edges-title {
