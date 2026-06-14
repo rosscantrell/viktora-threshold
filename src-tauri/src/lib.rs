@@ -1635,6 +1635,137 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-LOG-UX (Connections / back-half) — the FULL decision-log
+/// payload. Identical to `fetch_decision_log` but appends `?full=1`, which the
+/// engine answers with the complete `records` (record + lifecycle + state) AND
+/// all active `edges` (full RecordRelationship objects), in addition to the
+/// summary/relationships fields the Today view uses. Powers the grounded
+/// cross-record edges view, where each edge is rendered with BOTH of its
+/// records inline — a pure client-side display join (edge.recordA/recordB →
+/// records by recordId). The Today view keeps using the lighter
+/// `fetch_decision_log`; this command is purely additive and leaves that path
+/// byte-unchanged.
+#[tauri::command]
+async fn fetch_decision_log_full(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/decision-log?full=1", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_decision_log_full: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-LOG-UX (Connections / HITL) — confirm or dismiss a proposed
+/// cross-record edge. Proxies PATCH /api/decision-log/edges/:edgeId with a
+/// `{ "status": "confirmed" | "dismissed" | "proposed" }` body and the existing
+/// bearer-auth pattern. This closes the calibration loop: a dismissed edge drops
+/// from every read projection, and a confirmed edge re-tightens the definition
+/// cards. Returns the updated edge JSON so the view can reflect the new state
+/// without a full re-fetch. `edge_id` is URL-encoded for parity with
+/// fetch_receipts (edgeIds are hex today, but reserved chars stay intact).
+#[tauri::command]
+async fn patch_edge_status(
+    state: tauri::State<'_, AppState>,
+    edge_id: String,
+    status: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(edge_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/decision-log/edges/{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({ "status": status }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("patch_edge_status: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-LOG-UX (Definition cards / back-half) — the per-entity
+/// definition card. Proxies GET /api/entity/:slug/card and returns the card JSON
+/// (`{ entity, prose, license, ok, violations, cached, layers }`). The endpoint
+/// is flag-gated server-side (ENABLE_ENTITY_CARDS) and needs an API key, so the
+/// two "not ready" cases come back as SOFT results rather than hard errors — the
+/// view can then show a calm empty state instead of an alarming connection error:
+///   - 404 (flag off OR unknown entity) → `{ available: false, reason: "not_found" }`
+///   - 503 (no ANTHROPIC_API_KEY)        → `{ available: false, reason: "unavailable" }`
+/// Any other non-2xx is surfaced as an error. Timeout is generous (30s) because a
+/// cache miss generates the prose with one model call.
+#[tauri::command]
+async fn fetch_entity_card(
+    state: tauri::State<'_, AppState>,
+    entity: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(entity.as_bytes()).collect();
+    let url = format!(
+        "{}/api/entity/{}/card",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 {
+        return Ok(serde_json::json!({ "available": false, "reason": "not_found" }));
+    }
+    if http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false, "reason": "unavailable" }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_entity_card: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
 /// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
 /// JSON (records chronological + edges + derived states) for the client to
@@ -5260,6 +5391,12 @@ pub fn run() {
             clear_pending_records,
             get_decision_log_summary,
             fetch_decision_log,
+            // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
+            fetch_decision_log_full,
+            // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
+            patch_edge_status,
+            // WP-THRESHOLD-LOG-UX — per-entity definition card
+            fetch_entity_card,
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
             fetch_receipts,
             copy_receipts,
