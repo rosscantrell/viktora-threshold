@@ -1733,6 +1733,9 @@ code {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  /* Reserve the top-right corner for the fixed "Collapse" chrome button so the
+     header actions never sit underneath it. */
+  padding-right: 64px;
 }
 
 .log-title {
@@ -1753,6 +1756,7 @@ code {
 /* Refresh + back — secondary glass buttons, scoped (global button system lands
  * with the WP-THRESHOLD-GLASS migration). */
 .view-log #btn-log-refresh,
+.view-log #btn-log-edges,
 .view-log #btn-log-back {
   font-size: 11.5px;
   font-weight: 500;
@@ -1761,9 +1765,11 @@ code {
   border: 1px solid var(--glass-border-strong);
   color: var(--glass-text);
   border-radius: var(--glass-radius-sm);
+  white-space: nowrap;
 }
 
 .view-log #btn-log-refresh:hover,
+.view-log #btn-log-edges:hover,
 .view-log #btn-log-back:hover {
   background: var(--glass-surface-hover);
 }
@@ -1988,7 +1994,9 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 18px;
+  /* Extra right padding reserves the top-right corner for the fixed "Collapse"
+     chrome button, so the Copy/Definition actions don't tuck under it. */
+  padding: 14px 80px 14px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -2215,6 +2223,13 @@ code {
 }
 
 .receipts-entry-btn {
+  /* Override the legacy global `.btn-link { position:absolute; top:4px; right:0 }`
+     rule. These buttons live in flex footers (.log-row-actions / .record-actions)
+     whose rows aren't positioned, so the inherited absolute made every "Show
+     receipts" anchor to the WINDOW's top-right corner and pile onto the Collapse
+     button. Static lets them flow in their footer as intended. */
+  position: static;
+  align-self: flex-start;
   padding: 0;
   font-size: 11.5px;
   color: var(--glass-link);
@@ -2285,4 +2300,438 @@ code {
 .log-filter-btn[aria-pressed="true"] {
   background: rgba(255, 255, 255, 0.08);
   color: var(--glass-text);
+}
+
+/* ═══════ Connections — grounded cross-record edges (WP-THRESHOLD-LOG-UX) ═══════
+ * Each edge shown with BOTH its records inline (a pure display join). Layout +
+ * scoping mirror .view-log; colors come from the frozen glass.css tokens. */
+.view-edges {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 26px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.edges-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  /* Clear the fixed "Collapse" chrome button (top-right). */
+  padding-right: 64px;
+}
+
+.edges-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--glass-text);
+  margin: 0;
+}
+
+.edges-sub {
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  margin: 3px 0 0;
+}
+
+.view-edges #btn-edges-refresh,
+.view-edges #btn-edges-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+}
+
+.view-edges #btn-edges-refresh:hover,
+.view-edges #btn-edges-back:hover {
+  background: var(--glass-surface-hover);
+}
+
+/* Per-kind count pills — ghost tint, colored text only (matches .log-state-pill). */
+.edges-kinds-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.edges-kind-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+}
+
+.edges-kind-pill[data-kind="contradicts"] {
+  background: rgba(240, 149, 149, 0.13);
+  border-color: rgba(240, 149, 149, 0.45);
+  color: var(--glass-danger);
+}
+
+.edges-kind-pill[data-kind="depends_on"] {
+  background: rgba(127, 179, 232, 0.13);
+  border-color: rgba(127, 179, 232, 0.45);
+  color: var(--glass-link);
+}
+
+.edges-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.edges-group-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--glass-text-faint);
+  margin: 6px 0 0;
+}
+
+/* Connection card — a glass card; a 2px left border keyed to the kind. */
+.edge-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: var(--glass-radius-md);
+}
+
+.edge-card[data-kind="contradicts"] {
+  border-left-color: var(--glass-danger);
+}
+
+.edge-card[data-kind="depends_on"] {
+  border-left-color: var(--glass-link);
+}
+
+.edge-card[data-kind="resolves"] {
+  border-left-color: var(--glass-success);
+}
+
+.edge-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.edge-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+}
+
+.edge-kind-chip[data-kind="contradicts"] {
+  background: rgba(240, 149, 149, 0.15);
+  border-color: rgba(240, 149, 149, 0.5);
+  color: var(--glass-danger);
+}
+
+.edge-kind-chip[data-kind="depends_on"] {
+  background: rgba(127, 179, 232, 0.15);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: var(--glass-link);
+}
+
+.edge-sev-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-faint);
+}
+
+.edge-sev-pill[data-severity="high"] {
+  background: rgba(240, 149, 149, 0.15);
+  border-color: rgba(240, 149, 149, 0.5);
+  color: var(--glass-danger);
+}
+
+/* Endpoint — one record, rendered compactly inside the connection card. */
+.edge-endpoint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+}
+
+.edge-endpoint-missing {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+}
+
+.edge-endpoint-summary {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--glass-text);
+  margin: 0;
+}
+
+.edge-endpoint-meta {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  margin: 0;
+}
+
+.edge-endpoint-source {
+  color: var(--glass-link);
+  text-decoration: none;
+}
+
+.edge-endpoint-source:hover {
+  text-decoration: underline;
+}
+
+/* Connector between the two endpoints — names the relationship direction. */
+.edge-connector {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+  padding-left: 2px;
+}
+
+.edge-connector[data-kind="contradicts"] {
+  color: var(--glass-danger);
+}
+
+/* Grounded explanation — the editor's citation-checked rationale. */
+.edge-explanation {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--glass-text-dim);
+  margin: 2px 0 0;
+}
+
+.edges-status {
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  text-align: center;
+  padding: 14px 0;
+  margin: 0;
+}
+
+.edges-status[data-kind="error"] {
+  color: var(--glass-danger);
+}
+
+.edges-footer {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 4px;
+}
+
+/* HITL — confirm/dismiss controls on each connection card. */
+.edge-confirmed-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(93, 202, 165, 0.15);
+  border: 1px solid rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+
+.edge-confirmed-pill[hidden] {
+  display: none;
+}
+
+.edge-card-confirmed {
+  border-left-color: var(--glass-success);
+}
+
+/* Fade + collapse on dismiss. */
+.edge-card-leaving {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.16s var(--ease), transform 0.16s var(--ease);
+}
+
+.edge-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.edge-action-btn {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+
+.edge-action-btn:hover {
+  background: var(--glass-surface-hover);
+}
+
+.edge-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.edge-action-confirm {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+
+.edge-action-dismiss {
+  color: var(--glass-text-dim);
+}
+
+.edge-action-note {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+.edge-action-error {
+  color: var(--glass-danger);
+}
+
+/* Receipts header — group the Definition + Copy buttons on the right. */
+.receipts-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ═══════ Definition card — per-entity "what is this, here, now" (WP-THRESHOLD-LOG-UX) ═══════ */
+.view-entity-card {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 26px 26px 22px;
+}
+
+.entity-card-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.entity-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.entity-card-eyebrow {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--glass-text-faint);
+  margin: 0;
+}
+
+.entity-card-title {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--glass-text);
+  margin: 0;
+}
+
+/* The card body — a readable column of register-bounded prose. */
+.entity-card-prose {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-lg);
+}
+
+.entity-card-paragraph {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--glass-text);
+  margin: 0;
+}
+
+.entity-card-status {
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  text-align: center;
+  padding: 14px 0;
+  margin: 0;
+}
+
+.entity-card-status[data-kind="error"] {
+  color: var(--glass-danger);
+}
+
+.entity-card-footer {
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  text-align: center;
+  margin: 0;
+}
+
+.entity-card-footer[hidden] {
+  display: none;
+}
+
+.entity-card-actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 2px;
+}
+
+/* Back — glass secondary, matching the Today/Connections back buttons. */
+.view-entity-card #btn-entity-card-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+}
+
+.view-entity-card #btn-entity-card-back:hover {
+  background: var(--glass-surface-hover);
 }

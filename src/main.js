@@ -110,6 +110,10 @@ const VIEWS = [
   "view-log",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
   "view-receipts",
+  // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
+  "view-edges",
+  // WP-THRESHOLD-LOG-UX — per-entity Definition card
+  "view-entity-card",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -219,6 +223,13 @@ async function bootstrap() {
     // ambient badge) navigates here with #log. Render the live decision log.
     if (window.location.hash === "#log") {
       enterLogView();
+      return;
+    }
+
+    // WP-THRESHOLD-LOG-UX — widget_expand("edges") / the "Connections" entry
+    // navigates here with #edges. Render the full cross-record edge graph.
+    if (window.location.hash === "#edges") {
+      enterEdgesView();
       return;
     }
 
@@ -1375,6 +1386,14 @@ if (logRefreshBtn) {
   });
 }
 
+// "Links" — jump from Today to the cross-record edge graph (Connections view).
+const logEdgesBtn = document.getElementById("btn-log-edges");
+if (logEdgesBtn) {
+  logEdgesBtn.addEventListener("click", () => {
+    enterEdgesView();
+  });
+}
+
 const openLogBtn = document.getElementById("btn-open-log");
 if (openLogBtn) {
   openLogBtn.addEventListener("click", () => {
@@ -1389,6 +1408,521 @@ for (const btn of document.querySelectorAll(".log-filter-btn")) {
   btn.addEventListener("click", () => {
     setTodayFilter(btn.dataset.filter);
     renderTodayAttention();
+  });
+}
+
+// ───────── Connections — grounded cross-record edges (WP-THRESHOLD-LOG-UX) ─────────
+
+// Display order for the kind groups: conflicts first (highest signal), then the
+// dependency graph (the most-requested surface), then the lifecycle edges.
+const EDGE_KIND_ORDER = ["contradicts", "depends_on", "supersedes", "resolves", "duplicates"];
+
+// Per-kind presentation. `verb` reads top-to-bottom as "A {verb} B"; for the
+// directional kinds (depends_on/supersedes/resolves) the engine guarantees A is
+// the acting/later/dependent record, so the order renders correctly as-is.
+const EDGE_KIND_META = {
+  contradicts: { label: "Conflict", plural: "Conflicts", verb: "conflicts with", icon: "⚠" },
+  depends_on: { label: "Dependency", plural: "Dependencies", verb: "depends on", icon: "↳" },
+  supersedes: { label: "Supersession", plural: "Supersessions", verb: "supersedes", icon: "⤳" },
+  resolves: { label: "Resolution", plural: "Resolutions", verb: "resolves", icon: "✓" },
+  duplicates: { label: "Duplicate", plural: "Duplicates", verb: "duplicate of", icon: "⧉" },
+};
+
+// Distinct record count for the current Connections render — used to keep the
+// subtitle accurate after a dismiss removes a card (records don't change, the
+// connection count does).
+let _edgesRecordCount = 0;
+
+/**
+ * Open the Connections view: the full cross-record edge graph, each edge shown
+ * with BOTH of its records inline. Pure display join — fetch_decision_log_full
+ * proxies GET /api/decision-log?full=1, which returns every active edge plus the
+ * full records; we index records by recordId and render each edge's two
+ * endpoints. No recompute, no LLM. (Answers the most-asked question on the log:
+ * "what are these dependencies referring to?")
+ */
+async function enterEdgesView() {
+  state.inWizard = false;
+  showView("view-edges");
+
+  const listEl = document.getElementById("edges-list");
+  const statusEl = document.getElementById("edges-status");
+  const kindsStrip = document.getElementById("edges-kinds-strip");
+  const subEl = document.getElementById("edges-sub");
+
+  if (listEl) listEl.innerHTML = "";
+  if (kindsStrip) kindsStrip.hidden = true;
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading the connections…";
+  }
+
+  // Base URL for source-doc deep links (best-effort; insider-only, omitted if absent).
+  let baseUrl = "";
+  try {
+    const cfg = await tauri.core.invoke("load_config");
+    baseUrl = (cfg && cfg.base_url) || "";
+  } catch (_e) {
+    /* source links simply omitted if config is unavailable */
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_decision_log_full");
+  } catch (err) {
+    console.warn("[main] fetch_decision_log_full failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
+    }
+    return;
+  }
+
+  // Index records by recordId — the join key. Each entry is { record, lifecycle, state }.
+  const items = Array.isArray(data && data.records) ? data.records : [];
+  const byId = new Map();
+  for (const item of items) {
+    const rec = item && item.record ? item.record : item;
+    if (rec && rec.recordId) byId.set(rec.recordId, rec);
+  }
+  const edges = Array.isArray(data && data.edges) ? data.edges : [];
+
+  if (edges.length === 0) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent =
+        "No cross-record connections yet. They appear once the editor pass links related decisions and commitments.";
+    }
+    if (subEl) subEl.textContent = "How your decisions & commitments relate";
+    return;
+  }
+  if (statusEl) statusEl.hidden = true;
+
+  // Group by kind; tally for the strip.
+  const byKind = new Map();
+  for (const e of edges) {
+    if (!byKind.has(e.kind)) byKind.set(e.kind, []);
+    byKind.get(e.kind).push(e);
+  }
+
+  // Subtitle: live totals.
+  _edgesRecordCount = byId.size;
+  if (subEl) {
+    subEl.textContent =
+      `${edges.length} ${edges.length === 1 ? "link" : "links"} across ${byId.size} records`;
+  }
+
+  // Kinds strip — one count pill per present kind, in display order.
+  if (kindsStrip) {
+    kindsStrip.innerHTML = "";
+    let any = false;
+    for (const kind of EDGE_KIND_ORDER) {
+      const group = byKind.get(kind);
+      if (!group || group.length === 0) continue;
+      const meta = EDGE_KIND_META[kind];
+      const pill = document.createElement("span");
+      pill.className = "edges-kind-pill";
+      pill.dataset.kind = kind;
+      const kindWord = (group.length === 1 ? meta.label : meta.plural).toLowerCase();
+      pill.textContent = `${meta.icon} ${group.length} ${kindWord}`;
+      kindsStrip.appendChild(pill);
+      any = true;
+    }
+    kindsStrip.hidden = !any;
+  }
+
+  // Render groups in display order; severity-high edges first within a group.
+  if (listEl) {
+    const severityRank = (s) => (s === "high" ? 0 : s === "medium" ? 1 : 2);
+    for (const kind of EDGE_KIND_ORDER) {
+      const group = byKind.get(kind);
+      if (!group || group.length === 0) continue;
+      const meta = EDGE_KIND_META[kind];
+
+      const groupTitle = document.createElement("h2");
+      groupTitle.className = "edges-group-title";
+      groupTitle.dataset.kind = kind;
+      groupTitle.textContent = group.length === 1 ? meta.label : meta.plural;
+      listEl.appendChild(groupTitle);
+
+      group
+        .slice()
+        .sort((a, b) => severityRank(a.severity) - severityRank(b.severity)
+          || (a.edgeId || "").localeCompare(b.edgeId || ""))
+        .forEach((edge) => listEl.appendChild(renderEdgeCard(edge, byId, baseUrl)));
+    }
+  }
+}
+
+/**
+ * One connection card: the relationship kind + severity, then BOTH records
+ * inline (A above, B below — A is the acting/dependent record for directional
+ * kinds), and the engine's grounded (citation-checked) explanation.
+ */
+function renderEdgeCard(edge, byId, baseUrl) {
+  const meta = EDGE_KIND_META[edge.kind] || { label: edge.kind || "Related", verb: "relates to", icon: "•" };
+  const card = document.createElement("div");
+  card.className = "edge-card";
+  card.dataset.kind = edge.kind || "";
+  card.dataset.severity = edge.severity || "";
+  card.dataset.edgeId = edge.edgeId || "";
+  card.dataset.status = edge.status || "proposed";
+
+  // Header: kind label + severity pill (only when high/medium — low is the
+  // default, unmarked) + a Confirmed pill once a human has confirmed the edge.
+  const header = document.createElement("div");
+  header.className = "edge-card-header";
+  const kindChip = document.createElement("span");
+  kindChip.className = "edge-kind-chip";
+  kindChip.dataset.kind = edge.kind || "";
+  kindChip.textContent = `${meta.icon} ${meta.label}`;
+  header.appendChild(kindChip);
+  if (edge.severity === "high" || edge.severity === "medium") {
+    const sev = document.createElement("span");
+    sev.className = "edge-sev-pill";
+    sev.dataset.severity = edge.severity;
+    sev.textContent = edge.severity.toUpperCase();
+    header.appendChild(sev);
+  }
+  const confirmedPill = document.createElement("span");
+  confirmedPill.className = "edge-confirmed-pill";
+  confirmedPill.textContent = "✓ Confirmed";
+  confirmedPill.hidden = edge.status !== "confirmed";
+  header.appendChild(confirmedPill);
+  card.appendChild(header);
+
+  // The two endpoints, joined by a connector that names the relationship.
+  card.appendChild(renderEdgeEndpoint(byId.get(edge.recordA), baseUrl));
+
+  const connector = document.createElement("div");
+  connector.className = "edge-connector";
+  connector.dataset.kind = edge.kind || "";
+  connector.textContent = `↓ ${meta.verb}`;
+  card.appendChild(connector);
+
+  card.appendChild(renderEdgeEndpoint(byId.get(edge.recordB), baseUrl));
+
+  // Grounded explanation — the editor's citation-checked rationale for the edge.
+  if (edge.explanation) {
+    const why = document.createElement("p");
+    why.className = "edge-explanation";
+    why.textContent = edge.explanation;
+    card.appendChild(why);
+  }
+
+  // HITL actions — confirm/dismiss (the calibration loop). Rebuilt in place on
+  // each status change so the controls reflect the current state.
+  const actions = document.createElement("div");
+  actions.className = "edge-actions";
+  card.appendChild(actions);
+  renderEdgeActions(edge, card, confirmedPill, actions);
+
+  return card;
+}
+
+/**
+ * (Re)render the confirm/dismiss controls for one edge card, in place. Proposed
+ * edges get Confirm + Dismiss; a confirmed edge shows Undo (revert to proposed).
+ * A dismiss removes the card and re-tallies — the edge won't return on re-fetch.
+ */
+function renderEdgeActions(edge, card, confirmedPill, actions) {
+  actions.innerHTML = "";
+  const status = edge.status || "proposed";
+
+  const mkBtn = (label, cls, newStatus) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = `btn edge-action-btn ${cls}`;
+    b.textContent = label;
+    b.addEventListener("click", () => patchEdge(edge, newStatus, card, confirmedPill, actions));
+    return b;
+  };
+
+  if (status === "confirmed") {
+    const note = document.createElement("span");
+    note.className = "edge-action-note";
+    note.textContent = "Confirmed — counts toward the cards.";
+    actions.appendChild(note);
+    actions.appendChild(mkBtn("Undo", "edge-action-undo", "proposed"));
+  } else {
+    actions.appendChild(mkBtn("Confirm", "edge-action-confirm", "confirmed"));
+    actions.appendChild(mkBtn("Dismiss", "edge-action-dismiss", "dismissed"));
+  }
+}
+
+/**
+ * Drive one confirm/dismiss/undo through the engine (patch_edge_status IPC) and
+ * reflect it. Optimistic-with-rollback: buttons disable during the call; on
+ * success the card updates in place (confirm/undo) or animates out (dismiss); on
+ * failure the prior controls return with an inline message.
+ */
+async function patchEdge(edge, newStatus, card, confirmedPill, actions) {
+  const prevStatus = edge.status || "proposed";
+  actions.querySelectorAll("button").forEach((b) => (b.disabled = true));
+
+  let result;
+  try {
+    result = await tauri.core.invoke("patch_edge_status", { edgeId: edge.edgeId, status: newStatus });
+  } catch (err) {
+    console.warn("[main] patch_edge_status failed:", err);
+    renderEdgeActions(edge, card, confirmedPill, actions); // restore controls
+    const msg = document.createElement("span");
+    msg.className = "edge-action-note edge-action-error";
+    msg.textContent = "Couldn't save — check your connection and try again.";
+    actions.appendChild(msg);
+    return;
+  }
+
+  // Trust the server's echoed status when present.
+  edge.status = (result && result.edge && result.edge.status) || newStatus;
+  card.dataset.status = edge.status;
+
+  if (edge.status === "dismissed") {
+    card.classList.add("edge-card-leaving");
+    setTimeout(() => {
+      card.remove();
+      refreshEdgeTallies();
+    }, 180);
+    return;
+  }
+
+  // confirmed or reverted-to-proposed — update in place.
+  confirmedPill.hidden = edge.status !== "confirmed";
+  card.classList.toggle("edge-card-confirmed", edge.status === "confirmed");
+  renderEdgeActions(edge, card, confirmedPill, actions);
+}
+
+/**
+ * Recompute the kind pills, group titles, and subtitle from the cards currently
+ * in the DOM. Stateless — called after a dismiss removes a card so every count
+ * stays truthful; an emptied group drops its title (and its pill).
+ */
+function refreshEdgeTallies() {
+  const listEl = document.getElementById("edges-list");
+  const kindsStrip = document.getElementById("edges-kinds-strip");
+  const subEl = document.getElementById("edges-sub");
+  const statusEl = document.getElementById("edges-status");
+  if (!listEl) return;
+
+  const cards = [...listEl.querySelectorAll(".edge-card")];
+  const counts = {};
+  for (const c of cards) counts[c.dataset.kind] = (counts[c.dataset.kind] || 0) + 1;
+
+  // Group titles: update or remove.
+  for (const title of [...listEl.querySelectorAll(".edges-group-title")]) {
+    const kind = title.dataset.kind;
+    const n = counts[kind] || 0;
+    const meta = EDGE_KIND_META[kind];
+    if (n === 0) title.remove();
+    else if (meta) title.textContent = n === 1 ? meta.label : meta.plural;
+  }
+
+  // Kind pills: update or remove.
+  if (kindsStrip) {
+    for (const pill of [...kindsStrip.querySelectorAll(".edges-kind-pill")]) {
+      const kind = pill.dataset.kind;
+      const n = counts[kind] || 0;
+      const meta = EDGE_KIND_META[kind];
+      if (n === 0) pill.remove();
+      else if (meta) pill.textContent = `${meta.icon} ${n} ${(n === 1 ? meta.label : meta.plural).toLowerCase()}`;
+    }
+    kindsStrip.hidden = kindsStrip.querySelectorAll(".edges-kind-pill").length === 0;
+  }
+
+  // Subtitle + empty state.
+  if (subEl) {
+    subEl.textContent = cards.length === 0
+      ? "How your decisions & commitments relate"
+      : `${cards.length} ${cards.length === 1 ? "connection" : "connections"} across ${_edgesRecordCount} records`;
+  }
+  if (statusEl && cards.length === 0) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "empty";
+    statusEl.textContent = "All connections reviewed. Nothing left to confirm or dismiss.";
+  }
+}
+
+/** One endpoint inside a connection card: type chip + summary + owner·due·source. */
+function renderEdgeEndpoint(rec, baseUrl) {
+  const ep = document.createElement("div");
+  ep.className = "edge-endpoint";
+  if (!rec) {
+    // Defensive — the join is sound on real data (0 unresolved), but never throw.
+    ep.classList.add("edge-endpoint-missing");
+    ep.textContent = "(record unavailable in your view)";
+    return ep;
+  }
+
+  const head = document.createElement("div");
+  head.className = "edge-endpoint-head";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(chip);
+  ep.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "edge-endpoint-summary";
+  summary.textContent = rec.summary || "";
+  ep.appendChild(summary);
+
+  // Meta: owner · due · source link (each part omitted when absent).
+  const meta = document.createElement("p");
+  meta.className = "edge-endpoint-meta";
+  const dim = [];
+  if (rec.owner) dim.push(prettySlug(rec.owner));
+  if (rec.due) dim.push("due " + formatDueDate(rec.due));
+  meta.textContent = dim.join(" · ");
+  const link = receiptsDeepLink(baseUrl, rec.documentId);
+  if (link) {
+    if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+    const a = document.createElement("a");
+    a.className = "edge-endpoint-source";
+    a.href = link;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "source ↗";
+    meta.appendChild(a);
+  }
+  if (meta.textContent || link) ep.appendChild(meta);
+
+  return ep;
+}
+
+// Connections-view buttons: back-to-widget, refresh, and the view-main entry.
+const edgesBackBtn = document.getElementById("btn-edges-back");
+if (edgesBackBtn) {
+  edgesBackBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("widget_collapse");
+    } catch (err) {
+      console.warn("[main] widget_collapse (edges-back) failed:", err);
+    }
+  });
+}
+
+const edgesRefreshBtn = document.getElementById("btn-edges-refresh");
+if (edgesRefreshBtn) {
+  edgesRefreshBtn.addEventListener("click", () => {
+    enterEdgesView();
+  });
+}
+
+const openEdgesBtn = document.getElementById("btn-open-edges");
+if (openEdgesBtn) {
+  openEdgesBtn.addEventListener("click", () => {
+    enterEdgesView();
+  });
+}
+
+// ───────── Definition card — per-entity "what is this, here, now" (WP-THRESHOLD-LOG-UX) ─────────
+
+// The subject we navigated into the card from, so Back returns to its Receipts.
+let _entityCardReturn = null;
+
+/**
+ * Open the Definition card for a subject entity. Fetches GET /api/entity/:slug/card
+ * via fetch_entity_card and renders ONLY the register-bounded prose — never the
+ * internal license/violations/layers. Handles the soft not-ready states the IPC
+ * surfaces (flag off / unknown entity / no API key) with calm copy, and a hard
+ * unreachable error distinctly.
+ */
+async function enterEntityCardView(entity) {
+  state.inWizard = false;
+  _entityCardReturn = entity;
+  showView("view-entity-card");
+
+  const titleEl = document.getElementById("entity-card-title");
+  const proseEl = document.getElementById("entity-card-prose");
+  const statusEl = document.getElementById("entity-card-status");
+  const footerEl = document.querySelector("#view-entity-card .entity-card-footer");
+
+  if (titleEl) titleEl.textContent = prettySlug(entity);
+  if (proseEl) proseEl.innerHTML = "";
+  if (footerEl) footerEl.hidden = true;
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Compiling the definition…";
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_entity_card", { entity });
+  } catch (err) {
+    console.warn("[main] fetch_entity_card failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then try again.";
+    }
+    return;
+  }
+
+  // Soft not-ready states (returned as Ok by the IPC, never thrown).
+  if (data && data.available === false) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = data.reason === "unavailable"
+        ? "Definitions aren't available on this server yet."
+        : "No definition for this subject yet.";
+    }
+    return;
+  }
+
+  const prose = data && typeof data.prose === "string" ? data.prose.trim() : "";
+  if (!prose) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No definition for this subject yet.";
+    }
+    return;
+  }
+
+  if (statusEl) statusEl.hidden = true;
+  // Render prose as paragraphs (split on blank lines); textContent keeps it XSS-safe.
+  if (proseEl) {
+    proseEl.innerHTML = "";
+    for (const para of prose.split(/\n{2,}/)) {
+      const p = document.createElement("p");
+      p.className = "entity-card-paragraph";
+      p.textContent = para.trim();
+      if (p.textContent) proseEl.appendChild(p);
+    }
+  }
+  if (footerEl) footerEl.hidden = false;
+}
+
+// Definition entry — from the Receipts header (both are entity-scoped).
+const receiptsCardBtn = document.getElementById("btn-receipts-card");
+if (receiptsCardBtn) {
+  receiptsCardBtn.addEventListener("click", () => {
+    const entity = currentReceipts && currentReceipts.entity;
+    if (entity) enterEntityCardView(entity);
+  });
+}
+
+// Back — return to the subject's Receipts when we came from there, else collapse.
+const entityCardBackBtn = document.getElementById("btn-entity-card-back");
+if (entityCardBackBtn) {
+  entityCardBackBtn.addEventListener("click", async () => {
+    if (_entityCardReturn) {
+      enterReceiptsView(_entityCardReturn);
+      return;
+    }
+    try {
+      await tauri.core.invoke("widget_collapse");
+    } catch (err) {
+      console.warn("[main] widget_collapse (entity-card-back) failed:", err);
+    }
   });
 }
 

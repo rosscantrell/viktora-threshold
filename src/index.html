@@ -271,6 +271,7 @@
         <p class="subtitle" id="main-subtitle">Connected</p>
         <div class="main-header-actions">
           <button type="button" id="btn-open-log" class="btn btn-link">Today</button>
+          <button type="button" id="btn-open-edges" class="btn btn-link">Links</button>
           <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
         </div>
       </header>
@@ -376,6 +377,7 @@
             <button type="button" class="log-filter-btn" data-filter="everyone" aria-pressed="true">Everyone</button>
             <button type="button" class="log-filter-btn" data-filter="mine" aria-pressed="false">Mine</button>
           </div>
+          <button type="button" id="btn-log-edges" class="btn btn-secondary">Links</button>
           <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
         </div>
       </header>
@@ -429,7 +431,10 @@
             <h1 class="receipts-title" id="receipts-title">—</h1>
             <p class="receipts-sub" id="receipts-sub" hidden></p>
           </div>
-          <button type="button" id="btn-receipts-copy" class="btn">Copy</button>
+          <div class="receipts-header-actions">
+            <button type="button" id="btn-receipts-card" class="btn">Definition</button>
+            <button type="button" id="btn-receipts-copy" class="btn">Copy</button>
+          </div>
         </header>
 
         <!-- Derived current-state strip (deterministic). Answer-first, above
@@ -448,6 +453,71 @@
 
         <div class="receipts-actions">
           <button type="button" id="btn-receipts-back" class="btn">← Back to Today</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges).
+         The most-requested back-half surface: every cross-record relationship
+         (depends_on / contradicts / supersedes / resolves / duplicates) shown
+         with BOTH of its records inline — type, summary, owner · due, source
+         link, and the edge's grounded explanation. A pure client-side display
+         join over /api/decision-log?full=1 (the fetch_decision_log_full IPC):
+         edge.recordA/recordB → records by recordId. No recompute, no LLM.
+         Reached via "Connections →" on view-main / Today, or the #edges hash.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-edges" class="view view-edges" hidden>
+      <header class="edges-header">
+        <div class="edges-header-text">
+          <h1 class="edges-title">Links</h1>
+          <p class="edges-sub" id="edges-sub">How your decisions &amp; commitments relate</p>
+        </div>
+        <button type="button" id="btn-edges-refresh" class="btn btn-secondary">Refresh</button>
+      </header>
+
+      <div class="edges-kinds-strip" id="edges-kinds-strip" hidden>
+        <!-- per-kind count pills rendered by main.js -->
+      </div>
+
+      <div class="edges-list" id="edges-list" aria-label="Cross-record connections"></div>
+
+      <p class="edges-status" id="edges-status" hidden></p>
+
+      <div class="edges-footer">
+        <button type="button" id="btn-edges-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-LOG-UX — per-entity Definition card.
+         The plain-language "what is this, and what does it mean here NOW" for a
+         subject entity. Reached via "Definition" on the Receipts view (both are
+         entity-scoped). Renders ONLY the register-bounded prose from
+         GET /api/entity/:slug/card (fetch_entity_card IPC) — never the internal
+         license/violations/layers (machinery the card prose itself is forbidden
+         from naming). Flag-gated + LLM-backed server-side; the view shows calm
+         states for not-enabled / generation-unavailable / unreachable.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-entity-card" class="view view-entity-card" hidden>
+      <div class="entity-card-content">
+        <header class="entity-card-header">
+          <p class="entity-card-eyebrow">Definition</p>
+          <h1 class="entity-card-title" id="entity-card-title">—</h1>
+        </header>
+
+        <div class="entity-card-prose" id="entity-card-prose"></div>
+
+        <p class="entity-card-status" id="entity-card-status" hidden></p>
+
+        <footer class="entity-card-footer">
+          compiled by Threshold from your captures
+        </footer>
+
+        <div class="entity-card-actions">
+          <button type="button" id="btn-entity-card-back" class="btn">← Back</button>
         </div>
       </div>
     </section>
