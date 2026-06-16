@@ -114,6 +114,8 @@ const VIEWS = [
   "view-edges",
   // WP-THRESHOLD-LOG-UX — per-entity Definition card
   "view-entity-card",
+  // WP-THRESHOLD-DECISION-ORG — Decisions browser (by project, filterable)
+  "view-decisions",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -230,6 +232,12 @@ async function bootstrap() {
     // navigates here with #edges. Render the full cross-record edge graph.
     if (window.location.hash === "#edges") {
       enterEdgesView();
+      return;
+    }
+
+    // WP-THRESHOLD-DECISION-ORG — the Decisions browser (#decisions).
+    if (window.location.hash === "#decisions") {
+      enterDecisionsView();
       return;
     }
 
@@ -1128,15 +1136,18 @@ async function enterLogView() {
     const order = [
       { key: "open", label: "Open" },
       { key: "resolved", label: "Resolved" },
-      { key: "superseded", label: "Superseded" },
+      { key: "superseded", label: "Replaced" },
     ];
     let any = false;
     for (const s of order) {
       const n = typeof states[s.key] === "number" ? states[s.key] : 0;
-      const pill = document.createElement("span");
+      // Clickable — opens the Decisions browser filtered to this status.
+      const pill = document.createElement("button");
+      pill.type = "button";
       pill.className = "log-state-pill";
       pill.dataset.state = s.key;
       pill.textContent = `${n} ${s.label.toLowerCase()}`;
+      pill.addEventListener("click", () => enterDecisionsView(s.key));
       statesStrip.appendChild(pill);
       if (n > 0) any = true;
     }
@@ -1423,7 +1434,7 @@ const EDGE_KIND_ORDER = ["contradicts", "depends_on", "supersedes", "resolves", 
 const EDGE_KIND_META = {
   contradicts: { label: "Conflict", plural: "Conflicts", verb: "conflicts with", icon: "⚠" },
   depends_on: { label: "Dependency", plural: "Dependencies", verb: "depends on", icon: "↳" },
-  supersedes: { label: "Supersession", plural: "Supersessions", verb: "supersedes", icon: "⤳" },
+  supersedes: { label: "Replacement", plural: "Replacements", verb: "replaces", icon: "⤳" },
   resolves: { label: "Resolution", plural: "Resolutions", verb: "resolves", icon: "✓" },
   duplicates: { label: "Duplicate", plural: "Duplicates", verb: "duplicate of", icon: "⧉" },
 };
@@ -1924,6 +1935,379 @@ if (entityCardBackBtn) {
       console.warn("[main] widget_collapse (entity-card-back) failed:", err);
     }
   });
+}
+
+// ───────── Decisions browser — by project, status-filterable (WP-THRESHOLD-DECISION-ORG) ─────────
+
+// Records + the documentId→projects map for the current browse, kept so the
+// status filter re-renders without re-fetching.
+let _decisionsCtx = null;
+let _decisionsFilter = "all"; // all | open | resolved | superseded
+let _decisionsLens = "project"; // project | deadline | people
+let _decisionsExpanded = new Set(); // group keys the user has expanded (default: collapsed)
+const PROJECT_OTHER = "__other__";
+
+/** Bucket a record's due date into a deadline group (muted = the catch-all). */
+function deadlineBucket(due) {
+  if (!due) return { key: "z-none", label: "No due date", order: 9, muted: true };
+  const days = Math.floor((new Date(due + "T00:00:00") - new Date()) / 86400000);
+  if (days < 0) return { key: "a-overdue", label: "Overdue", order: 0 };
+  if (days <= 7) return { key: "b-week", label: "Due this week", order: 1 };
+  if (days <= 31) return { key: "c-month", label: "Due this month", order: 2 };
+  return { key: "d-later", label: "Later", order: 3 };
+}
+
+/**
+ * Group the records under the active lens. Project is the SOFT spine (first
+ * project, "Other" catch-all); deadline buckets by due date (Overdue first, no-
+ * date last); people groups by owner. Returns ordered [{key,label,muted,items}]
+ * — catch-all groups (Other / Unassigned / No due date) sort last and render
+ * muted so the real organization leads.
+ */
+function groupRecords(items, lens, docProjects) {
+  const g = new Map();
+  const ensure = (key, label, order, muted) => {
+    if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
+    return g.get(key);
+  };
+  for (const it of items) {
+    const rec = it && it.record ? it.record : it;
+    if (!rec) continue;
+    if (lens === "deadline") {
+      const b = deadlineBucket(rec.due);
+      ensure(b.key, b.label, b.order, b.muted).items.push(it);
+    } else if (lens === "people") {
+      const key = rec.owner || "z-unassigned";
+      ensure(key, rec.owner ? prettySlug(rec.owner) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
+    } else {
+      const projs = docProjects.get(rec.documentId) || [];
+      const key = projs.length ? projs[0] : PROJECT_OTHER;
+      ensure(key, key === PROJECT_OTHER ? "Other" : prettySlug(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+    }
+  }
+  return [...g.values()].sort((a, b) => {
+    if (lens === "deadline") return a.order - b.order;
+    if (a.order !== b.order) return a.order - b.order; // catch-all last
+    return b.items.length - a.items.length; // else largest first
+  });
+}
+
+/**
+ * Open the Decisions browser. Pulls every record (fetch_decision_log_full) and
+ * the documents (fetch_documents → /api/data) so each record joins to its
+ * project(s) via documentId. Project is a SOFT lens: records group under their
+ * first project, an "Other" bucket holds the unattached, every card shows its
+ * project chip(s), and the Open/Resolved/Replaced pills filter across projects.
+ */
+async function enterDecisionsView(initialFilter) {
+  state.inWizard = false;
+  showView("view-decisions");
+  if (initialFilter) _decisionsFilter = initialFilter;
+
+  const listEl = document.getElementById("decisions-list");
+  const statusEl = document.getElementById("decisions-status");
+  if (listEl) listEl.innerHTML = "";
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading decisions…";
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_decision_log_full");
+  } catch (err) {
+    console.warn("[main] fetch_decision_log_full failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
+    }
+    return;
+  }
+
+  // documentId → projects[] (best-effort; chips/grouping omitted if /api/data fails).
+  const docProjects = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id) docProjects.set(d.id, Array.isArray(d.projects) ? d.projects : []);
+    }
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (projects omitted):", err);
+  }
+
+  const items = Array.isArray(data && data.records) ? data.records : [];
+  // For the Conflicts lens: index records by id (to ground each edge) + base URL (source links).
+  const byId = new Map();
+  for (const it of items) {
+    const rec = it && it.record ? it.record : it;
+    if (rec && rec.recordId) byId.set(rec.recordId, rec);
+  }
+  let baseUrl = "";
+  try {
+    const cfg = await tauri.core.invoke("load_config");
+    baseUrl = (cfg && cfg.base_url) || "";
+  } catch (_e) { /* source links omitted if config unavailable */ }
+
+  _decisionsCtx = {
+    items,
+    docProjects,
+    edges: Array.isArray(data && data.edges) ? data.edges : [],
+    byId,
+    baseUrl,
+  };
+  renderDecisions();
+}
+
+/** Conflicts lens — promotes the contradiction edges with inline confirm/dismiss
+ *  (reuses the edge card + HITL). The status filter doesn't apply here. */
+function renderConflictsLens(edges, byId, baseUrl) {
+  const listEl = document.getElementById("decisions-list");
+  const statusEl = document.getElementById("decisions-status");
+  const subEl = document.getElementById("decisions-sub");
+  const conflicts = (edges || []).filter((e) => e.kind === "contradicts" && e.status !== "dismissed");
+
+  listEl.innerHTML = "";
+  if (subEl) {
+    subEl.textContent = conflicts.length
+      ? `${conflicts.length} ${conflicts.length === 1 ? "conflict" : "conflicts"} to review`
+      : "No conflicts";
+  }
+  if (conflicts.length === 0) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No conflicts detected — decisions and commitments are consistent so far.";
+    }
+    return;
+  }
+  if (statusEl) statusEl.hidden = true;
+  for (const e of conflicts) listEl.appendChild(renderEdgeCard(e, byId, baseUrl));
+}
+
+/** Re-render the grouped list under the active status filter (no re-fetch). */
+function renderDecisions() {
+  const listEl = document.getElementById("decisions-list");
+  const statusEl = document.getElementById("decisions-status");
+  const subEl = document.getElementById("decisions-sub");
+  if (!_decisionsCtx || !listEl) return;
+  const { items, docProjects, edges, byId, baseUrl } = _decisionsCtx;
+
+  // sync the lens selector's pressed state
+  for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
+    btn.setAttribute("aria-pressed", btn.dataset.lens === _decisionsLens ? "true" : "false");
+  }
+
+  // The status filter applies to record lenses only — hide it for Conflicts (edges).
+  const filterEl = document.getElementById("decisions-filter");
+  if (filterEl) filterEl.hidden = _decisionsLens === "conflicts";
+
+  if (_decisionsLens === "conflicts") {
+    renderConflictsLens(edges, byId, baseUrl);
+    return;
+  }
+
+  for (const btn of document.querySelectorAll(".decisions-filter-btn")) {
+    btn.setAttribute("aria-pressed", btn.dataset.state === _decisionsFilter ? "true" : "false");
+  }
+
+  const filtered = items.filter((it) =>
+    _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
+
+  const ordered = groupRecords(filtered, _decisionsLens, docProjects);
+
+  listEl.innerHTML = "";
+  if (statusEl) {
+    if (filtered.length === 0) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No decisions or commitments match this filter.";
+    } else {
+      statusEl.hidden = true;
+    }
+  }
+
+  if (subEl) {
+    const n = filtered.length;
+    const recs = `${n} ${n === 1 ? "record" : "records"}`;
+    if (_decisionsLens === "deadline") {
+      const overdue = filtered.filter((it) => {
+        const r = it.record || it;
+        return r.due && new Date(r.due + "T00:00:00") < new Date();
+      }).length;
+      subEl.textContent = `${recs} · ${overdue} overdue`;
+    } else {
+      const real = ordered.filter((g) => !g.muted).length;
+      const noun = _decisionsLens === "people" ? (real === 1 ? "person" : "people") : (real === 1 ? "project" : "projects");
+      subEl.textContent = `${recs} · ${real} ${noun}`;
+    }
+  }
+
+  for (const grp of ordered) {
+    const decisions = grp.items.filter((it) => (it.record ? it.record.type : it.type) === "decision").length;
+    const commitments = grp.items.length - decisions;
+    const expanded = _decisionsExpanded.has(grp.key);
+
+    const groupEl = document.createElement("div");
+    groupEl.className = "decisions-group";
+
+    // Clickable header — collapses/expands the group so the list reads as a
+    // scannable overview of groups rather than one long scroll. Default collapsed.
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "decisions-group-title";
+    head.setAttribute("aria-expanded", expanded ? "true" : "false");
+    if (grp.muted) head.dataset.other = "true";
+
+    const chev = document.createElement("span");
+    chev.className = "decisions-group-chevron";
+    chev.textContent = expanded ? "▾" : "▸";
+    chev.setAttribute("aria-hidden", "true");
+    head.appendChild(chev);
+
+    const name = document.createElement("span");
+    name.className = "decisions-group-name";
+    name.textContent = grp.label;
+    head.appendChild(name);
+
+    const count = document.createElement("span");
+    count.className = "decisions-group-count";
+    const parts = [];
+    if (decisions) parts.push(`${decisions} decision${decisions === 1 ? "" : "s"}`);
+    if (commitments) parts.push(`${commitments} commitment${commitments === 1 ? "" : "s"}`);
+    count.textContent = parts.join(" · ");
+    head.appendChild(count);
+
+    const body = document.createElement("div");
+    body.className = "decisions-group-body";
+    body.hidden = !expanded;
+    for (const it of grp.items) {
+      const rec = it && it.record ? it.record : it;
+      if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
+    }
+
+    head.addEventListener("click", () => {
+      const willExpand = body.hidden;
+      body.hidden = !willExpand;
+      head.setAttribute("aria-expanded", willExpand ? "true" : "false");
+      chev.textContent = willExpand ? "▾" : "▸";
+      if (willExpand) _decisionsExpanded.add(grp.key);
+      else _decisionsExpanded.delete(grp.key);
+    });
+
+    groupEl.appendChild(head);
+    groupEl.appendChild(body);
+    listEl.appendChild(groupEl);
+  }
+}
+
+/** One compact card for the browser: type chip + state, summary, owner · due,
+ *  and project chip(s) — the soft facet, always shown for context. */
+function renderDecisionCard(rec, recState, projects) {
+  const card = document.createElement("div");
+  card.className = "record-card decision-card";
+  card.dataset.type = rec.type || "";
+  if (recState) card.dataset.state = recState;
+
+  const header = document.createElement("div");
+  header.className = "record-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  header.appendChild(chip);
+  if (recState && recState !== "open") {
+    const pill = document.createElement("span");
+    pill.className = "record-state-pill";
+    pill.dataset.state = recState;
+    pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
+    header.appendChild(pill);
+  }
+  card.appendChild(header);
+
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = rec.summary || "";
+  card.appendChild(summary);
+
+  const dim = [];
+  if (rec.owner) dim.push(prettySlug(rec.owner));
+  if (rec.due) dim.push("due " + formatDueDate(rec.due));
+  if (dim.length) {
+    const meta = document.createElement("p");
+    meta.className = "record-meta";
+    meta.textContent = dim.join(" · ");
+    card.appendChild(meta);
+  }
+
+  if (projects && projects.length) {
+    const chips = document.createElement("div");
+    chips.className = "decision-projects";
+    for (const p of projects.slice(0, 3)) {
+      const pc = document.createElement("span");
+      pc.className = "decision-project-chip";
+      pc.textContent = prettySlug(p);
+      chips.appendChild(pc);
+    }
+    card.appendChild(chips);
+  }
+
+  // Drill-down: the subject's full evidence chain (Receipts).
+  if (rec.primaryEntity) {
+    const actions = document.createElement("div");
+    actions.className = "record-actions";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    actions.appendChild(btn);
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+// Shared "back to main" — the ⌂ Main buttons across views (WP-DECISION-ORG nav).
+function goHome() {
+  state.inWizard = false;
+  enterMainView(state.lastConfig);
+}
+
+// Decisions-view wiring: entry, filter pills, Home / Back / Refresh.
+const openDecisionsBtn = document.getElementById("btn-open-decisions");
+if (openDecisionsBtn) openDecisionsBtn.addEventListener("click", () => enterDecisionsView());
+
+for (const btn of document.querySelectorAll(".decisions-filter-btn")) {
+  btn.addEventListener("click", () => {
+    _decisionsFilter = btn.dataset.state || "all";
+    renderDecisions();
+  });
+}
+
+for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
+  btn.addEventListener("click", () => {
+    _decisionsLens = btn.dataset.lens || "project";
+    renderDecisions();
+  });
+}
+
+const decisionsHomeBtn = document.getElementById("btn-decisions-home");
+if (decisionsHomeBtn) decisionsHomeBtn.addEventListener("click", () => goHome());
+
+const decisionsBackBtn = document.getElementById("btn-decisions-back");
+if (decisionsBackBtn) decisionsBackBtn.addEventListener("click", () => enterLogView());
+
+const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
+if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
+
+// ⌂ Main — shared back-to-home on every sub-view footer (WP-DECISION-ORG nav).
+for (const id of ["btn-log-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
+  const b = document.getElementById(id);
+  if (b) b.addEventListener("click", () => goHome());
 }
 
 // ───────── Receipts — the evidence dossier (WP-THRESHOLD-LOG-UX) ─────────

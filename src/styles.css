@@ -387,6 +387,13 @@ code {
 }
 .btn-link:hover { text-decoration: underline; }
 
+/* The main header lays its actions out inline — override the legacy global
+   `.btn-link { position:absolute; top:4px; right:0 }` so Today / Decisions /
+   Links / Configure flow in the flex row instead of stacking on one corner. */
+.main-header-actions .btn-link {
+  position: static;
+}
+
 /* OneNote configure subsection */
 .config-subsection {
   margin-top: 8px;
@@ -2360,6 +2367,10 @@ code {
   gap: 6px;
 }
 
+.edges-kinds-strip[hidden] {
+  display: none;
+}
+
 .edges-kind-pill {
   display: inline-flex;
   align-items: center;
@@ -2733,5 +2744,242 @@ code {
 }
 
 .view-entity-card #btn-entity-card-back:hover {
+  background: var(--glass-surface-hover);
+}
+
+/* ═══════ Decisions browser — by project, status-filterable (WP-DECISION-ORG) ═══════ */
+.view-decisions {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 26px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.decisions-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 64px; /* clear the fixed Collapse button */
+}
+
+.decisions-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--glass-text);
+  margin: 0;
+}
+
+.decisions-sub {
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  margin: 3px 0 0;
+}
+
+.decisions-header-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.view-decisions #btn-decisions-home,
+.view-decisions #btn-decisions-refresh,
+.view-decisions #btn-decisions-back {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+  white-space: nowrap;
+}
+
+.view-decisions #btn-decisions-home:hover,
+.view-decisions #btn-decisions-refresh:hover,
+.view-decisions #btn-decisions-back:hover {
+  background: var(--glass-surface-hover);
+}
+
+/* Status filter — segmented pills. */
+.decisions-filter {
+  display: inline-flex;
+  align-self: flex-start;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+/* The class `display` would otherwise beat the `[hidden]` attribute (author
+   rule > UA rule), so the filter must explicitly hide itself — e.g. on the
+   Conflicts lens, where record-status filtering doesn't apply. */
+.decisions-filter[hidden] {
+  display: none;
+}
+
+.decisions-filter-btn {
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--glass-text-dim);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.decisions-filter-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--glass-text);
+}
+
+/* Lens selector — the organizing-axis switch (Project / Deadline / Person). */
+.decisions-controls {
+  display: flex;
+}
+
+.decisions-lenses {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.decisions-lens-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 13px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  color: var(--glass-text-dim);
+  border-radius: var(--glass-radius-sm);
+  cursor: pointer;
+}
+
+.decisions-lens-btn:hover {
+  background: var(--glass-surface-hover);
+}
+
+.decisions-lens-btn[aria-pressed="true"] {
+  background: rgba(127, 179, 232, 0.16);
+  border-color: rgba(127, 179, 232, 0.5);
+  color: var(--glass-link);
+}
+
+.decisions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.decisions-group {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Group header — a clickable row that collapses/expands its records. */
+.decisions-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-family: inherit;
+  text-align: left;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.decisions-group-title:hover {
+  background: var(--glass-surface-hover);
+}
+
+.decisions-group-chevron {
+  font-size: 9px;
+  color: var(--glass-text-faint);
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.decisions-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.decisions-group-body[hidden] {
+  display: none;
+}
+
+.decisions-group-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text);
+}
+
+.decisions-group-title[data-other="true"] .decisions-group-name {
+  color: var(--glass-text-faint);
+}
+
+.decisions-group-count {
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+}
+
+/* Compact card — reuses .record-card; project chips under the meta. */
+.decision-card {
+  gap: 6px;
+}
+
+.decision-projects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 2px;
+}
+
+.decision-project-chip {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(127, 179, 232, 0.12);
+  border: 1px solid rgba(127, 179, 232, 0.3);
+  color: var(--glass-link);
+}
+
+.decisions-status {
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  text-align: center;
+  padding: 14px 0;
+  margin: 0;
+}
+
+.decisions-status[data-kind="error"] {
+  color: var(--glass-danger);
+}
+
+.decisions-footer {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 4px;
+}
+
+/* Today status pills are now buttons (clickable → Decisions filtered). */
+.log-state-pill {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.log-state-pill:hover {
   background: var(--glass-surface-hover);
 }
