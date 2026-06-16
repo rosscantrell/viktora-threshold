@@ -271,6 +271,7 @@
         <p class="subtitle" id="main-subtitle">Connected</p>
         <div class="main-header-actions">
           <button type="button" id="btn-open-log" class="btn btn-link">Today</button>
+          <button type="button" id="btn-open-decisions" class="btn btn-link">Decisions</button>
           <button type="button" id="btn-open-edges" class="btn btn-link">Links</button>
           <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
         </div>
@@ -395,18 +396,19 @@
       </section>
 
       <section class="log-section" id="log-contradictions-section" hidden>
-        <h2 class="log-section-title">Contradictions</h2>
+        <h2 class="log-section-title">Conflicts</h2>
         <div class="log-contradictions-list" id="log-contradictions-list"></div>
       </section>
 
       <section class="log-section" id="log-owners-section" hidden>
-        <h2 class="log-section-title">Owner load</h2>
+        <h2 class="log-section-title">Workload</h2>
         <div class="log-owners-strip" id="log-owners-strip"></div>
       </section>
 
       <p class="log-status" id="log-status" hidden></p>
 
       <div class="log-footer">
+        <button type="button" id="btn-log-home" class="btn btn-secondary">⌂ Main</button>
         <button type="button" id="btn-log-back" class="btn btn-secondary">
           ← Back to widget
         </button>
@@ -452,6 +454,7 @@
         </footer>
 
         <div class="receipts-actions">
+          <button type="button" id="btn-receipts-home" class="btn">⌂ Main</button>
           <button type="button" id="btn-receipts-back" class="btn">← Back to Today</button>
         </div>
       </div>
@@ -485,6 +488,7 @@
       <p class="edges-status" id="edges-status" hidden></p>
 
       <div class="edges-footer">
+        <button type="button" id="btn-edges-home" class="btn btn-secondary">⌂ Main</button>
         <button type="button" id="btn-edges-back" class="btn btn-secondary">
           ← Back to widget
         </button>
@@ -517,8 +521,54 @@
         </footer>
 
         <div class="entity-card-actions">
+          <button type="button" id="btn-entity-card-home" class="btn">⌂ Main</button>
           <button type="button" id="btn-entity-card-back" class="btn">← Back</button>
         </div>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-DECISION-ORG — Decisions browser.
+         All decisions & commitments, organized by PROJECT as a SOFT lens: each
+         record shows its project chip, an "Other" group holds the unattached, and
+         the Open / Resolved / Replaced pills filter across projects. A pure
+         client-side join — fetch_decision_log_full (records + state + due) +
+         fetch_documents (/api/data) for documentId → projects. (Date lens next.)
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-decisions" class="view view-decisions" hidden>
+      <header class="decisions-header">
+        <div class="decisions-header-text">
+          <h1 class="decisions-title">Decisions</h1>
+          <p class="decisions-sub" id="decisions-sub">By project</p>
+        </div>
+        <div class="decisions-header-actions">
+          <button type="button" id="btn-decisions-home" class="btn btn-secondary">⌂ Main</button>
+          <button type="button" id="btn-decisions-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <div class="decisions-controls">
+        <div class="decisions-lenses" id="decisions-lenses" role="group" aria-label="Organize by">
+          <button type="button" class="decisions-lens-btn" data-lens="project" aria-pressed="true">By project</button>
+          <button type="button" class="decisions-lens-btn" data-lens="deadline" aria-pressed="false">By deadline</button>
+          <button type="button" class="decisions-lens-btn" data-lens="people" aria-pressed="false">By person</button>
+          <button type="button" class="decisions-lens-btn" data-lens="conflicts" aria-pressed="false">Conflicts</button>
+        </div>
+      </div>
+
+      <div class="decisions-filter" id="decisions-filter" role="group" aria-label="Filter by status">
+        <button type="button" class="decisions-filter-btn" data-state="all" aria-pressed="true">All</button>
+        <button type="button" class="decisions-filter-btn" data-state="open" aria-pressed="false">Open</button>
+        <button type="button" class="decisions-filter-btn" data-state="resolved" aria-pressed="false">Resolved</button>
+        <button type="button" class="decisions-filter-btn" data-state="superseded" aria-pressed="false">Replaced</button>
+      </div>
+
+      <div class="decisions-list" id="decisions-list" aria-label="Decisions and commitments by project"></div>
+
+      <p class="decisions-status" id="decisions-status" hidden></p>
+
+      <div class="decisions-footer">
+        <button type="button" id="btn-decisions-back" class="btn btn-secondary">← Back to Today</button>
       </div>
     </section>
 
