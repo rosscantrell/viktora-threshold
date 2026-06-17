@@ -5996,6 +5996,7 @@ mod tests {
             auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
+            dismissed_record_ids: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -6060,6 +6061,7 @@ mod tests {
             auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
+            dismissed_record_ids: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -6099,6 +6101,7 @@ mod tests {
             auto_watch: true,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
+            dismissed_record_ids: Vec::new(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         // The auto_watch field must appear in serialized JSON (no
