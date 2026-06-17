@@ -3285,3 +3285,28 @@ button.rec-source {
   font: inherit;
   cursor: pointer;
 }
+
+/* Source SVG icons + panel actions (WP-THRESHOLD-SOURCE, design-system line icons). */
+.source-badge-icon { display: inline-flex; align-items: center; }
+.source-badge-icon svg { width: 13px; height: 13px; }
+.source-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.source-panel-badge svg { width: 13px; height: 13px; }
+.source-panel-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.source-panel-action {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 7px;
+  display: inline-flex;
+}
+.source-panel-action:hover { color: var(--text-primary); background: var(--glass-border); }
+.source-panel-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.source-panel-action svg { display: block; }

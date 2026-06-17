@@ -1935,6 +1935,53 @@ fn copy_receipts(html: String, markdown: String) -> Result<(), String> {
     Ok(())
 }
 
+/// WP-THRESHOLD-SOURCE — copy plain source text to the clipboard (the source
+/// reader's Copy button). Plain-text only (`set_text`), unlike copy_receipts'
+/// dual HTML+Markdown write.
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("clipboard write failed: {e}"))?;
+    Ok(())
+}
+
+/// WP-THRESHOLD-SOURCE — the source reader's Download button. Opens a native
+/// save dialog seeded with `default_name`, then writes `content` (UTF-8) to the
+/// chosen path. Returns the saved path, or `None` if the user cancelled. Mirrors
+/// `pick_files`' dialog-plugin pattern (oneshot channel off the dialog callback).
+#[tauri::command]
+async fn save_text_file(
+    app_handle: tauri::AppHandle,
+    default_name: String,
+    content: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Text", &["txt", "md"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let chosen = rx.await.ok().flatten();
+    let Some(fp) = chosen else {
+        return Ok(None);
+    };
+    let path = fp
+        .into_path()
+        .map_err(|e| format!("invalid save path: {e}"))?;
+    std::fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("failed to write file: {e}"))?;
+    Ok(Some(path.display().to_string()))
+}
+
 /// WP-N1 (S1 sharing) — the viewer's authenticated email, for capture
 /// attribution + the Today "Mine / Everyone" filter. Proxies GET /api/whoami and
 /// returns `{ email: string | null }`. Best-effort and intentionally never
@@ -5518,6 +5565,9 @@ pub fn run() {
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
             fetch_receipts,
             copy_receipts,
+            // WP-THRESHOLD-SOURCE — source reader copy + download
+            copy_text,
+            save_text_file,
             // WP-N1 (S1 sharing) — viewer identity + document attribution
             get_whoami,
             fetch_documents,

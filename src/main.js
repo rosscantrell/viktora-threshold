@@ -969,13 +969,37 @@ async function loadDocsMap() {
   return _docsByIdPromise;
 }
 
-/** Map a document's sourceMetadata to a display {icon, label, detail}. The
- *  captureTool is the primary signal; details are best-effort per source. */
+// Design-system line icons (feather-style: 24-viewBox, fill:none,
+// stroke:currentColor, 1.75 — matches the Collapse / prompt icons). Monochrome,
+// inherit the badge's text color — no multicolor emoji.
+const SOURCE_ICONS = {
+  email: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
+  plaud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  onenote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+  teams: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8 8 0 0 1-11.6 7.1L4 20l1.4-5.4A8 8 0 1 1 21 11.5z"/></svg>',
+  screen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/></svg>',
+};
+
+/** Parse a display name out of an email "From" header ("Name <addr>" → "Name"). */
+function senderName(from) {
+  const s = String(from || "").trim();
+  if (!s) return "";
+  const m = s.match(/^"?([^"<]+?)"?\s*</);
+  return (m ? m[1] : s.split("<")[0]).trim();
+}
+
+/** Map a document's sourceMetadata to a display {iconKey, label, detail}.
+ *  captureTool is the primary signal; captureMethod + the id prefix are
+ *  fallbacks (e.g. outlook-addin emails carry the method, not the tool). */
 function sourceFromDoc(doc) {
   const sm = (doc && doc.sourceMetadata) || {};
   const tool = (sm.captureTool || "").toLowerCase();
   const method = (sm.captureMethod || "").toLowerCase();
-  if (tool === "plaud" || method === "recording-import") {
+  const app = (sm.sourceApp || "").toLowerCase();
+  const id = (doc && doc.id ? String(doc.id) : "").toLowerCase();
+
+  if (tool === "plaud" || method === "recording-import" || id.startsWith("plaud")) {
     const mins = sm.durationMs ? Math.round(sm.durationMs / 60000) : null;
     const speakers = sm.originalSpeakerMapping
       ? Object.values(sm.originalSpeakerMapping).filter((s) => s && !/^Speaker \d+$/i.test(s))
@@ -985,21 +1009,24 @@ function sourceFromDoc(doc) {
     if (speakers.length) {
       parts.push(speakers[0] + (speakers.length > 1 ? ` +${speakers.length - 1}` : ""));
     }
-    return { icon: "🎙️", label: "Plaud", detail: parts.join(" · ") };
+    return { iconKey: "plaud", label: "Plaud", detail: parts.join(" · ") };
   }
-  if (tool === "onenote" || method === "com-capture") {
-    return { icon: "📓", label: "OneNote", detail: [sm.notebookName, sm.sectionName].filter(Boolean).join(" / ") };
+  if (tool === "onenote" || method === "com-capture" || id.startsWith("onenote")) {
+    return { iconKey: "onenote", label: "OneNote", detail: [sm.notebookName, sm.sectionName].filter(Boolean).join(" / ") };
   }
-  if (tool === "outlook-addin" || tool === "outlook") {
-    return { icon: "📧", label: "Email", detail: "" };
+  // Email: tool OR method "outlook-addin", or the EMAIL- id prefix.
+  if (tool.includes("outlook") || method.includes("outlook") || id.startsWith("email")) {
+    return { iconKey: "email", label: "Email", detail: senderName(sm.from) };
   }
-  if (/teams/.test(tool)) {
-    return { icon: "💬", label: "Teams", detail: "" };
+  // Teams — including a screen-capture OF Teams (sourceApp hints the app).
+  if (tool.includes("teams") || app.includes("teams")) {
+    return { iconKey: "teams", label: "Teams", detail: "" };
   }
-  if (tool === "threshold" || method === "screenshot-ocr") {
-    return { icon: "🖥️", label: "Screen capture", detail: sm.sourceApp || "" };
+  if (tool === "threshold" || method === "screenshot-ocr" || id.startsWith("desktop")) {
+    const niceApp = app.includes("outlook") ? "Outlook" : app ? prettySlug(app.replace(/^(com|ms)[.-]/, "")) : "";
+    return { iconKey: "screen", label: "Screen capture", detail: niceApp };
   }
-  return { icon: "📄", label: "Source", detail: "" };
+  return { iconKey: "doc", label: "Source", detail: "" };
 }
 
 /** Build a clickable source-type chip for a record, or null when we have no
@@ -1016,7 +1043,7 @@ function renderSourceBadge(documentId, verbatim) {
   chip.title = "Open the source beside this — " + src.label + (src.detail ? " · " + src.detail : "");
   const icon = document.createElement("span");
   icon.className = "source-badge-icon";
-  icon.textContent = src.icon;
+  icon.innerHTML = SOURCE_ICONS[src.iconKey] || SOURCE_ICONS.doc; // constant SVG, not user data
   chip.appendChild(icon);
   const label = document.createElement("span");
   label.className = "source-badge-label";
@@ -1044,6 +1071,8 @@ function appendSourceBadge(rowEl, documentId, verbatim) {
 /** The documentId currently shown, so a slow fetch that's been superseded by a
  *  newer open doesn't clobber the panel. */
 let _sourceOpenDoc = null;
+/** The currently-rendered source {title, body, documentId} — for Copy/Download. */
+let _sourceCurrent = null;
 
 /** Open the source reader beside the current view: fetch the document (detail +
  *  body) and render it, highlighting `verbatim`. */
@@ -1064,8 +1093,17 @@ async function openSourcePanel(documentId, verbatim) {
   await loadDocsMap();
   const doc = _docsById ? _docsById.get(documentId) : null;
   if (badgeEl) {
-    const src = doc ? sourceFromDoc(doc) : null;
-    badgeEl.textContent = src ? src.icon + " " + src.label + (src.detail ? " · " + src.detail : "") : "";
+    badgeEl.textContent = "";
+    if (doc) {
+      const src = sourceFromDoc(doc);
+      const ic = document.createElement("span");
+      ic.className = "source-badge-icon";
+      ic.innerHTML = SOURCE_ICONS[src.iconKey] || SOURCE_ICONS.doc; // constant SVG
+      badgeEl.appendChild(ic);
+      badgeEl.appendChild(
+        document.createTextNode(" " + src.label + (src.detail ? " · " + src.detail : "")),
+      );
+    }
   }
 
   if (titleEl) titleEl.textContent = "Loading source…";
@@ -1098,6 +1136,7 @@ async function openSourcePanel(documentId, verbatim) {
     }
     metaEl.textContent = bits.join(" · ");
   }
+  _sourceCurrent = { title: detail.title || documentId, body: detail.body || "", documentId };
   renderSourceBody(bodyEl, detail.body || "", verbatim);
 }
 
@@ -1129,6 +1168,7 @@ function renderSourceBody(bodyEl, text, verbatim) {
 /** Close the source reader and restore the full-width view. */
 function closeSourcePanel() {
   _sourceOpenDoc = null;
+  _sourceCurrent = null;
   document.body.classList.remove("source-open");
   const panel = document.getElementById("source-panel");
   if (panel) panel.hidden = true;
@@ -1140,6 +1180,44 @@ if (_srcCloseBtn) _srcCloseBtn.addEventListener("click", () => closeSourcePanel(
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.body.classList.contains("source-open")) closeSourcePanel();
 });
+
+// Copy the full source text to the clipboard (plain text via the copy_text IPC).
+const _srcCopyBtn = document.getElementById("source-panel-copy");
+if (_srcCopyBtn) {
+  _srcCopyBtn.addEventListener("click", async () => {
+    if (!_sourceCurrent || !_sourceCurrent.body) return;
+    try {
+      await tauri.core.invoke("copy_text", { text: _sourceCurrent.body });
+      showToast({ kind: "success", title: "Source copied", body: "The full source text is on your clipboard." });
+    } catch (err) {
+      console.warn("[main] copy_text failed:", err);
+      showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    }
+  });
+}
+
+// Download the source text to a file (native save dialog via save_text_file).
+const _srcDownloadBtn = document.getElementById("source-panel-download");
+if (_srcDownloadBtn) {
+  _srcDownloadBtn.addEventListener("click", async () => {
+    if (!_sourceCurrent || !_sourceCurrent.body) return;
+    const base =
+      (_sourceCurrent.title || _sourceCurrent.documentId || "source")
+        .replace(/[^\w.-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "source";
+    try {
+      const saved = await tauri.core.invoke("save_text_file", {
+        defaultName: base + ".txt",
+        content: _sourceCurrent.body,
+      });
+      if (saved) showToast({ kind: "success", title: "Source saved", body: saved });
+    } catch (err) {
+      console.warn("[main] save_text_file failed:", err);
+      showToast({ kind: "failure", title: "Couldn't save", body: "Try again." });
+    }
+  });
+}
 
 /**
  * @param {object|null} tidbit         get_pending_tidbit payload (or null)
