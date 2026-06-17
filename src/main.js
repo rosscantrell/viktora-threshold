@@ -1137,32 +1137,88 @@ async function openSourcePanel(documentId, verbatim) {
     metaEl.textContent = bits.join(" · ");
   }
   _sourceCurrent = { title: detail.title || documentId, body: detail.body || "", documentId };
-  renderSourceBody(bodyEl, detail.body || "", verbatim);
+
+  // Gather EVERY verified verbatim extracted from this source so they all get
+  // highlighted (the clicked one stays primary). Best-effort: on failure we fall
+  // back to highlighting just the clicked record.
+  let others = [];
+  try {
+    const dr = await tauri.core.invoke("fetch_document_records", { documentId });
+    if (_sourceOpenDoc !== documentId) return;
+    const recs = dr && Array.isArray(dr.records) ? dr.records : [];
+    const clicked = (verbatim || "").trim().toLowerCase();
+    for (const it of recs) {
+      const r = it && it.record ? it.record : it;
+      if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
+      if (r.verbatim.trim().toLowerCase() === clicked) continue;
+      others.push(r.verbatim);
+    }
+  } catch (err) {
+    console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
+  }
+
+  const nMarks = renderSourceBody(bodyEl, detail.body || "", verbatim, others);
+  if (metaEl && nMarks > 1) {
+    metaEl.textContent = (metaEl.textContent ? metaEl.textContent + " · " : "") + nMarks + " highlighted";
+  }
 }
 
-/** Render the body text, wrapping the first occurrence of `verbatim` in a
- *  highlight and scrolling to it. textContent + DOM nodes throughout (no
- *  innerHTML), so the source body is never an injection path. */
-function renderSourceBody(bodyEl, text, verbatim) {
-  if (!bodyEl) return;
+/** Render the body text, highlighting EVERY extracted verbatim: `primary` (the
+ *  clicked record) brightly + scrolled-to, the `others` (its siblings from the
+ *  same source) dimmed — so the source shows all its decisions/commitments in
+ *  context. textContent + DOM nodes throughout (no innerHTML). Returns the count
+ *  of highlights actually placed. */
+function renderSourceBody(bodyEl, text, primary, others) {
+  if (!bodyEl) return 0;
   bodyEl.textContent = "";
   if (!text) {
     bodyEl.textContent = "(no source text available)";
-    return;
+    return 0;
   }
-  const q = (verbatim || "").trim();
-  const idx = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
-  if (idx === -1) {
+  const lower = text.toLowerCase();
+  const seen = new Set();
+  const ranges = [];
+  const add = (q, isPrimary) => {
+    const needle = (q || "").trim();
+    if (!needle) return;
+    const key = needle.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    const idx = lower.indexOf(key);
+    if (idx === -1) return; // not found verbatim in the body — skip
+    ranges.push({ start: idx, end: idx + needle.length, primary: isPrimary });
+  };
+  add(primary, true);
+  for (const q of Array.isArray(others) ? others : []) add(q, false);
+
+  if (!ranges.length) {
     bodyEl.textContent = text;
-    return;
+    return 0;
   }
-  bodyEl.appendChild(document.createTextNode(text.slice(0, idx)));
-  const mark = document.createElement("mark");
-  mark.className = "source-hl";
-  mark.textContent = text.slice(idx, idx + q.length);
-  bodyEl.appendChild(mark);
-  bodyEl.appendChild(document.createTextNode(text.slice(idx + q.length)));
-  requestAnimationFrame(() => mark.scrollIntoView({ block: "center", behavior: "smooth" }));
+  // Earliest first; at a tie the primary wins. Then drop any overlaps greedily.
+  ranges.sort((a, b) => a.start - b.start || (b.primary === true) - (a.primary === true));
+  const placed = [];
+  let lastEnd = -1;
+  for (const r of ranges) {
+    if (r.start < lastEnd) continue;
+    placed.push(r);
+    lastEnd = r.end;
+  }
+  let cursor = 0;
+  let primaryMark = null;
+  for (const r of placed) {
+    if (r.start > cursor) bodyEl.appendChild(document.createTextNode(text.slice(cursor, r.start)));
+    const mark = document.createElement("mark");
+    mark.className = r.primary ? "source-hl source-hl-primary" : "source-hl source-hl-dim";
+    mark.textContent = text.slice(r.start, r.end);
+    bodyEl.appendChild(mark);
+    if (r.primary) primaryMark = mark;
+    cursor = r.end;
+  }
+  if (cursor < text.length) bodyEl.appendChild(document.createTextNode(text.slice(cursor)));
+  const target = primaryMark || bodyEl.querySelector("mark");
+  if (target) requestAnimationFrame(() => target.scrollIntoView({ block: "center", behavior: "smooth" }));
+  return placed.length;
 }
 
 /** Close the source reader and restore the full-width view. */

@@ -1878,6 +1878,44 @@ async fn fetch_document(
         .map_err(|e| format!("fetch_document: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-SOURCE — every decision/commitment extracted from ONE document,
+/// so the source reader can highlight ALL of them in the body (not just the one
+/// the user clicked). Proxies GET /api/documents/:id/decision-records (already on
+/// the bearer lane). Returns the raw `{ records, edges, ... }` JSON.
+#[tauri::command]
+async fn fetch_document_records(
+    state: tauri::State<'_, AppState>,
+    document_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(document_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/documents/{}/decision-records",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_document_records: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
 /// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
 /// JSON (records chronological + edges + derived states) for the client to
@@ -5562,6 +5600,7 @@ pub fn run() {
             fetch_entity_card,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
+            fetch_document_records,
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
             fetch_receipts,
             copy_receipts,

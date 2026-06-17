@@ -3242,11 +3242,19 @@ body.source-open .view:not([hidden]) { margin-right: var(--source-panel-w); }
   color: var(--text-secondary);
 }
 mark.source-hl {
-  background: rgba(255, 196, 84, 0.30);
-  color: var(--text-primary);
   border-radius: 3px;
   padding: 1px 2px;
+  color: var(--text-primary);
+}
+/* The clicked record — bright amber, scrolled into view. */
+mark.source-hl-primary {
+  background: rgba(255, 196, 84, 0.32);
   box-shadow: 0 0 0 1px rgba(255, 196, 84, 0.45);
+}
+/* Sibling decisions/commitments from the same source — present but quieter. */
+mark.source-hl-dim {
+  background: rgba(255, 196, 84, 0.13);
+  color: var(--text-secondary);
 }
 
 /* Source-type chip on record cards / receipts rows. Clickable → opens the panel. */
