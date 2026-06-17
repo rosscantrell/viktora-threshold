@@ -2395,11 +2395,43 @@ code {
   color: var(--glass-link);
 }
 
+/* WP-THRESHOLD-NAV — kind pills are clickable filters (toggle). */
+.edges-kind-pill {
+  cursor: pointer;
+  font-family: inherit;
+}
+.edges-kind-pill:hover { filter: brightness(1.12); }
+.edges-kind-pill[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+  font-weight: 700;
+}
+.edges-filtered-out { display: none !important; }
+/* Endpoint head holds the type chip + project chip(s) inline. */
+.edge-endpoint-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* Project filter on the Relationships view. */
+/* Relationships lens row (By kind / By project) — buttons reuse .decisions-lens-btn. */
+.edges-lenses {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.edges-lenses[hidden] { display: none; }
+
 .edges-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
+
+/* Each lens group wraps its collapsible header + body so a filtered/emptied
+   group hides cleanly (.edges-filtered-out). Inner layout is the reused
+   .decisions-group-* styling, matching the Log view's collapsible groups. */
 
 .edges-group-title {
   font-size: 10.5px;
@@ -2983,3 +3015,128 @@ code {
 .log-state-pill:hover {
   background: var(--glass-surface-hover);
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-NAV — persistent navigation shell.
+ * One sticky bar across every review view: back + breadcrumb (left) and
+ * primary destinations (right). Replaces the per-view footer back/home
+ * buttons (those are hidden below). Right padding clears the fixed
+ * top-right Collapse button.
+ * ════════════════════════════════════════════════════════════════════════ */
+.app-nav {
+  position: sticky;
+  top: 0;
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 120px 9px 16px;
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.app-nav[hidden] { display: none; }
+
+.app-nav-left { display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; }
+
+.app-nav-back {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  color: var(--glass-text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.app-nav-back[hidden] { display: none; }
+.app-nav-back:hover { background: var(--glass-surface-hover); }
+
+.app-nav-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.app-nav-crumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.app-nav-crumbs li::after {
+  content: "›";
+  color: var(--glass-text-faint);
+}
+.app-nav-crumbs li:last-child::after { content: ""; }
+.app-nav-crumb-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+.app-nav-crumb-link:hover { color: var(--glass-text); text-decoration: underline; }
+.app-nav-crumb-current {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.app-nav-dests { display: flex; align-items: center; gap: 4px; flex: none; }
+.app-nav-dest {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--glass-radius-sm);
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  line-height: 1.2;
+}
+.app-nav-dest:hover { background: var(--glass-surface); color: var(--glass-text); }
+.app-nav-dest[aria-current="page"] {
+  background: var(--glass-surface);
+  color: var(--glass-text);
+  border-color: var(--glass-border-strong);
+}
+.app-nav-dest-icon { font-size: 15px; padding: 5px 9px; }
+
+/* The persistent nav bar + the always-visible Collapse button supersede the
+ * per-view footer back/home/widget buttons. Hide the redundant ones; keep
+ * functional footer actions (Refresh / Copy / Sync / Definition). */
+#btn-log-home, #btn-log-back,
+#btn-edges-home, #btn-edges-back,
+#btn-decisions-home, #btn-decisions-back,
+#btn-receipts-home, #btn-receipts-back,
+#btn-entity-card-home, #btn-entity-card-back,
+#btn-plaud-back, #btn-onenote-browse-back,
+#btn-connections-back, #btn-auto-import-back {
+  display: none !important;
+}
+/* view-main's header destination row is replaced by the persistent nav bar. */
+.main-header-actions { display: none; }

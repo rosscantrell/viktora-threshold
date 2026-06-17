@@ -78,6 +78,30 @@
     </script>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-NAV — persistent navigation shell.
+         Lives OUTSIDE the <section> views (like the collapse button) so it
+         survives every showView() transition. Left: a back button + a
+         breadcrumb trail. Right: primary destinations + a Settings cog.
+         Shown/populated by setNav() in main.js; hidden via hideNav() on the
+         loading + wizard screens. Right padding clears the fixed top-right
+         Collapse button. This replaces the per-view footer back/home buttons
+         (feedback: "the button to go back… should go at the top").
+         ────────────────────────────────────────────────────────────────── -->
+    <nav id="app-nav" class="app-nav" aria-label="Primary navigation" hidden>
+      <div class="app-nav-left">
+        <button type="button" id="app-nav-back" class="app-nav-back" title="Back" aria-label="Back" hidden>←</button>
+        <ol class="app-nav-crumbs" id="app-nav-crumbs"></ol>
+      </div>
+      <div class="app-nav-dests" id="app-nav-dests" role="group" aria-label="Go to">
+        <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="main" title="Home" aria-label="Home">⌂</button>
+        <button type="button" class="app-nav-dest" data-dest="today">Today</button>
+        <button type="button" class="app-nav-dest" data-dest="log">Log</button>
+        <button type="button" class="app-nav-dest" data-dest="edges">Relationships</button>
+        <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="settings" title="Settings" aria-label="Settings">⚙</button>
+      </div>
+    </nav>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Loading view
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-loading" class="view">
@@ -271,8 +295,8 @@
         <p class="subtitle" id="main-subtitle">Connected</p>
         <div class="main-header-actions">
           <button type="button" id="btn-open-log" class="btn btn-link">Today</button>
-          <button type="button" id="btn-open-decisions" class="btn btn-link">Decisions</button>
-          <button type="button" id="btn-open-edges" class="btn btn-link">Links</button>
+          <button type="button" id="btn-open-decisions" class="btn btn-link">Log</button>
+          <button type="button" id="btn-open-edges" class="btn btn-link">Relationships</button>
           <button type="button" id="btn-open-configure" class="btn btn-link">Configure</button>
         </div>
       </header>
@@ -378,7 +402,7 @@
             <button type="button" class="log-filter-btn" data-filter="everyone" aria-pressed="true">Everyone</button>
             <button type="button" class="log-filter-btn" data-filter="mine" aria-pressed="false">Mine</button>
           </div>
-          <button type="button" id="btn-log-edges" class="btn btn-secondary">Links</button>
+          <button type="button" id="btn-log-edges" class="btn btn-secondary">Relationships</button>
           <button type="button" id="btn-log-refresh" class="btn btn-secondary">Refresh</button>
         </div>
       </header>
@@ -473,11 +497,16 @@
     <section id="view-edges" class="view view-edges" hidden>
       <header class="edges-header">
         <div class="edges-header-text">
-          <h1 class="edges-title">Links</h1>
+          <h1 class="edges-title">Relationships</h1>
           <p class="edges-sub" id="edges-sub">How your decisions &amp; commitments relate</p>
         </div>
         <button type="button" id="btn-edges-refresh" class="btn btn-secondary">Refresh</button>
       </header>
+
+      <div class="decisions-lenses edges-lenses" id="edges-lenses" role="group" aria-label="Organize by" hidden>
+        <button type="button" class="decisions-lens-btn" data-lens="kind" aria-pressed="true">By kind</button>
+        <button type="button" class="decisions-lens-btn" data-lens="project" aria-pressed="false">By project</button>
+      </div>
 
       <div class="edges-kinds-strip" id="edges-kinds-strip" hidden>
         <!-- per-kind count pills rendered by main.js -->
@@ -538,8 +567,8 @@
     <section id="view-decisions" class="view view-decisions" hidden>
       <header class="decisions-header">
         <div class="decisions-header-text">
-          <h1 class="decisions-title">Decisions</h1>
-          <p class="decisions-sub" id="decisions-sub">By project</p>
+          <h1 class="decisions-title">Log</h1>
+          <p class="decisions-sub" id="decisions-sub">Decisions &amp; commitments</p>
         </div>
         <div class="decisions-header-actions">
           <button type="button" id="btn-decisions-home" class="btn btn-secondary">⌂ Main</button>
@@ -686,8 +715,8 @@
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-connections" class="view view-connections" hidden>
       <header class="connections-header">
-        <h1 class="connections-title">Connections</h1>
-        <p class="connections-subtitle">Connected Recorders &amp; integrations.</p>
+        <h1 class="connections-title">Sources</h1>
+        <p class="connections-subtitle">Where your decisions &amp; commitments come from.</p>
       </header>
 
       <div class="connections-card" id="connection-plaud">

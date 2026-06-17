@@ -147,6 +147,96 @@ function showView(id) {
   }
 }
 
+// ───────── WP-THRESHOLD-NAV — persistent navigation shell ─────────
+//
+// One bar (#app-nav, in index.html, OUTSIDE the view sections) carries back +
+// breadcrumb + primary destinations across every review view, so wayfinding is
+// always at the TOP (feedback: back buttons were buried in footers and users
+// couldn't get back). Each enter* function calls setNav(); hideNav() blanks it
+// on the loading + wizard screens. Back is breadcrumb-driven: an explicit
+// `back` fn wins, else it re-enters the second-to-last crumb.
+
+// Destination → enter* fn. Declarations below are hoisted, so this map is safe
+// to build at module-eval time (main.js is deferred → DOM + decls both ready).
+const NAV_DEST_FNS = {
+  main: () => goHome(),
+  today: () => enterLogView(),
+  log: () => enterDecisionsView(undefined, { from: "home" }),
+  edges: () => enterEdgesView(),
+  settings: () => enterStandaloneConfigure(),
+};
+
+let _navBackFn = null;
+
+function hideNav() {
+  const nav = document.getElementById("app-nav");
+  if (nav) nav.setAttribute("hidden", "");
+}
+
+/**
+ * Populate + show the nav bar.
+ * @param {Array<{label:string, go?:Function}>} crumbs — last entry is the
+ *        current page (its `go` is ignored).
+ * @param {{active?:'main'|'today'|'log'|'edges', back?:Function|null}} opts
+ */
+function setNav(crumbs, opts = {}) {
+  const nav = document.getElementById("app-nav");
+  if (!nav) return;
+  nav.removeAttribute("hidden");
+
+  // Breadcrumb trail — rebuilt each call (fresh listeners, no leak).
+  const ol = document.getElementById("app-nav-crumbs");
+  ol.textContent = "";
+  crumbs.forEach((c, i) => {
+    const li = document.createElement("li");
+    const isLast = i === crumbs.length - 1;
+    if (!isLast && typeof c.go === "function") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "app-nav-crumb-link";
+      btn.textContent = c.label;
+      btn.addEventListener("click", c.go);
+      li.appendChild(btn);
+    } else {
+      const span = document.createElement("span");
+      span.className = isLast ? "app-nav-crumb-current" : "app-nav-crumb-link";
+      span.textContent = c.label;
+      li.appendChild(span);
+    }
+    ol.appendChild(li);
+  });
+
+  // Back button — explicit `back` wins; else second-to-last crumb; else hide.
+  let backFn = null;
+  if (opts.back === null) backFn = null;
+  else if (typeof opts.back === "function") backFn = opts.back;
+  else if (crumbs.length > 1 && typeof crumbs[crumbs.length - 2].go === "function") {
+    backFn = crumbs[crumbs.length - 2].go;
+  }
+  _navBackFn = backFn;
+  const backBtn = document.getElementById("app-nav-back");
+  if (backBtn) {
+    if (backFn) backBtn.removeAttribute("hidden");
+    else backBtn.setAttribute("hidden", "");
+  }
+
+  // Active destination highlight.
+  for (const b of nav.querySelectorAll(".app-nav-dest")) {
+    if (opts.active && b.dataset.dest === opts.active) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+  }
+}
+
+// Wire the nav bar once (back button + destination buttons).
+{
+  const backBtn = document.getElementById("app-nav-back");
+  if (backBtn) backBtn.addEventListener("click", () => { if (_navBackFn) _navBackFn(); });
+  for (const b of document.querySelectorAll(".app-nav-dest")) {
+    const fn = NAV_DEST_FNS[b.dataset.dest];
+    if (fn) b.addEventListener("click", fn);
+  }
+}
+
 // ───────── Bootstrap ─────────
 
 async function bootstrap() {
@@ -237,7 +327,7 @@ async function bootstrap() {
 
     // WP-THRESHOLD-DECISION-ORG — the Decisions browser (#decisions).
     if (window.location.hash === "#decisions") {
-      enterDecisionsView();
+      enterDecisionsView(undefined, { from: "home" });
       return;
     }
 
@@ -385,6 +475,7 @@ async function wireBackendEvents() {
 function enterWizardWelcome() {
   state.inWizard = true;
   showView("view-welcome");
+  hideNav();
 }
 
 function enterWizardConfigure() {
@@ -396,6 +487,7 @@ function enterWizardConfigure() {
   document.getElementById("btn-back-to-main").setAttribute("hidden", "");
   document.getElementById("btn-save").textContent = "Next";
   showView("view-configure");
+  hideNav();
   // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
   // refresh so the counter line below the toggle stays current while
   // the Configure pane is visible. Safe in the wizard path too (the
@@ -407,6 +499,7 @@ function enterWizardConfigure() {
 function enterWizardDone(cfg) {
   state.lastConfig = cfg;
   showView("view-done");
+  hideNav();
 }
 
 function finishWizard() {
@@ -425,6 +518,7 @@ function enterStandaloneConfigure() {
   document.getElementById("btn-back-to-main").removeAttribute("hidden");
   document.getElementById("btn-save").textContent = "Save";
   showView("view-configure");
+  setNav([{ label: "Settings" }], { back: () => goHome() });
   // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
   // refresh so the counter line below the toggle stays current while
   // the Configure pane is visible.
@@ -628,6 +722,7 @@ async function handleAutoWatchToggle(e) {
 async function enterMainView(cfg) {
   state.inWizard = false;
   showView("view-main");
+  setNav([{ label: "Home" }], { active: "main", back: null });
 
   const subtitleEl = document.getElementById("main-subtitle");
   if (subtitleEl && cfg) {
@@ -734,6 +829,7 @@ function captureAttribution(documentId, submitterByDoc, viewerEmail) {
 async function enterPostCaptureView(tidbit, recordsResp) {
   state.inWizard = false;
   showView("view-tidbit");
+  setNav([{ label: "Just captured" }], { back: () => goHome() });
 
   const items =
     recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [];
@@ -1073,6 +1169,7 @@ if (postcaptureLogBtn) {
 async function enterLogView() {
   state.inWizard = false;
   showView("view-log");
+  setNav([{ label: "Today" }], { active: "today", back: () => goHome() });
 
   const statusEl = document.getElementById("log-status");
   const attentionList = document.getElementById("log-attention-list");
@@ -1147,7 +1244,7 @@ async function enterLogView() {
       pill.className = "log-state-pill";
       pill.dataset.state = s.key;
       pill.textContent = `${n} ${s.label.toLowerCase()}`;
-      pill.addEventListener("click", () => enterDecisionsView(s.key));
+      pill.addEventListener("click", () => enterDecisionsView(s.key, { from: "today" }));
       statesStrip.appendChild(pill);
       if (n > 0) any = true;
     }
@@ -1443,6 +1540,15 @@ const EDGE_KIND_META = {
 // subtitle accurate after a dismiss removes a card (records don't change, the
 // connection count does).
 let _edgesRecordCount = 0;
+// WP-THRESHOLD-NAV — active kind filter for the Relationships view (null = all).
+let _edgesKindFilter = null;
+// WP-THRESHOLD-NAV — Relationships grouping lens ("kind" | "project") + cached
+// fetch result so a lens toggle re-renders without re-fetching.
+let _edgesLens = "kind";
+let _edgesData = null;
+// WP-THRESHOLD-NAV — documentId → projects[] so each relationship endpoint is
+// traceable to its project. Populated on Relationships/Log entry.
+let _edgesDocProjects = new Map();
 
 /**
  * Open the Connections view: the full cross-record edge graph, each edge shown
@@ -1452,9 +1558,141 @@ let _edgesRecordCount = 0;
  * endpoints. No recompute, no LLM. (Answers the most-asked question on the log:
  * "what are these dependencies referring to?")
  */
+// WP-THRESHOLD-NAV — clicking a kind pill filters the Relationships list to that
+// kind (toggle; clicking the active pill clears it). Hides non-matching group
+// titles + cards via a class so refreshEdgeTallies' counts stay truthful (it
+// counts every .edge-card in the DOM, hidden or not).
+function applyEdgesFilters() {
+  const kindsStrip = document.getElementById("edges-kinds-strip");
+  const listEl = document.getElementById("edges-list");
+  const kf = _edgesKindFilter;
+  if (kindsStrip) {
+    for (const pill of kindsStrip.querySelectorAll(".edges-kind-pill")) {
+      pill.setAttribute("aria-pressed", kf !== null && pill.dataset.kind === kf ? "true" : "false");
+    }
+  }
+  if (!listEl) return;
+  // Hide a card unless it matches the active kind filter.
+  for (const card of listEl.querySelectorAll(".edge-card")) {
+    card.classList.toggle("edges-filtered-out", !(kf === null || card.dataset.kind === kf));
+  }
+  // A group shows only if it still has at least one visible card.
+  for (const grp of listEl.querySelectorAll(".edges-group")) {
+    grp.classList.toggle("edges-filtered-out", !grp.querySelector(".edge-card:not(.edges-filtered-out)"));
+  }
+}
+
+// WP-THRESHOLD-NAV — render the Relationships list grouped by the active lens
+// (By kind: conflicts/dependencies/… sections; By project: project-name sections,
+// each edge filed under the first project of either endpoint). Uses the cached
+// _edgesData so a lens toggle re-renders without re-fetching. Mirrors the Log
+// view's lens model; the kind pills remain an orthogonal filter.
+function renderEdgesList() {
+  const listEl = document.getElementById("edges-list");
+  if (!listEl || !_edgesData) return;
+  const { edges, byId, baseUrl } = _edgesData;
+  listEl.innerHTML = "";
+  const severityRank = (s) => (s === "high" ? 0 : s === "medium" ? 1 : 2);
+  const sortEdges = (arr) => arr.slice().sort((a, b) =>
+    severityRank(a.severity) - severityRank(b.severity) || (a.edgeId || "").localeCompare(b.edgeId || ""));
+
+  const groups = [];
+  if (_edgesLens === "project") {
+    // Same project derivation + "Other" catch-all + largest-first ordering as
+    // the Log view (groupRecords), so the two read consistently. A relationship
+    // is filed under the first project of either endpoint's record.
+    const OTHER = "__other__";
+    const firstProjectOf = (r) => {
+      const ps = r ? (_edgesDocProjects.get(r.documentId) || []) : [];
+      return ps.length ? ps[0] : OTHER;
+    };
+    // Record count per project across ALL records (byId holds the full set),
+    // so we can order the project groups the SAME way the Log view does — by
+    // record count, descending — and the two views line up for comparison.
+    const recCount = new Map();
+    for (const r of byId.values()) {
+      const p = firstProjectOf(r);
+      recCount.set(p, (recCount.get(p) || 0) + 1);
+    }
+    const m = new Map();
+    const primaryProject = (edge) => {
+      for (const rid of [edge.recordA, edge.recordB]) {
+        const r = byId.get(rid);
+        const ps = r ? (_edgesDocProjects.get(r.documentId) || []) : [];
+        if (ps.length) return ps[0];
+      }
+      return OTHER;
+    };
+    for (const e of edges) {
+      const k = primaryProject(e);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(e);
+    }
+    [...m.keys()].filter((k) => k !== OTHER)
+      .sort((a, b) => (recCount.get(b) || 0) - (recCount.get(a) || 0))
+      .forEach((k) => groups.push({ label: prettySlug(k), edges: m.get(k) }));
+    if (m.has(OTHER)) groups.push({ label: "Other", edges: m.get(OTHER), muted: true });
+  } else {
+    for (const kind of EDGE_KIND_ORDER) {
+      const g = edges.filter((e) => e.kind === kind);
+      if (!g.length) continue;
+      const meta = EDGE_KIND_META[kind];
+      groups.push({ label: g.length === 1 ? meta.label : meta.plural, edges: g });
+    }
+  }
+
+  for (const g of groups) {
+    const wrap = document.createElement("div");
+    wrap.className = "edges-group";
+
+    // Collapsible header — mirrors the Log view's groups (chevron + name +
+    // count). Default expanded so the relationships stay visible; click to fold.
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "decisions-group-title";
+    head.setAttribute("aria-expanded", "true");
+    if (g.muted) head.dataset.other = "true"; // muted styling for the "Other" group, like the Log
+
+    const chev = document.createElement("span");
+    chev.className = "decisions-group-chevron";
+    chev.textContent = "▾";
+    chev.setAttribute("aria-hidden", "true");
+    head.appendChild(chev);
+
+    const name = document.createElement("span");
+    name.className = "decisions-group-name";
+    name.textContent = g.label;
+    head.appendChild(name);
+
+    const count = document.createElement("span");
+    count.className = "decisions-group-count";
+    count.textContent = `${g.edges.length} ${g.edges.length === 1 ? "link" : "links"}`;
+    head.appendChild(count);
+
+    const body = document.createElement("div");
+    body.className = "decisions-group-body";
+    for (const edge of sortEdges(g.edges)) body.appendChild(renderEdgeCard(edge, byId, baseUrl));
+
+    head.addEventListener("click", () => {
+      const willExpand = body.hidden;
+      body.hidden = !willExpand;
+      head.setAttribute("aria-expanded", willExpand ? "true" : "false");
+      chev.textContent = willExpand ? "▾" : "▸";
+    });
+
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+    listEl.appendChild(wrap);
+  }
+  applyEdgesFilters();
+}
+
 async function enterEdgesView() {
   state.inWizard = false;
   showView("view-edges");
+  setNav([{ label: "Relationships" }], { active: "edges", back: () => goHome() });
+  _edgesKindFilter = null;
+  _edgesLens = "kind";
 
   const listEl = document.getElementById("edges-list");
   const statusEl = document.getElementById("edges-status");
@@ -1492,12 +1730,26 @@ async function enterEdgesView() {
     return;
   }
 
+  try {
   // Index records by recordId — the join key. Each entry is { record, lifecycle, state }.
   const items = Array.isArray(data && data.records) ? data.records : [];
   const byId = new Map();
   for (const item of items) {
     const rec = item && item.record ? item.record : item;
     if (rec && rec.recordId) byId.set(rec.recordId, rec);
+  }
+
+  // documentId → projects[] so each relationship endpoint is traceable to its
+  // project (best-effort; chips omitted if /api/data fails).
+  _edgesDocProjects = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id) _edgesDocProjects.set(d.id, Array.isArray(d.projects) ? d.projects : []);
+    }
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (edge projects omitted):", err);
   }
   const edges = Array.isArray(data && data.edges) ? data.edges : [];
 
@@ -1535,36 +1787,42 @@ async function enterEdgesView() {
       const group = byKind.get(kind);
       if (!group || group.length === 0) continue;
       const meta = EDGE_KIND_META[kind];
-      const pill = document.createElement("span");
+      const pill = document.createElement("button");
+      pill.type = "button";
       pill.className = "edges-kind-pill";
       pill.dataset.kind = kind;
+      pill.setAttribute("aria-pressed", "false");
       const kindWord = (group.length === 1 ? meta.label : meta.plural).toLowerCase();
       pill.textContent = `${meta.icon} ${group.length} ${kindWord}`;
+      pill.addEventListener("click", () => {
+        _edgesKindFilter = _edgesKindFilter === kind ? null : kind;
+        applyEdgesFilters();
+      });
       kindsStrip.appendChild(pill);
       any = true;
     }
     kindsStrip.hidden = !any;
   }
 
-  // Render groups in display order; severity-high edges first within a group.
-  if (listEl) {
-    const severityRank = (s) => (s === "high" ? 0 : s === "medium" ? 1 : 2);
-    for (const kind of EDGE_KIND_ORDER) {
-      const group = byKind.get(kind);
-      if (!group || group.length === 0) continue;
-      const meta = EDGE_KIND_META[kind];
+  // Cache the fetched result so a lens toggle re-renders without re-fetching,
+  // then render the list grouped by the active lens. Reflect the lens row.
+  _edgesData = { edges, byId, baseUrl };
+  const lensRow = document.getElementById("edges-lenses");
+  if (lensRow) {
+    lensRow.hidden = false;
+    for (const b of lensRow.querySelectorAll(".decisions-lens-btn")) {
+      b.setAttribute("aria-pressed", b.dataset.lens === _edgesLens ? "true" : "false");
+    }
+  }
+  renderEdgesList();
 
-      const groupTitle = document.createElement("h2");
-      groupTitle.className = "edges-group-title";
-      groupTitle.dataset.kind = kind;
-      groupTitle.textContent = group.length === 1 ? meta.label : meta.plural;
-      listEl.appendChild(groupTitle);
-
-      group
-        .slice()
-        .sort((a, b) => severityRank(a.severity) - severityRank(b.severity)
-          || (a.edgeId || "").localeCompare(b.edgeId || ""))
-        .forEach((edge) => listEl.appendChild(renderEdgeCard(edge, byId, baseUrl)));
+  applyEdgesFilters();
+  } catch (e) {
+    console.error("[edges] render failed:", e);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent = "Relationships failed to render: " + (e && e.message ? e.message : String(e));
     }
   }
 }
@@ -1582,6 +1840,15 @@ function renderEdgeCard(edge, byId, baseUrl) {
   card.dataset.severity = edge.severity || "";
   card.dataset.edgeId = edge.edgeId || "";
   card.dataset.status = edge.status || "proposed";
+  // Union of both endpoints' projects — drives the project filter + traceability.
+  {
+    const pu = new Set();
+    for (const rid of [edge.recordA, edge.recordB]) {
+      const r = byId.get(rid);
+      if (r) for (const p of (_edgesDocProjects.get(r.documentId) || [])) pu.add(p);
+    }
+    card.dataset.projects = [...pu].join("|");
+  }
 
   // Header: kind label + severity pill (only when high/medium — low is the
   // default, unmarked) + a Confirmed pill once a human has confirmed the edge.
@@ -1719,18 +1986,14 @@ function refreshEdgeTallies() {
   const statusEl = document.getElementById("edges-status");
   if (!listEl) return;
 
+  // Drop any group whose cards were all dismissed.
+  for (const grp of [...listEl.querySelectorAll(".edges-group")]) {
+    if (!grp.querySelector(".edge-card")) grp.remove();
+  }
+
   const cards = [...listEl.querySelectorAll(".edge-card")];
   const counts = {};
   for (const c of cards) counts[c.dataset.kind] = (counts[c.dataset.kind] || 0) + 1;
-
-  // Group titles: update or remove.
-  for (const title of [...listEl.querySelectorAll(".edges-group-title")]) {
-    const kind = title.dataset.kind;
-    const n = counts[kind] || 0;
-    const meta = EDGE_KIND_META[kind];
-    if (n === 0) title.remove();
-    else if (meta) title.textContent = n === 1 ? meta.label : meta.plural;
-  }
 
   // Kind pills: update or remove.
   if (kindsStrip) {
@@ -1755,6 +2018,7 @@ function refreshEdgeTallies() {
     statusEl.dataset.kind = "empty";
     statusEl.textContent = "All connections reviewed. Nothing left to confirm or dismiss.";
   }
+  applyEdgesFilters();
 }
 
 /** One endpoint inside a connection card: type chip + summary + owner·due·source. */
@@ -1775,6 +2039,13 @@ function renderEdgeEndpoint(rec, baseUrl) {
   chip.dataset.type = rec.type || "";
   chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   head.appendChild(chip);
+  // Project chip(s) — trace this record back to its project (WP-THRESHOLD-NAV).
+  for (const p of (_edgesDocProjects.get(rec.documentId) || []).slice(0, 2)) {
+    const pc = document.createElement("span");
+    pc.className = "decision-project-chip";
+    pc.textContent = prettySlug(p);
+    head.appendChild(pc);
+  }
   ep.appendChild(head);
 
   const summary = document.createElement("p");
@@ -1824,6 +2095,18 @@ if (edgesRefreshBtn) {
   });
 }
 
+// Lens toggle on the Relationships view — By kind / By project (mirrors the Log
+// view's lenses). Re-renders the grouped list from cached data; no re-fetch.
+for (const b of document.querySelectorAll("#edges-lenses .decisions-lens-btn")) {
+  b.addEventListener("click", () => {
+    _edgesLens = b.dataset.lens || "kind";
+    for (const x of document.querySelectorAll("#edges-lenses .decisions-lens-btn")) {
+      x.setAttribute("aria-pressed", x === b ? "true" : "false");
+    }
+    renderEdgesList();
+  });
+}
+
 const openEdgesBtn = document.getElementById("btn-open-edges");
 if (openEdgesBtn) {
   openEdgesBtn.addEventListener("click", () => {
@@ -1847,6 +2130,14 @@ async function enterEntityCardView(entity) {
   state.inWizard = false;
   _entityCardReturn = entity;
   showView("view-entity-card");
+  setNav(
+    [
+      { label: "Today", go: () => enterLogView() },
+      { label: "Receipts · " + prettySlug(entity), go: () => enterReceiptsView(entity) },
+      { label: "Definition" },
+    ],
+    { back: () => enterReceiptsView(_entityCardReturn || entity) },
+  );
 
   const titleEl = document.getElementById("entity-card-title");
   const proseEl = document.getElementById("entity-card-prose");
@@ -1945,6 +2236,12 @@ let _decisionsCtx = null;
 let _decisionsFilter = "all"; // all | open | resolved | superseded
 let _decisionsLens = "project"; // project | deadline | people
 let _decisionsExpanded = new Set(); // group keys the user has expanded (default: collapsed)
+// WP-THRESHOLD-NAV — arrival context for the Log view. When Log is reached as a
+// drill-down from a Today state pill, this holds the return thunk (→ Today) so
+// the breadcrumb reads "Today › Log" and Back returns to Today, not Home. Null
+// when Log was opened as a top-level destination. Only (re)set on navigation —
+// Refresh re-enters with no navCtx and must preserve whatever's here.
+let _decisionsReturn = null;
 const PROJECT_OTHER = "__other__";
 
 /** Bucket a record's due date into a deadline group (muted = the catch-all). */
@@ -1999,9 +2296,18 @@ function groupRecords(items, lens, docProjects) {
  * first project, an "Other" bucket holds the unattached, every card shows its
  * project chip(s), and the Open/Resolved/Replaced pills filter across projects.
  */
-async function enterDecisionsView(initialFilter) {
+async function enterDecisionsView(initialFilter, navCtx) {
   state.inWizard = false;
   showView("view-decisions");
+  // Arrival-aware breadcrumb. Update the return target only when navigated to
+  // (navCtx present); Refresh re-enters with no navCtx and preserves context.
+  if (navCtx?.from === "today") _decisionsReturn = () => enterLogView();
+  else if (navCtx?.from === "home") _decisionsReturn = null;
+  if (_decisionsReturn) {
+    setNav([{ label: "Today", go: _decisionsReturn }, { label: "Log" }], { active: "log", back: _decisionsReturn });
+  } else {
+    setNav([{ label: "Log" }], { active: "log", back: () => goHome() });
+  }
   if (initialFilter) _decisionsFilter = initialFilter;
 
   const listEl = document.getElementById("decisions-list");
@@ -2038,6 +2344,9 @@ async function enterDecisionsView(initialFilter) {
   } catch (err) {
     console.warn("[main] fetch_documents failed (projects omitted):", err);
   }
+  // Share the map so the conflicts-lens edge cards (renderEdgeEndpoint) can
+  // trace each record to its project too.
+  _edgesDocProjects = docProjects;
 
   const items = Array.isArray(data && data.records) ? data.records : [];
   // For the Conflicts lens: index records by id (to ground each edge) + base URL (source links).
@@ -2279,7 +2588,7 @@ function goHome() {
 
 // Decisions-view wiring: entry, filter pills, Home / Back / Refresh.
 const openDecisionsBtn = document.getElementById("btn-open-decisions");
-if (openDecisionsBtn) openDecisionsBtn.addEventListener("click", () => enterDecisionsView());
+if (openDecisionsBtn) openDecisionsBtn.addEventListener("click", () => enterDecisionsView(undefined, { from: "home" }));
 
 for (const btn of document.querySelectorAll(".decisions-filter-btn")) {
   btn.addEventListener("click", () => {
@@ -2325,6 +2634,13 @@ let currentReceipts = null;
 async function enterReceiptsView(entity) {
   state.inWizard = false;
   showView("view-receipts");
+  setNav(
+    [
+      { label: "Today", go: () => enterLogView() },
+      { label: "Receipts · " + prettySlug(entity) },
+    ],
+    { back: () => enterLogView() },
+  );
 
   const titleEl = document.getElementById("receipts-title");
   const subEl = document.getElementById("receipts-sub");
@@ -2725,6 +3041,7 @@ if (receiptsBackBtn) {
 async function enterPlaudQueueView() {
   state.inWizard = false;
   showView("view-plaud-queue");
+  setNav([{ label: "Plaud Sync Queue" }], { back: () => goHome() });
   await refreshPlaudQueue();
 }
 
@@ -3096,6 +3413,7 @@ async function handlePlaudSyncNow() {
 async function enterOneNoteBrowseView() {
   state.inWizard = false;
   showView("view-onenote-browse");
+  setNav([{ label: "OneNote" }], { back: () => goHome() });
   // Hide any leftover progress UI from a previous bulk-send session.
   hideOneNoteBulkSendProgress();
   await refreshOneNoteBrowse(/* force */ false);
@@ -3682,6 +4000,7 @@ function dismissToast(id) {
 async function enterConnectionsView() {
   state.inWizard = false;
   showView("view-connections");
+  setNav([{ label: "Sources" }], { back: () => goHome() });
 
   let cached = null;
   try {
@@ -3894,6 +4213,7 @@ function normalizeAutoImportConfig(cfg) {
 async function enterAutoImportView() {
   state.inWizard = false;
   showView("view-auto-import");
+  setNav([{ label: "Auto-import" }], { back: () => goHome() });
   state.autoImport.mode = "list";
 
   // Persisted config first (fast), render, then enrich with the available
