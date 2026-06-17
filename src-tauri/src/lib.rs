@@ -4595,7 +4595,7 @@ fn build_widget_menu(
     // WP-PLAUD-07b — Connections sits with Settings (workspace controls).
     // Lives below Settings so the high-frequency capture/send items stay
     // at the top of the menu.
-    let connections = MenuItem::with_id(app, MENU_CONNECTIONS, "Connections…", true, None::<&str>)?;
+    let connections = MenuItem::with_id(app, MENU_CONNECTIONS, "Sources…", true, None::<&str>)?;
     // WP-AUTO-IMPORT — sits next to Connections (both are "set up where your
     // content comes from" surfaces).
     let auto_import = MenuItem::with_id(app, MENU_AUTO_IMPORT, "Auto-import…", true, None::<&str>)?;
