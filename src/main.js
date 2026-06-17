@@ -1136,7 +1136,8 @@ async function openSourcePanel(documentId, verbatim) {
     }
     metaEl.textContent = bits.join(" · ");
   }
-  _sourceCurrent = { title: detail.title || documentId, body: detail.body || "", documentId };
+  const displayBody = reflowSourceBody(detail.body || "");
+  _sourceCurrent = { title: detail.title || documentId, body: displayBody, documentId };
 
   // Gather EVERY verified verbatim extracted from this source so they all get
   // highlighted (the clicked one stays primary). Best-effort: on failure we fall
@@ -1157,17 +1158,46 @@ async function openSourcePanel(documentId, verbatim) {
     console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
   }
 
-  const nMarks = renderSourceBody(bodyEl, detail.body || "", verbatim, others);
+  const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others);
   if (metaEl && nMarks > 1) {
     metaEl.textContent = (metaEl.textContent ? metaEl.textContent + " · " : "") + nMarks + " highlighted";
   }
 }
 
+/** Clean a captured source body for display: non-breaking spaces → normal
+ *  spaces (Outlook/OneNote capture is full of them), and stack run-together
+ *  email header fields (From:/Sent:/To:/…) onto their own lines so a quoted
+ *  reply thread reads as a header block instead of one wrapped blob. */
+function reflowSourceBody(text) {
+  let s = String(text || "").replace(/\u00a0/g, " ");
+  // Break before each capitalised email-header field so a run-together quoted
+  // thread stacks (e.g. "\u20264:49 PMTo: \u2026" \u2192 newline before "To:"). Case-sensitive
+  // + no \b, so it catches "PMTo:"/"AMTo:" while lowercase prose ("\u2026to:") is
+  // left alone.
+  s = s.replace(/ *(From|Sent|To|Cc|Bcc|Subject|Importance): */g, "\n$1: ");
+  return s.replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+}
+
+/** Find a verbatim in the (reflowed) body, whitespace-insensitively (the capture
+ *  collapses/varies whitespace), returning {start,end} in the body or null. */
+function findVerbatimRange(haystack, needle) {
+  const cleaned = String(needle || "").replace(/\u00a0/g, " ").trim();
+  if (!cleaned) return null;
+  const pattern = cleaned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  let m;
+  try {
+    m = new RegExp(pattern, "i").exec(haystack);
+  } catch {
+    return null;
+  }
+  return m ? { start: m.index, end: m.index + m[0].length } : null;
+}
+
 /** Render the body text, highlighting EVERY extracted verbatim: `primary` (the
  *  clicked record) brightly + scrolled-to, the `others` (its siblings from the
  *  same source) dimmed — so the source shows all its decisions/commitments in
- *  context. textContent + DOM nodes throughout (no innerHTML). Returns the count
- *  of highlights actually placed. */
+ *  context. `text` is assumed already reflowed. textContent + DOM nodes (no
+ *  innerHTML). Returns the count of highlights actually placed. */
 function renderSourceBody(bodyEl, text, primary, others) {
   if (!bodyEl) return 0;
   bodyEl.textContent = "";
@@ -1175,18 +1205,15 @@ function renderSourceBody(bodyEl, text, primary, others) {
     bodyEl.textContent = "(no source text available)";
     return 0;
   }
-  const lower = text.toLowerCase();
   const seen = new Set();
   const ranges = [];
   const add = (q, isPrimary) => {
-    const needle = (q || "").trim();
-    if (!needle) return;
-    const key = needle.toLowerCase();
-    if (seen.has(key)) return;
+    const key = String(q || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!key || seen.has(key)) return;
     seen.add(key);
-    const idx = lower.indexOf(key);
-    if (idx === -1) return; // not found verbatim in the body — skip
-    ranges.push({ start: idx, end: idx + needle.length, primary: isPrimary });
+    const range = findVerbatimRange(text, q);
+    if (!range) return; // not found in the body — skip
+    ranges.push({ start: range.start, end: range.end, primary: isPrimary });
   };
   add(primary, true);
   for (const q of Array.isArray(others) ? others : []) add(q, false);
