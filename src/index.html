@@ -805,6 +805,25 @@
     </div>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-SOURCE — in-app source reader (split-view, docks right).
+         Opened by openSourcePanel(); the active view shrinks left via
+         body.source-open. Renders the captured source (email / Plaud transcript
+         / OneNote text) beside the decision, with the verbatim quote highlighted.
+         ────────────────────────────────────────────────────────────────── -->
+    <aside id="source-panel" class="source-panel" hidden aria-label="Source document">
+      <header class="source-panel-head">
+        <div class="source-panel-titlewrap">
+          <span class="source-panel-badge" id="source-panel-badge"></span>
+          <h2 class="source-panel-title" id="source-panel-title"></h2>
+          <p class="source-panel-meta" id="source-panel-meta"></p>
+        </div>
+        <button type="button" id="source-panel-close" class="source-panel-close" aria-label="Close source">✕</button>
+      </header>
+      <div class="source-panel-status" id="source-panel-status" hidden></div>
+      <article class="source-panel-body" id="source-panel-body"></article>
+    </aside>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Toast stack (D-12-18 structured-toast component)
          ────────────────────────────────────────────────────────────────── -->
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>

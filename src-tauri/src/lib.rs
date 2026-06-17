@@ -1837,6 +1837,47 @@ async fn fetch_entity_card(
         .map_err(|e| format!("fetch_entity_card: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-SOURCE — the in-app source reader. Proxies GET /api/document/:id
+/// and returns the document detail JSON, which (server-side) now folds in the
+/// raw `body` text so the split-view panel renders the source (email / Plaud
+/// transcript / OneNote text) beside the decision without a browser round-trip.
+/// Mirrors fetch_entity_card's bearer-auth + URL-encode pattern. Surfaces errors
+/// so the panel can show an unreachable state. `document_id` is URL-encoded so
+/// ids with reserved chars (OneNote GUIDs) transmit intact.
+#[tauri::command]
+async fn fetch_document(
+    state: tauri::State<'_, AppState>,
+    document_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(document_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/document/{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_document: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
 /// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
 /// JSON (records chronological + edges + derived states) for the client to
@@ -5472,6 +5513,8 @@ pub fn run() {
             undismiss_record,
             // WP-THRESHOLD-LOG-UX — per-entity definition card
             fetch_entity_card,
+            // WP-THRESHOLD-SOURCE — in-app source reader
+            fetch_document,
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
             fetch_receipts,
             copy_receipts,

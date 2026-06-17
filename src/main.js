@@ -936,6 +936,211 @@ function clampText(s, max) {
   return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + "…";
 }
 
+// ───────── WP-THRESHOLD-SOURCE — in-app source reader (split view) ─────────
+//
+// Click a source badge (or a Receipts "source ↗") and the captured source —
+// email / Plaud transcript / OneNote text — opens in a panel BESIDE the current
+// view, with the record's verbatim quote highlighted. No browser round-trip, and
+// it sidesteps the /document/:id → /login redirect on auth-gated pilots.
+
+/** documentId → document (from /api/data), carrying sourceMetadata for the
+ *  source-type badge. Lazily loaded + cached for the session. */
+let _docsById = null;
+let _docsByIdPromise = null;
+
+/** Load (once) the documentId → doc map from /api/data. Best-effort: a failure
+ *  leaves badges/source unavailable rather than throwing into a view. Concurrent
+ *  callers share one in-flight fetch (no duplicate /api/data round-trips). */
+async function loadDocsMap() {
+  if (_docsById) return _docsById;
+  if (_docsByIdPromise) return _docsByIdPromise;
+  _docsByIdPromise = (async () => {
+    const map = new Map();
+    try {
+      const resp = await tauri.core.invoke("fetch_documents");
+      const docs = resp && Array.isArray(resp.documents) ? resp.documents : [];
+      for (const d of docs) if (d && d.id) map.set(d.id, d);
+    } catch (err) {
+      console.warn("[main] loadDocsMap failed:", err);
+    }
+    _docsById = map;
+    return map;
+  })();
+  return _docsByIdPromise;
+}
+
+/** Map a document's sourceMetadata to a display {icon, label, detail}. The
+ *  captureTool is the primary signal; details are best-effort per source. */
+function sourceFromDoc(doc) {
+  const sm = (doc && doc.sourceMetadata) || {};
+  const tool = (sm.captureTool || "").toLowerCase();
+  const method = (sm.captureMethod || "").toLowerCase();
+  if (tool === "plaud" || method === "recording-import") {
+    const mins = sm.durationMs ? Math.round(sm.durationMs / 60000) : null;
+    const speakers = sm.originalSpeakerMapping
+      ? Object.values(sm.originalSpeakerMapping).filter((s) => s && !/^Speaker \d+$/i.test(s))
+      : [];
+    const parts = [];
+    if (mins) parts.push(mins + " min");
+    if (speakers.length) {
+      parts.push(speakers[0] + (speakers.length > 1 ? ` +${speakers.length - 1}` : ""));
+    }
+    return { icon: "🎙️", label: "Plaud", detail: parts.join(" · ") };
+  }
+  if (tool === "onenote" || method === "com-capture") {
+    return { icon: "📓", label: "OneNote", detail: [sm.notebookName, sm.sectionName].filter(Boolean).join(" / ") };
+  }
+  if (tool === "outlook-addin" || tool === "outlook") {
+    return { icon: "📧", label: "Email", detail: "" };
+  }
+  if (/teams/.test(tool)) {
+    return { icon: "💬", label: "Teams", detail: "" };
+  }
+  if (tool === "threshold" || method === "screenshot-ocr") {
+    return { icon: "🖥️", label: "Screen capture", detail: sm.sourceApp || "" };
+  }
+  return { icon: "📄", label: "Source", detail: "" };
+}
+
+/** Build a clickable source-type chip for a record, or null when we have no
+ *  documentId / no doc metadata (invisible-by-absence). `verbatim` (when present)
+ *  is highlighted in the source once the panel opens. */
+function renderSourceBadge(documentId, verbatim) {
+  if (!documentId || !_docsById) return null;
+  const doc = _docsById.get(documentId);
+  if (!doc) return null;
+  const src = sourceFromDoc(doc);
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "source-badge";
+  chip.title = "Open the source beside this — " + src.label + (src.detail ? " · " + src.detail : "");
+  const icon = document.createElement("span");
+  icon.className = "source-badge-icon";
+  icon.textContent = src.icon;
+  chip.appendChild(icon);
+  const label = document.createElement("span");
+  label.className = "source-badge-label";
+  label.textContent = src.label;
+  chip.appendChild(label);
+  if (src.detail) {
+    const det = document.createElement("span");
+    det.className = "source-badge-detail";
+    det.textContent = "· " + src.detail;
+    chip.appendChild(det);
+  }
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSourcePanel(documentId, verbatim);
+  });
+  return chip;
+}
+
+/** Append a source badge to an actions/footer row (no-op when unavailable). */
+function appendSourceBadge(rowEl, documentId, verbatim) {
+  const chip = renderSourceBadge(documentId, verbatim);
+  if (chip) rowEl.appendChild(chip);
+}
+
+/** The documentId currently shown, so a slow fetch that's been superseded by a
+ *  newer open doesn't clobber the panel. */
+let _sourceOpenDoc = null;
+
+/** Open the source reader beside the current view: fetch the document (detail +
+ *  body) and render it, highlighting `verbatim`. */
+async function openSourcePanel(documentId, verbatim) {
+  if (!documentId) return;
+  const panel = document.getElementById("source-panel");
+  const titleEl = document.getElementById("source-panel-title");
+  const metaEl = document.getElementById("source-panel-meta");
+  const badgeEl = document.getElementById("source-panel-badge");
+  const statusEl = document.getElementById("source-panel-status");
+  const bodyEl = document.getElementById("source-panel-body");
+  if (!panel) return;
+
+  _sourceOpenDoc = documentId;
+  panel.hidden = false;
+  document.body.classList.add("source-open");
+
+  await loadDocsMap();
+  const doc = _docsById ? _docsById.get(documentId) : null;
+  if (badgeEl) {
+    const src = doc ? sourceFromDoc(doc) : null;
+    badgeEl.textContent = src ? src.icon + " " + src.label + (src.detail ? " · " + src.detail : "") : "";
+  }
+
+  if (titleEl) titleEl.textContent = "Loading source…";
+  if (metaEl) metaEl.textContent = "";
+  if (bodyEl) bodyEl.textContent = "";
+  if (statusEl) statusEl.hidden = true;
+
+  let detail;
+  try {
+    detail = await tauri.core.invoke("fetch_document", { documentId });
+  } catch (err) {
+    console.warn("[main] fetch_document failed:", err);
+    if (_sourceOpenDoc !== documentId) return;
+    if (titleEl) titleEl.textContent = "Source unavailable";
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = "Couldn't load this source. Check the connection in Configure, then try again.";
+    }
+    return;
+  }
+  if (_sourceOpenDoc !== documentId) return; // superseded by a newer open
+
+  if (titleEl) titleEl.textContent = detail.title || documentId;
+  if (metaEl) {
+    const bits = [];
+    if (detail.date) bits.push(formatDueDate(detail.date));
+    const people = Array.isArray(detail.participants) ? detail.participants : [];
+    if (people.length) {
+      bits.push(people.slice(0, 3).map(prettySlug).join(", ") + (people.length > 3 ? ` +${people.length - 3}` : ""));
+    }
+    metaEl.textContent = bits.join(" · ");
+  }
+  renderSourceBody(bodyEl, detail.body || "", verbatim);
+}
+
+/** Render the body text, wrapping the first occurrence of `verbatim` in a
+ *  highlight and scrolling to it. textContent + DOM nodes throughout (no
+ *  innerHTML), so the source body is never an injection path. */
+function renderSourceBody(bodyEl, text, verbatim) {
+  if (!bodyEl) return;
+  bodyEl.textContent = "";
+  if (!text) {
+    bodyEl.textContent = "(no source text available)";
+    return;
+  }
+  const q = (verbatim || "").trim();
+  const idx = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (idx === -1) {
+    bodyEl.textContent = text;
+    return;
+  }
+  bodyEl.appendChild(document.createTextNode(text.slice(0, idx)));
+  const mark = document.createElement("mark");
+  mark.className = "source-hl";
+  mark.textContent = text.slice(idx, idx + q.length);
+  bodyEl.appendChild(mark);
+  bodyEl.appendChild(document.createTextNode(text.slice(idx + q.length)));
+  requestAnimationFrame(() => mark.scrollIntoView({ block: "center", behavior: "smooth" }));
+}
+
+/** Close the source reader and restore the full-width view. */
+function closeSourcePanel() {
+  _sourceOpenDoc = null;
+  document.body.classList.remove("source-open");
+  const panel = document.getElementById("source-panel");
+  if (panel) panel.hidden = true;
+}
+
+// Close button + Escape key.
+const _srcCloseBtn = document.getElementById("source-panel-close");
+if (_srcCloseBtn) _srcCloseBtn.addEventListener("click", () => closeSourcePanel());
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("source-open")) closeSourcePanel();
+});
+
 /**
  * @param {object|null} tidbit         get_pending_tidbit payload (or null)
  * @param {object|null} recordsResp    get_pending_records envelope (or null):
@@ -947,6 +1152,7 @@ async function enterPostCaptureView(tidbit, recordsResp) {
   setNav([{ label: "Just captured" }], { back: () => goHome() });
 
   await refreshDismissedIds();
+  await loadDocsMap();
   const items = withoutDismissed(
     recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [],
   );
@@ -1207,6 +1413,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
   }
+  appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -1309,6 +1516,7 @@ async function enterLogView() {
   }
 
   await refreshDismissedIds();
+  await loadDocsMap();
 
   let data;
   try {
@@ -1550,6 +1758,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     footer.appendChild(btn);
   }
+  appendSourceBadge(footer, rec.documentId, rec.verbatim);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
   return row;
@@ -2446,6 +2655,7 @@ async function enterDecisionsView(initialFilter, navCtx) {
   }
 
   await refreshDismissedIds();
+  await loadDocsMap();
 
   let data;
   try {
@@ -2703,6 +2913,7 @@ function renderDecisionCard(rec, recState, projects) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
   }
+  appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -2763,6 +2974,7 @@ let currentReceipts = null;
 async function enterReceiptsView(entity) {
   state.inWizard = false;
   showView("view-receipts");
+  await loadDocsMap(); // docId→source map for badges (cached after first load)
   setNav(
     [
       { label: "Today", go: () => enterLogView() },
@@ -2976,16 +3188,21 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
     body.appendChild(cs);
   }
 
-  // Source-doc link (insider verification path).
-  const link = receiptsDeepLink(baseUrl, rec.documentId);
-  if (link) {
-    const a = document.createElement("a");
-    a.className = "rec-source";
-    a.href = link;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = "source ↗";
-    body.appendChild(a);
+  // Source — opens the captured document in the in-app reader, BESIDE the chain
+  // (no browser round-trip). The source-type badge is the affordance when doc
+  // metadata is loaded; otherwise a plain "source ↗" button that still opens it.
+  if (rec.documentId) {
+    const chip = renderSourceBadge(rec.documentId, rec.verbatim);
+    if (chip) {
+      body.appendChild(chip);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "rec-source";
+      btn.textContent = "source ↗";
+      btn.addEventListener("click", () => openSourcePanel(rec.documentId, rec.verbatim));
+      body.appendChild(btn);
+    }
   }
 
   node.appendChild(body);
