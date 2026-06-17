@@ -3167,3 +3167,154 @@ code {
 }
 /* view-main's header destination row is replaced by the persistent nav bar. */
 .main-header-actions { display: none; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-SOURCE — in-app source reader (split view) + source-type badge.
+ * The panel docks as a fixed right column; body.source-open shrinks the active
+ * view to the left so the source sits BESIDE the decision (not over it).
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+:root { --source-panel-w: clamp(360px, 46vw, 620px); }
+
+.source-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--source-panel-w);
+  z-index: 8500; /* below the sticky nav (9000) so nav stays usable across the top */
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base);
+  background-image: var(--bg-gradient);
+  border-left: 1px solid var(--glass-border);
+  box-shadow: -18px 0 48px rgba(0, 0, 0, 0.38);
+  transform: translateX(100%);
+  transition: transform 0.18s ease;
+}
+.source-panel[hidden] { display: none; }
+body.source-open .source-panel { transform: translateX(0); }
+/* Make room: the visible view yields the right column to the panel. */
+body.source-open .view:not([hidden]) { margin-right: var(--source-panel-w); }
+
+.source-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 54px 18px 14px; /* top clears the sticky nav */
+  border-bottom: 1px solid var(--glass-border);
+}
+.source-panel-titlewrap { flex: 1; min-width: 0; }
+.source-panel-title {
+  margin: 6px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.source-panel-meta {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.source-panel-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 7px;
+}
+.source-panel-close:hover { color: var(--text-primary); background: var(--glass-border); }
+.source-panel-status { padding: 18px; color: var(--text-secondary); font-size: 13px; }
+.source-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px 28px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+mark.source-hl {
+  border-radius: 3px;
+  padding: 1px 2px;
+  color: var(--text-primary);
+}
+/* The clicked record — bright amber, scrolled into view. */
+mark.source-hl-primary {
+  background: rgba(255, 196, 84, 0.32);
+  box-shadow: 0 0 0 1px rgba(255, 196, 84, 0.45);
+}
+/* Sibling decisions/commitments from the same source — present but quieter. */
+mark.source-hl-dim {
+  background: rgba(255, 196, 84, 0.13);
+  color: var(--text-secondary);
+}
+
+/* Source-type chip on record cards / receipts rows. Clickable → opens the panel. */
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  border-radius: 7px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  max-width: 100%;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.source-badge:hover { border-color: var(--accent-ring); color: var(--text-primary); }
+.source-badge:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.source-badge-icon { flex: none; font-size: 12px; }
+.source-badge-label { font-weight: 600; }
+.source-badge-detail {
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.source-badge[data-active="true"] { border-color: var(--accent); color: var(--text-primary); }
+
+/* The Receipts source fallback is now a <button>; strip native button chrome so
+   it matches the prior <a.rec-source> link appearance. */
+button.rec-source {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Source SVG icons + panel actions (WP-THRESHOLD-SOURCE, design-system line icons). */
+.source-badge-icon { display: inline-flex; align-items: center; }
+.source-badge-icon svg { width: 13px; height: 13px; }
+.source-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.source-panel-badge svg { width: 13px; height: 13px; }
+.source-panel-actions { display: flex; align-items: center; gap: 2px; flex: none; }
+.source-panel-action {
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 7px;
+  display: inline-flex;
+}
+.source-panel-action:hover { color: var(--text-primary); background: var(--glass-border); }
+.source-panel-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.source-panel-action svg { display: block; }

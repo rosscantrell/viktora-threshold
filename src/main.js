@@ -936,6 +936,372 @@ function clampText(s, max) {
   return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + "…";
 }
 
+// ───────── WP-THRESHOLD-SOURCE — in-app source reader (split view) ─────────
+//
+// Click a source badge (or a Receipts "source ↗") and the captured source —
+// email / Plaud transcript / OneNote text — opens in a panel BESIDE the current
+// view, with the record's verbatim quote highlighted. No browser round-trip, and
+// it sidesteps the /document/:id → /login redirect on auth-gated pilots.
+
+/** documentId → document (from /api/data), carrying sourceMetadata for the
+ *  source-type badge. Lazily loaded + cached for the session. */
+let _docsById = null;
+let _docsByIdPromise = null;
+
+/** Load (once) the documentId → doc map from /api/data. Best-effort: a failure
+ *  leaves badges/source unavailable rather than throwing into a view. Concurrent
+ *  callers share one in-flight fetch (no duplicate /api/data round-trips). */
+async function loadDocsMap() {
+  if (_docsById) return _docsById;
+  if (_docsByIdPromise) return _docsByIdPromise;
+  _docsByIdPromise = (async () => {
+    const map = new Map();
+    try {
+      const resp = await tauri.core.invoke("fetch_documents");
+      const docs = resp && Array.isArray(resp.documents) ? resp.documents : [];
+      for (const d of docs) if (d && d.id) map.set(d.id, d);
+    } catch (err) {
+      console.warn("[main] loadDocsMap failed:", err);
+    }
+    _docsById = map;
+    return map;
+  })();
+  return _docsByIdPromise;
+}
+
+// Design-system line icons (feather-style: 24-viewBox, fill:none,
+// stroke:currentColor, 1.75 — matches the Collapse / prompt icons). Monochrome,
+// inherit the badge's text color — no multicolor emoji.
+const SOURCE_ICONS = {
+  email: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>',
+  plaud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+  onenote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v18H6a2 2 0 0 1-2-2z"/><line x1="9" y1="3" x2="9" y2="21"/></svg>',
+  teams: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8 8 0 0 1-11.6 7.1L4 20l1.4-5.4A8 8 0 1 1 21 11.5z"/></svg>',
+  screen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="20" x2="16" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>',
+  doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/></svg>',
+};
+
+/** Parse a display name out of an email "From" header ("Name <addr>" → "Name"). */
+function senderName(from) {
+  const s = String(from || "").trim();
+  if (!s) return "";
+  const m = s.match(/^"?([^"<]+?)"?\s*</);
+  return (m ? m[1] : s.split("<")[0]).trim();
+}
+
+/** Map a document's sourceMetadata to a display {iconKey, label, detail}.
+ *  captureTool is the primary signal; captureMethod + the id prefix are
+ *  fallbacks (e.g. outlook-addin emails carry the method, not the tool). */
+function sourceFromDoc(doc) {
+  const sm = (doc && doc.sourceMetadata) || {};
+  const tool = (sm.captureTool || "").toLowerCase();
+  const method = (sm.captureMethod || "").toLowerCase();
+  const app = (sm.sourceApp || "").toLowerCase();
+  const id = (doc && doc.id ? String(doc.id) : "").toLowerCase();
+
+  if (tool === "plaud" || method === "recording-import" || id.startsWith("plaud")) {
+    const mins = sm.durationMs ? Math.round(sm.durationMs / 60000) : null;
+    const speakers = sm.originalSpeakerMapping
+      ? Object.values(sm.originalSpeakerMapping).filter((s) => s && !/^Speaker \d+$/i.test(s))
+      : [];
+    const parts = [];
+    if (mins) parts.push(mins + " min");
+    if (speakers.length) {
+      parts.push(speakers[0] + (speakers.length > 1 ? ` +${speakers.length - 1}` : ""));
+    }
+    return { iconKey: "plaud", label: "Plaud", detail: parts.join(" · ") };
+  }
+  if (tool === "onenote" || method === "com-capture" || id.startsWith("onenote")) {
+    return { iconKey: "onenote", label: "OneNote", detail: [sm.notebookName, sm.sectionName].filter(Boolean).join(" / ") };
+  }
+  // Email: tool OR method "outlook-addin", or the EMAIL- id prefix.
+  if (tool.includes("outlook") || method.includes("outlook") || id.startsWith("email")) {
+    return { iconKey: "email", label: "Email", detail: senderName(sm.from) };
+  }
+  // Teams — including a screen-capture OF Teams (sourceApp hints the app).
+  if (tool.includes("teams") || app.includes("teams")) {
+    return { iconKey: "teams", label: "Teams", detail: "" };
+  }
+  if (tool === "threshold" || method === "screenshot-ocr" || id.startsWith("desktop")) {
+    const niceApp = app.includes("outlook") ? "Outlook" : app ? prettySlug(app.replace(/^(com|ms)[.-]/, "")) : "";
+    return { iconKey: "screen", label: "Screen capture", detail: niceApp };
+  }
+  return { iconKey: "doc", label: "Source", detail: "" };
+}
+
+/** Build a clickable source-type chip for a record, or null when we have no
+ *  documentId / no doc metadata (invisible-by-absence). `verbatim` (when present)
+ *  is highlighted in the source once the panel opens. */
+function renderSourceBadge(documentId, verbatim) {
+  if (!documentId || !_docsById) return null;
+  const doc = _docsById.get(documentId);
+  if (!doc) return null;
+  const src = sourceFromDoc(doc);
+  const chip = document.createElement("button");
+  chip.type = "button";
+  chip.className = "source-badge";
+  chip.title = "Open the source beside this — " + src.label + (src.detail ? " · " + src.detail : "");
+  const icon = document.createElement("span");
+  icon.className = "source-badge-icon";
+  icon.innerHTML = SOURCE_ICONS[src.iconKey] || SOURCE_ICONS.doc; // constant SVG, not user data
+  chip.appendChild(icon);
+  const label = document.createElement("span");
+  label.className = "source-badge-label";
+  label.textContent = src.label;
+  chip.appendChild(label);
+  if (src.detail) {
+    const det = document.createElement("span");
+    det.className = "source-badge-detail";
+    det.textContent = "· " + src.detail;
+    chip.appendChild(det);
+  }
+  chip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSourcePanel(documentId, verbatim);
+  });
+  return chip;
+}
+
+/** Append a source badge to an actions/footer row (no-op when unavailable). */
+function appendSourceBadge(rowEl, documentId, verbatim) {
+  const chip = renderSourceBadge(documentId, verbatim);
+  if (chip) rowEl.appendChild(chip);
+}
+
+/** The documentId currently shown, so a slow fetch that's been superseded by a
+ *  newer open doesn't clobber the panel. */
+let _sourceOpenDoc = null;
+/** The currently-rendered source {title, body, documentId} — for Copy/Download. */
+let _sourceCurrent = null;
+
+/** Open the source reader beside the current view: fetch the document (detail +
+ *  body) and render it, highlighting `verbatim`. */
+async function openSourcePanel(documentId, verbatim) {
+  if (!documentId) return;
+  const panel = document.getElementById("source-panel");
+  const titleEl = document.getElementById("source-panel-title");
+  const metaEl = document.getElementById("source-panel-meta");
+  const badgeEl = document.getElementById("source-panel-badge");
+  const statusEl = document.getElementById("source-panel-status");
+  const bodyEl = document.getElementById("source-panel-body");
+  if (!panel) return;
+
+  _sourceOpenDoc = documentId;
+  panel.hidden = false;
+  document.body.classList.add("source-open");
+
+  await loadDocsMap();
+  const doc = _docsById ? _docsById.get(documentId) : null;
+  if (badgeEl) {
+    badgeEl.textContent = "";
+    if (doc) {
+      const src = sourceFromDoc(doc);
+      const ic = document.createElement("span");
+      ic.className = "source-badge-icon";
+      ic.innerHTML = SOURCE_ICONS[src.iconKey] || SOURCE_ICONS.doc; // constant SVG
+      badgeEl.appendChild(ic);
+      badgeEl.appendChild(
+        document.createTextNode(" " + src.label + (src.detail ? " · " + src.detail : "")),
+      );
+    }
+  }
+
+  if (titleEl) titleEl.textContent = "Loading source…";
+  if (metaEl) metaEl.textContent = "";
+  if (bodyEl) bodyEl.textContent = "";
+  if (statusEl) statusEl.hidden = true;
+
+  let detail;
+  try {
+    detail = await tauri.core.invoke("fetch_document", { documentId });
+  } catch (err) {
+    console.warn("[main] fetch_document failed:", err);
+    if (_sourceOpenDoc !== documentId) return;
+    if (titleEl) titleEl.textContent = "Source unavailable";
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = "Couldn't load this source. Check the connection in Configure, then try again.";
+    }
+    return;
+  }
+  if (_sourceOpenDoc !== documentId) return; // superseded by a newer open
+
+  if (titleEl) titleEl.textContent = detail.title || documentId;
+  if (metaEl) {
+    const bits = [];
+    if (detail.date) bits.push(formatDueDate(detail.date));
+    const people = Array.isArray(detail.participants) ? detail.participants : [];
+    if (people.length) {
+      bits.push(people.slice(0, 3).map(prettySlug).join(", ") + (people.length > 3 ? ` +${people.length - 3}` : ""));
+    }
+    metaEl.textContent = bits.join(" · ");
+  }
+  const displayBody = reflowSourceBody(detail.body || "");
+  _sourceCurrent = { title: detail.title || documentId, body: displayBody, documentId };
+
+  // Gather EVERY verified verbatim extracted from this source so they all get
+  // highlighted (the clicked one stays primary). Best-effort: on failure we fall
+  // back to highlighting just the clicked record.
+  let others = [];
+  try {
+    const dr = await tauri.core.invoke("fetch_document_records", { documentId });
+    if (_sourceOpenDoc !== documentId) return;
+    const recs = dr && Array.isArray(dr.records) ? dr.records : [];
+    const clicked = (verbatim || "").trim().toLowerCase();
+    for (const it of recs) {
+      const r = it && it.record ? it.record : it;
+      if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
+      if (r.verbatim.trim().toLowerCase() === clicked) continue;
+      others.push(r.verbatim);
+    }
+  } catch (err) {
+    console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
+  }
+
+  const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others);
+  if (metaEl && nMarks > 1) {
+    metaEl.textContent = (metaEl.textContent ? metaEl.textContent + " · " : "") + nMarks + " highlighted";
+  }
+}
+
+/** Clean a captured source body for display: non-breaking spaces → normal
+ *  spaces (Outlook/OneNote capture is full of them), and stack run-together
+ *  email header fields (From:/Sent:/To:/…) onto their own lines so a quoted
+ *  reply thread reads as a header block instead of one wrapped blob. */
+function reflowSourceBody(text) {
+  let s = String(text || "").replace(/\u00a0/g, " ");
+  // Break before each capitalised email-header field so a run-together quoted
+  // thread stacks (e.g. "\u20264:49 PMTo: \u2026" \u2192 newline before "To:"). Case-sensitive
+  // + no \b, so it catches "PMTo:"/"AMTo:" while lowercase prose ("\u2026to:") is
+  // left alone.
+  s = s.replace(/ *(From|Sent|To|Cc|Bcc|Subject|Importance): */g, "\n$1: ");
+  return s.replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+}
+
+/** Find a verbatim in the (reflowed) body, whitespace-insensitively (the capture
+ *  collapses/varies whitespace), returning {start,end} in the body or null. */
+function findVerbatimRange(haystack, needle) {
+  const cleaned = String(needle || "").replace(/\u00a0/g, " ").trim();
+  if (!cleaned) return null;
+  const pattern = cleaned.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  let m;
+  try {
+    m = new RegExp(pattern, "i").exec(haystack);
+  } catch {
+    return null;
+  }
+  return m ? { start: m.index, end: m.index + m[0].length } : null;
+}
+
+/** Render the body text, highlighting EVERY extracted verbatim: `primary` (the
+ *  clicked record) brightly + scrolled-to, the `others` (its siblings from the
+ *  same source) dimmed — so the source shows all its decisions/commitments in
+ *  context. `text` is assumed already reflowed. textContent + DOM nodes (no
+ *  innerHTML). Returns the count of highlights actually placed. */
+function renderSourceBody(bodyEl, text, primary, others) {
+  if (!bodyEl) return 0;
+  bodyEl.textContent = "";
+  if (!text) {
+    bodyEl.textContent = "(no source text available)";
+    return 0;
+  }
+  const seen = new Set();
+  const ranges = [];
+  const add = (q, isPrimary) => {
+    const key = String(q || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const range = findVerbatimRange(text, q);
+    if (!range) return; // not found in the body — skip
+    ranges.push({ start: range.start, end: range.end, primary: isPrimary });
+  };
+  add(primary, true);
+  for (const q of Array.isArray(others) ? others : []) add(q, false);
+
+  if (!ranges.length) {
+    bodyEl.textContent = text;
+    return 0;
+  }
+  // Earliest first; at a tie the primary wins. Then drop any overlaps greedily.
+  ranges.sort((a, b) => a.start - b.start || (b.primary === true) - (a.primary === true));
+  const placed = [];
+  let lastEnd = -1;
+  for (const r of ranges) {
+    if (r.start < lastEnd) continue;
+    placed.push(r);
+    lastEnd = r.end;
+  }
+  let cursor = 0;
+  let primaryMark = null;
+  for (const r of placed) {
+    if (r.start > cursor) bodyEl.appendChild(document.createTextNode(text.slice(cursor, r.start)));
+    const mark = document.createElement("mark");
+    mark.className = r.primary ? "source-hl source-hl-primary" : "source-hl source-hl-dim";
+    mark.textContent = text.slice(r.start, r.end);
+    bodyEl.appendChild(mark);
+    if (r.primary) primaryMark = mark;
+    cursor = r.end;
+  }
+  if (cursor < text.length) bodyEl.appendChild(document.createTextNode(text.slice(cursor)));
+  const target = primaryMark || bodyEl.querySelector("mark");
+  if (target) requestAnimationFrame(() => target.scrollIntoView({ block: "center", behavior: "smooth" }));
+  return placed.length;
+}
+
+/** Close the source reader and restore the full-width view. */
+function closeSourcePanel() {
+  _sourceOpenDoc = null;
+  _sourceCurrent = null;
+  document.body.classList.remove("source-open");
+  const panel = document.getElementById("source-panel");
+  if (panel) panel.hidden = true;
+}
+
+// Close button + Escape key.
+const _srcCloseBtn = document.getElementById("source-panel-close");
+if (_srcCloseBtn) _srcCloseBtn.addEventListener("click", () => closeSourcePanel());
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("source-open")) closeSourcePanel();
+});
+
+// Copy the full source text to the clipboard (plain text via the copy_text IPC).
+const _srcCopyBtn = document.getElementById("source-panel-copy");
+if (_srcCopyBtn) {
+  _srcCopyBtn.addEventListener("click", async () => {
+    if (!_sourceCurrent || !_sourceCurrent.body) return;
+    try {
+      await tauri.core.invoke("copy_text", { text: _sourceCurrent.body });
+      showToast({ kind: "success", title: "Source copied", body: "The full source text is on your clipboard." });
+    } catch (err) {
+      console.warn("[main] copy_text failed:", err);
+      showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    }
+  });
+}
+
+// Download the source text to a file (native save dialog via save_text_file).
+const _srcDownloadBtn = document.getElementById("source-panel-download");
+if (_srcDownloadBtn) {
+  _srcDownloadBtn.addEventListener("click", async () => {
+    if (!_sourceCurrent || !_sourceCurrent.body) return;
+    const base =
+      (_sourceCurrent.title || _sourceCurrent.documentId || "source")
+        .replace(/[^\w.-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "source";
+    try {
+      const saved = await tauri.core.invoke("save_text_file", {
+        defaultName: base + ".txt",
+        content: _sourceCurrent.body,
+      });
+      if (saved) showToast({ kind: "success", title: "Source saved", body: saved });
+    } catch (err) {
+      console.warn("[main] save_text_file failed:", err);
+      showToast({ kind: "failure", title: "Couldn't save", body: "Try again." });
+    }
+  });
+}
+
 /**
  * @param {object|null} tidbit         get_pending_tidbit payload (or null)
  * @param {object|null} recordsResp    get_pending_records envelope (or null):
@@ -947,6 +1313,7 @@ async function enterPostCaptureView(tidbit, recordsResp) {
   setNav([{ label: "Just captured" }], { back: () => goHome() });
 
   await refreshDismissedIds();
+  await loadDocsMap();
   const items = withoutDismissed(
     recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [],
   );
@@ -1207,6 +1574,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
   }
+  appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -1309,6 +1677,7 @@ async function enterLogView() {
   }
 
   await refreshDismissedIds();
+  await loadDocsMap();
 
   let data;
   try {
@@ -1550,6 +1919,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     footer.appendChild(btn);
   }
+  appendSourceBadge(footer, rec.documentId, rec.verbatim);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
   return row;
@@ -2446,6 +2816,7 @@ async function enterDecisionsView(initialFilter, navCtx) {
   }
 
   await refreshDismissedIds();
+  await loadDocsMap();
 
   let data;
   try {
@@ -2703,6 +3074,7 @@ function renderDecisionCard(rec, recState, projects) {
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
   }
+  appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -2763,6 +3135,7 @@ let currentReceipts = null;
 async function enterReceiptsView(entity) {
   state.inWizard = false;
   showView("view-receipts");
+  await loadDocsMap(); // docId→source map for badges (cached after first load)
   setNav(
     [
       { label: "Today", go: () => enterLogView() },
@@ -2976,16 +3349,21 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
     body.appendChild(cs);
   }
 
-  // Source-doc link (insider verification path).
-  const link = receiptsDeepLink(baseUrl, rec.documentId);
-  if (link) {
-    const a = document.createElement("a");
-    a.className = "rec-source";
-    a.href = link;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = "source ↗";
-    body.appendChild(a);
+  // Source — opens the captured document in the in-app reader, BESIDE the chain
+  // (no browser round-trip). The source-type badge is the affordance when doc
+  // metadata is loaded; otherwise a plain "source ↗" button that still opens it.
+  if (rec.documentId) {
+    const chip = renderSourceBadge(rec.documentId, rec.verbatim);
+    if (chip) {
+      body.appendChild(chip);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "rec-source";
+      btn.textContent = "source ↗";
+      btn.addEventListener("click", () => openSourcePanel(rec.documentId, rec.verbatim));
+      body.appendChild(btn);
+    }
   }
 
   node.appendChild(body);

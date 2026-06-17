@@ -1837,6 +1837,85 @@ async fn fetch_entity_card(
         .map_err(|e| format!("fetch_entity_card: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-SOURCE — the in-app source reader. Proxies GET /api/document/:id
+/// and returns the document detail JSON, which (server-side) now folds in the
+/// raw `body` text so the split-view panel renders the source (email / Plaud
+/// transcript / OneNote text) beside the decision without a browser round-trip.
+/// Mirrors fetch_entity_card's bearer-auth + URL-encode pattern. Surfaces errors
+/// so the panel can show an unreachable state. `document_id` is URL-encoded so
+/// ids with reserved chars (OneNote GUIDs) transmit intact.
+#[tauri::command]
+async fn fetch_document(
+    state: tauri::State<'_, AppState>,
+    document_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(document_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/document/{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_document: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-SOURCE — every decision/commitment extracted from ONE document,
+/// so the source reader can highlight ALL of them in the body (not just the one
+/// the user clicked). Proxies GET /api/documents/:id/decision-records (already on
+/// the bearer lane). Returns the raw `{ records, edges, ... }` JSON.
+#[tauri::command]
+async fn fetch_document_records(
+    state: tauri::State<'_, AppState>,
+    document_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(document_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/documents/{}/decision-records",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_document_records: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-LOG-UX (Receipts) — the evidence dossier for one subject
 /// entity. Proxies GET /api/decision-log/receipts?entity=X and returns the raw
 /// JSON (records chronological + edges + derived states) for the client to
@@ -1892,6 +1971,53 @@ fn copy_receipts(html: String, markdown: String) -> Result<(), String> {
         .set_html(html, Some(markdown))
         .map_err(|e| format!("clipboard write failed: {e}"))?;
     Ok(())
+}
+
+/// WP-THRESHOLD-SOURCE — copy plain source text to the clipboard (the source
+/// reader's Copy button). Plain-text only (`set_text`), unlike copy_receipts'
+/// dual HTML+Markdown write.
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("clipboard unavailable: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("clipboard write failed: {e}"))?;
+    Ok(())
+}
+
+/// WP-THRESHOLD-SOURCE — the source reader's Download button. Opens a native
+/// save dialog seeded with `default_name`, then writes `content` (UTF-8) to the
+/// chosen path. Returns the saved path, or `None` if the user cancelled. Mirrors
+/// `pick_files`' dialog-plugin pattern (oneshot channel off the dialog callback).
+#[tauri::command]
+async fn save_text_file(
+    app_handle: tauri::AppHandle,
+    default_name: String,
+    content: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Text", &["txt", "md"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let chosen = rx.await.ok().flatten();
+    let Some(fp) = chosen else {
+        return Ok(None);
+    };
+    let path = fp
+        .into_path()
+        .map_err(|e| format!("invalid save path: {e}"))?;
+    std::fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("failed to write file: {e}"))?;
+    Ok(Some(path.display().to_string()))
 }
 
 /// WP-N1 (S1 sharing) — the viewer's authenticated email, for capture
@@ -5472,9 +5598,15 @@ pub fn run() {
             undismiss_record,
             // WP-THRESHOLD-LOG-UX — per-entity definition card
             fetch_entity_card,
+            // WP-THRESHOLD-SOURCE — in-app source reader
+            fetch_document,
+            fetch_document_records,
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)
             fetch_receipts,
             copy_receipts,
+            // WP-THRESHOLD-SOURCE — source reader copy + download
+            copy_text,
+            save_text_file,
             // WP-N1 (S1 sharing) — viewer identity + document attribution
             get_whoami,
             fetch_documents,

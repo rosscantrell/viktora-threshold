@@ -805,6 +805,29 @@
     </div>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-SOURCE — in-app source reader (split-view, docks right).
+         Opened by openSourcePanel(); the active view shrinks left via
+         body.source-open. Renders the captured source (email / Plaud transcript
+         / OneNote text) beside the decision, with the verbatim quote highlighted.
+         ────────────────────────────────────────────────────────────────── -->
+    <aside id="source-panel" class="source-panel" hidden aria-label="Source document">
+      <header class="source-panel-head">
+        <div class="source-panel-titlewrap">
+          <span class="source-panel-badge" id="source-panel-badge"></span>
+          <h2 class="source-panel-title" id="source-panel-title"></h2>
+          <p class="source-panel-meta" id="source-panel-meta"></p>
+        </div>
+        <div class="source-panel-actions">
+          <button type="button" id="source-panel-copy" class="source-panel-action" title="Copy source text" aria-label="Copy source text"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg></button>
+          <button type="button" id="source-panel-download" class="source-panel-action" title="Download source" aria-label="Download source"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 19h16"></path></svg></button>
+          <button type="button" id="source-panel-close" class="source-panel-close" aria-label="Close source">✕</button>
+        </div>
+      </header>
+      <div class="source-panel-status" id="source-panel-status" hidden></div>
+      <article class="source-panel-body" id="source-panel-body"></article>
+    </aside>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          Toast stack (D-12-18 structured-toast component)
          ────────────────────────────────────────────────────────────────── -->
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
