@@ -2242,6 +2242,33 @@ code {
   color: var(--glass-link);
 }
 
+/* WP-THRESHOLD-DISMISS — the ✕ dismiss control on record cards + Today rows.
+   Sits at the far right of the actions footer (margin-left:auto), muted by
+   default so it never competes with "Show receipts", brightening on hover. */
+.record-dismiss-btn {
+  margin-left: auto;
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 1px 5px;
+  border-radius: 6px;
+  line-height: 1;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.record-dismiss-btn:hover {
+  color: var(--danger-text);
+  background: var(--danger-soft);
+}
+
+.record-dismiss-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
  * WP-N1 (S1 sharing elements) — capture attribution, co-sign chip, Mine/Everyone
  * filter. All invisible-by-absence (rendered only when the data is present).

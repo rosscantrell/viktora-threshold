@@ -256,6 +256,15 @@ pub struct AppConfig {
     /// (everything off / empty) — additive-only schema delta.
     #[serde(default)]
     pub auto_import: AutoImportConfig,
+    /// WP-THRESHOLD-DISMISS (first cut) — recordIds the user has dismissed from
+    /// the decision/commitment views. Client-only suppression for now: the list
+    /// is filtered out of every record projection on render, but the engine is
+    /// unaware (no calibration signal yet — that arrives with the server-side
+    /// "not relevant vs. close-out" pass). `#[serde(default)]` (struct-level)
+    /// means legacy configs without the field deserialize as an empty Vec —
+    /// additive-only schema delta, same pattern as `auto_import` / `plaud_connect`.
+    #[serde(default)]
+    pub dismissed_record_ids: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -271,6 +280,7 @@ impl Default for AppConfig {
             auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
+            dismissed_record_ids: Vec::new(),
         }
     }
 }
@@ -1714,6 +1724,67 @@ async fn patch_edge_status(
     resp.json::<serde_json::Value>()
         .await
         .map_err(|e| format!("patch_edge_status: parse response failed: {e}"))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-THRESHOLD-DISMISS (first cut) — client-only record suppression
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Read-modify-write the cached AppConfig and persist it to disk under the lock.
+/// Used by the dismiss/undismiss commands so a single mutation is atomic against
+/// the in-memory cache + the on-disk file. Errors if Threshold isn't configured
+/// yet (no cached config to mutate).
+fn mutate_config<F: FnOnce(&mut AppConfig)>(
+    state: &tauri::State<AppState>,
+    f: F,
+) -> Result<(), String> {
+    let mut guard = state.config.lock().expect("config mutex poisoned");
+    let cfg = guard.as_mut().ok_or_else(|| {
+        "Threshold is not configured. Visit Configure and enter your Apolla base URL + bearer token first.".to_string()
+    })?;
+    f(cfg);
+    save_config_to_disk(cfg)
+}
+
+/// WP-THRESHOLD-DISMISS — the recordIds the user has dismissed. Returns an empty
+/// list (not an error) when unconfigured, so the frontend can call it freely on
+/// every view load without special-casing the first-run state.
+#[tauri::command]
+fn get_dismissed_record_ids(state: tauri::State<AppState>) -> Result<Vec<String>, String> {
+    Ok(state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .as_ref()
+        .map(|c| c.dismissed_record_ids.clone())
+        .unwrap_or_default())
+}
+
+/// WP-THRESHOLD-DISMISS — suppress one record from the views. Idempotent: a
+/// repeat dismiss of the same id is a no-op write. Persists to config.json so the
+/// suppression survives restarts. Client-only for now — no engine round-trip.
+#[tauri::command]
+fn dismiss_record(state: tauri::State<AppState>, record_id: String) -> Result<(), String> {
+    if record_id.trim().is_empty() {
+        return Err("dismiss_record: empty record_id".into());
+    }
+    mutate_config(&state, |cfg| {
+        if !cfg.dismissed_record_ids.iter().any(|id| id == &record_id) {
+            cfg.dismissed_record_ids.push(record_id);
+        }
+    })
+}
+
+/// WP-THRESHOLD-DISMISS — undo a dismissal (the Undo affordance on the toast).
+/// Idempotent: removing an id that isn't present is a no-op write.
+#[tauri::command]
+fn undismiss_record(state: tauri::State<AppState>, record_id: String) -> Result<(), String> {
+    if record_id.trim().is_empty() {
+        return Err("undismiss_record: empty record_id".into());
+    }
+    mutate_config(&state, |cfg| {
+        cfg.dismissed_record_ids.retain(|id| id != &record_id);
+    })
 }
 
 /// WP-THRESHOLD-LOG-UX (Definition cards / back-half) — the per-entity
@@ -5395,6 +5466,10 @@ pub fn run() {
             fetch_decision_log_full,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
             patch_edge_status,
+            // WP-THRESHOLD-DISMISS — client-only record suppression
+            get_dismissed_record_ids,
+            dismiss_record,
+            undismiss_record,
             // WP-THRESHOLD-LOG-UX — per-entity definition card
             fetch_entity_card,
             // WP-THRESHOLD-LOG-UX — Receipts (client PR 2)

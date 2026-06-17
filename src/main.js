@@ -822,6 +822,121 @@ function captureAttribution(documentId, submitterByDoc, viewerEmail) {
  * fired), it renders as a single amber insight card at the top. When a capture
  * produced neither, a quiet "captured & filed" line shows — never an apology.
  *
+// ───────── WP-THRESHOLD-DISMISS (first cut) — client-only suppression ─────────
+//
+// "Just suppress for now": the user can dismiss a decision/commitment from any
+// record view. The recordId is persisted (config.json, via the dismiss_record
+// IPC) and filtered out of every projection on render. Reversible inline via the
+// Undo toast. No engine round-trip yet — the "not relevant vs. close-out" reason
+// split + calibration feedback land in the later server-side pass.
+
+/** RecordIds the user has dismissed. Mirrors the persisted config list; kept in
+ *  sync locally so a dismiss/undo reflects without a round-trip. */
+const _dismissedIds = new Set();
+
+/** Pull the recordId from a {record, lifecycle, state} envelope OR a bare record. */
+function recordIdOf(item) {
+  const rec = item && item.record ? item.record : item;
+  return (rec && rec.recordId) || "";
+}
+
+/** Is this item currently dismissed? */
+function isDismissed(item) {
+  const id = recordIdOf(item);
+  return !!id && _dismissedIds.has(id);
+}
+
+/** Drop dismissed items from an array (tolerates envelopes and bare records). */
+function withoutDismissed(items) {
+  return (Array.isArray(items) ? items : []).filter((it) => !isDismissed(it));
+}
+
+/** Reload the persisted dismissed-id set from the backend. Best-effort: a failed
+ *  read leaves the existing in-memory set intact (never throws into a view). */
+async function refreshDismissedIds() {
+  try {
+    const ids = await tauri.core.invoke("get_dismissed_record_ids");
+    _dismissedIds.clear();
+    for (const id of Array.isArray(ids) ? ids : []) {
+      if (id) _dismissedIds.add(id);
+    }
+  } catch (err) {
+    console.warn("[main] get_dismissed_record_ids failed:", err);
+  }
+}
+
+/** Append a subtle "Dismiss" (✕) control to an actions row. Clicking suppresses
+ *  the record optimistically and offers Undo. `summary` is used for the toast. */
+function appendDismissControl(actionsEl, recordId, cardEl, summary) {
+  if (!recordId) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "record-dismiss-btn";
+  btn.title = "Dismiss — hide this from your views";
+  btn.setAttribute("aria-label", "Dismiss");
+  btn.textContent = "✕";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation(); // don't toggle a group header / open receipts
+    dismissRecord(recordId, cardEl, summary);
+  });
+  actionsEl.appendChild(btn);
+}
+
+/** Optimistically remove `cardEl`, persist the dismissal, and show an Undo toast.
+ *  On a persistence failure the card is restored and an error toast shown. */
+async function dismissRecord(recordId, cardEl, summary) {
+  if (!recordId || !cardEl) return;
+  const parent = cardEl.parentNode;
+  const next = cardEl.nextSibling;
+
+  _dismissedIds.add(recordId);
+  cardEl.remove();
+
+  try {
+    await tauri.core.invoke("dismiss_record", { recordId });
+  } catch (err) {
+    console.warn("[main] dismiss_record failed:", err);
+    _dismissedIds.delete(recordId);
+    if (parent) parent.insertBefore(cardEl, next || null);
+    showToast({
+      kind: "failure",
+      title: "Couldn't dismiss",
+      body: "The change wasn't saved. Try again.",
+    });
+    return;
+  }
+
+  showToast({
+    kind: "idempotent",
+    title: "Dismissed",
+    body: summary ? clampText(summary, 80) : "",
+    cta: { label: "Undo", onClick: () => undoDismiss(recordId, cardEl, parent, next) },
+  });
+}
+
+/** Reverse a dismissal: un-persist and re-insert the card where it was. */
+async function undoDismiss(recordId, cardEl, parent, next) {
+  try {
+    await tauri.core.invoke("undismiss_record", { recordId });
+  } catch (err) {
+    console.warn("[main] undismiss_record failed:", err);
+    // Fall through — still restore the view; the set is the source of truth for
+    // this session and a re-fetch will reconcile.
+  }
+  _dismissedIds.delete(recordId);
+  if (parent && !cardEl.isConnected) parent.insertBefore(cardEl, next || null);
+}
+
+/** Truncate to `max` chars on a word boundary, with an ellipsis. */
+function clampText(s, max) {
+  const str = String(s || "");
+  if (str.length <= max) return str;
+  const cut = str.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+/**
  * @param {object|null} tidbit         get_pending_tidbit payload (or null)
  * @param {object|null} recordsResp    get_pending_records envelope (or null):
  *                                     { records: [{record, lifecycle, state}], edges: [...] }
@@ -831,8 +946,10 @@ async function enterPostCaptureView(tidbit, recordsResp) {
   showView("view-tidbit");
   setNav([{ label: "Just captured" }], { back: () => goHome() });
 
-  const items =
-    recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [];
+  await refreshDismissedIds();
+  const items = withoutDismissed(
+    recordsResp && Array.isArray(recordsResp.records) ? recordsResp.records : [],
+  );
   const edges =
     recordsResp && Array.isArray(recordsResp.edges) ? recordsResp.edges : [];
 
@@ -975,6 +1092,7 @@ function renderRecords(items, edges, attribution) {
   for (const item of items) {
     const rec = item && item.record ? item.record : item;
     if (!rec) continue;
+    if (isDismissed(item)) continue; // suppressed — never render
     listEl.appendChild(
       renderRecordCard(
         rec,
@@ -1077,18 +1195,20 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     card.appendChild(callout);
   }
 
-  // "Show receipts" — the subject's full evidence chain.
+  // Actions row: "Show receipts" (when the record has a subject) + Dismiss.
+  // Always present so the dismiss affordance is on every card.
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
   if (rec.primaryEntity) {
-    const actions = document.createElement("div");
-    actions.className = "record-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
-    card.appendChild(actions);
   }
+  appendDismissControl(actions, rec.recordId, card, rec.summary);
+  card.appendChild(actions);
 
   return card;
 }
@@ -1188,6 +1308,8 @@ async function enterLogView() {
     statusEl.textContent = "Loading the log…";
   }
 
+  await refreshDismissedIds();
+
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log");
@@ -1211,7 +1333,9 @@ async function enterLogView() {
 
   const summary = data && data.summary ? data.summary : {};
   const states = summary.states || {};
-  const needsAttention = Array.isArray(data && data.needsAttention) ? data.needsAttention : [];
+  const needsAttention = withoutDismissed(
+    Array.isArray(data && data.needsAttention) ? data.needsAttention : [],
+  );
   const relationships = (data && data.relationships) || {};
   const contradictions = Array.isArray(relationships.contradictions)
     ? relationships.contradictions
@@ -1414,18 +1538,20 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     row.appendChild(meta);
   }
 
-  // "Show receipts" — open the subject's evidence dossier.
+  // Actions: "Show receipts" (when the row has a subject) + Dismiss. Always
+  // present so the dismiss affordance is on every row.
+  const footer = document.createElement("div");
+  footer.className = "log-row-actions";
   if (rec.primaryEntity) {
-    const footer = document.createElement("div");
-    footer.className = "log-row-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     footer.appendChild(btn);
-    row.appendChild(footer);
   }
+  appendDismissControl(footer, rec.recordId, row, rec.summary);
+  row.appendChild(footer);
   return row;
 }
 
@@ -2319,6 +2445,8 @@ async function enterDecisionsView(initialFilter, navCtx) {
     statusEl.textContent = "Loading decisions…";
   }
 
+  await refreshDismissedIds();
+
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log_full");
@@ -2348,7 +2476,7 @@ async function enterDecisionsView(initialFilter, navCtx) {
   // trace each record to its project too.
   _edgesDocProjects = docProjects;
 
-  const items = Array.isArray(data && data.records) ? data.records : [];
+  const items = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
   // For the Conflicts lens: index records by id (to ground each edge) + base URL (source links).
   const byId = new Map();
   for (const it of items) {
@@ -2564,18 +2692,19 @@ function renderDecisionCard(rec, recState, projects) {
     card.appendChild(chips);
   }
 
-  // Drill-down: the subject's full evidence chain (Receipts).
+  // Actions: drill-down to Receipts (when the record has a subject) + Dismiss.
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
   if (rec.primaryEntity) {
-    const actions = document.createElement("div");
-    actions.className = "record-actions";
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
     btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
     actions.appendChild(btn);
-    card.appendChild(actions);
   }
+  appendDismissControl(actions, rec.recordId, card, rec.summary);
+  card.appendChild(actions);
 
   return card;
 }
@@ -3959,7 +4088,7 @@ function showToast(payload) {
       ${
         cta
           ? `<button type="button" class="toast-cta" data-action="${escapeHtml(
-              cta.action
+              cta.action || ""
             )}">${escapeHtml(cta.label)}</button>`
           : ""
       }
@@ -3970,7 +4099,15 @@ function showToast(payload) {
   toast.querySelector(".toast-close").addEventListener("click", () => dismissToast(id));
   if (cta) {
     toast.querySelector(".toast-cta").addEventListener("click", () => {
-      console.log("toast CTA clicked:", cta);
+      if (typeof cta.onClick === "function") {
+        try {
+          cta.onClick();
+        } catch (e) {
+          console.warn("toast CTA onClick failed:", e);
+        }
+      } else {
+        console.log("toast CTA clicked:", cta);
+      }
       dismissToast(id);
     });
   }
