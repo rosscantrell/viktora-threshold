@@ -132,7 +132,18 @@ jobs:
       - name: Sign Windows installers (Azure Trusted Signing)
         if: matrix.platform == 'windows-latest' && env.AZURE_CLIENT_ID != ''
         uses: azure/trusted-signing-action@v0
+        # Pass the service-principal creds BOTH as explicit inputs and as
+        # step-level env. The action's DefaultAzureCredential wasn't picking up
+        # the job-level env (EnvironmentCredential reported "not configured"),
+        # so we feed them directly here. The SP itself is verified-good.
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
           endpoint: ${{ vars.AZURE_ENDPOINT }}
           trusted-signing-account-name: ${{ vars.AZURE_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_PROFILE }}
