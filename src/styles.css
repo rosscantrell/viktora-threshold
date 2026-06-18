@@ -2269,6 +2269,54 @@ code {
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
 
+/* WP-THRESHOLD-RECORD-HITL — the inline dismiss-reason popover. A small glass
+   menu anchored under the ✕ button; one button per closed-set reason. Plain text
+   labels (no emoji), muted glass surface to match the widget aesthetic. */
+.record-reason-menu {
+  z-index: 1000;
+  min-width: 160px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--surface-raised);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.record-reason-heading {
+  padding: 4px 8px 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+}
+
+.record-reason-item {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.record-reason-item:hover {
+  background: var(--surface-2);
+  color: #e8eaed;
+}
+
+.record-reason-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
  * WP-N1 (S1 sharing elements) — capture attribution, co-sign chip, Mine/Everyone
  * filter. All invisible-by-absence (rendered only when the data is present).

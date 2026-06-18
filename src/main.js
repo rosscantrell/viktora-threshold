@@ -1032,8 +1032,22 @@ async function refreshDismissedIds() {
   }
 }
 
-/** Append a subtle "Dismiss" (✕) control to an actions row. Clicking suppresses
- *  the record optimistically and offers Undo. `summary` is used for the toast. */
+// WP-THRESHOLD-RECORD-HITL — the closed set of dismiss reasons the SERVER
+// accepts on PATCH /api/decision-log/records/:id when state === "dismissed".
+// These four slugs are contract-fixed server-side; corrections (e.g. wrong-owner)
+// are NOT valid dismiss reasons and are deliberately absent. Labels are plain
+// text — no emoji — to match the glassy widget aesthetic.
+const DISMISS_REASONS = [
+  { slug: "not-relevant", label: "Not relevant" },
+  { slug: "not-salient", label: "Not salient" },
+  { slug: "already-known", label: "Already knew this" },
+  { slug: "closing-out", label: "Closing out" },
+];
+
+/** Append a subtle "Dismiss" (✕) control to an actions row. Clicking opens a
+ *  small inline reason menu (the closed 4-reason set the server accepts); picking
+ *  a reason suppresses the record optimistically AND records the disposition
+ *  server-side, then offers Undo. `summary` is used for the toast. */
 function appendDismissControl(actionsEl, recordId, cardEl, summary) {
   if (!recordId) return;
   const btn = document.createElement("button");
@@ -1044,14 +1058,100 @@ function appendDismissControl(actionsEl, recordId, cardEl, summary) {
   btn.textContent = "✕";
   btn.addEventListener("click", (e) => {
     e.stopPropagation(); // don't toggle a group header / open receipts
-    dismissRecord(recordId, cardEl, summary);
+    openDismissReasonMenu(btn, recordId, cardEl, summary);
   });
   actionsEl.appendChild(btn);
 }
 
-/** Optimistically remove `cardEl`, persist the dismissal, and show an Undo toast.
- *  On a persistence failure the card is restored and an error toast shown. */
-async function dismissRecord(recordId, cardEl, summary) {
+/** Tracks the currently-open reason menu so a second click / outside click /
+ *  Escape closes it (only one menu open at a time). */
+let _openReasonMenu = null;
+
+function closeDismissReasonMenu() {
+  if (_openReasonMenu) {
+    _openReasonMenu.remove();
+    _openReasonMenu = null;
+    document.removeEventListener("click", _onOutsideReasonClick, true);
+    document.removeEventListener("keydown", _onReasonMenuKeydown, true);
+  }
+}
+
+function _onOutsideReasonClick(e) {
+  if (_openReasonMenu && !_openReasonMenu.contains(e.target)) {
+    closeDismissReasonMenu();
+  }
+}
+
+function _onReasonMenuKeydown(e) {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeDismissReasonMenu();
+  }
+}
+
+/** Open the inline reason picker anchored under the ✕ button. The menu is a
+ *  small glass popover with one button per closed-set reason. */
+function openDismissReasonMenu(anchorBtn, recordId, cardEl, summary) {
+  // Toggle: a second click on the same trigger closes it.
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu";
+  menu.setAttribute("role", "menu");
+
+  const heading = document.createElement("div");
+  heading.className = "record-reason-heading";
+  heading.textContent = "Dismiss because…";
+  menu.appendChild(heading);
+
+  for (const { slug, label } of DISMISS_REASONS) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "record-reason-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = label;
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeDismissReasonMenu();
+      dismissRecord(recordId, cardEl, summary, slug);
+    });
+    menu.appendChild(item);
+  }
+
+  // Anchor under the ✕ button. The actions footer isn't positioned, so we use a
+  // fixed-position popover placed against the button's viewport rect.
+  document.body.appendChild(menu);
+  const r = anchorBtn.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  // Right-align the menu to the button so it doesn't overflow the narrow widget.
+  menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+
+  _openReasonMenu = menu;
+  // Defer outside-click wiring so THIS click (which opened the menu) doesn't
+  // immediately close it.
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
+
+/** Optimistically remove `cardEl`, record the disposition server-side AND keep
+ *  the local suppression cache, then show an Undo toast.
+ *
+ *  Order of operations (offline-tolerant):
+ *   1. Optimistically hide the card + add to the local `_dismissedIds` set.
+ *   2. Persist the local suppression (`dismiss_record`) — this is the OFFLINE
+ *      FALLBACK so the item stays hidden across restarts even if the server is
+ *      unreachable. A local-write failure restores the card + errors out.
+ *   3. Best-effort server PATCH (`set_record_disposition`, state=dismissed +
+ *      reason). On success the dismissal is durable server-side (calibration
+ *      signal). On failure we KEEP the local hide and just log — the item is
+ *      still suppressed locally; the server simply didn't hear about it.
+ */
+async function dismissRecord(recordId, cardEl, summary, reason) {
   if (!recordId || !cardEl) return;
   const parent = cardEl.parentNode;
   const next = cardEl.nextSibling;
@@ -1059,10 +1159,11 @@ async function dismissRecord(recordId, cardEl, summary) {
   _dismissedIds.add(recordId);
   cardEl.remove();
 
+  // (2) Local optimistic-cache write — the offline fallback.
   try {
     await tauri.core.invoke("dismiss_record", { recordId });
   } catch (err) {
-    console.warn("[main] dismiss_record failed:", err);
+    console.warn("[main] dismiss_record (local) failed:", err);
     _dismissedIds.delete(recordId);
     if (parent) parent.insertBefore(cardEl, next || null);
     showToast({
@@ -1073,15 +1174,35 @@ async function dismissRecord(recordId, cardEl, summary) {
     return;
   }
 
+  // (3) Server-side disposition — best-effort. The local hide already stands.
+  let serverOk = true;
+  if (reason) {
+    try {
+      await tauri.core.invoke("set_record_disposition", {
+        recordId,
+        disposition: "dismissed",
+        reason,
+      });
+    } catch (err) {
+      serverOk = false;
+      console.warn("[main] set_record_disposition (dismissed) failed:", err);
+    }
+  }
+
   showToast({
     kind: "idempotent",
     title: "Dismissed",
-    body: summary ? clampText(summary, 80) : "",
+    body: serverOk
+      ? summary
+        ? clampText(summary, 80)
+        : ""
+      : "Hidden locally — couldn't reach Apolla to record it.",
     cta: { label: "Undo", onClick: () => undoDismiss(recordId, cardEl, parent, next) },
   });
 }
 
-/** Reverse a dismissal: un-persist and re-insert the card where it was. */
+/** Reverse a dismissal: un-persist locally, re-activate server-side (best-effort),
+ *  and re-insert the card where it was. */
 async function undoDismiss(recordId, cardEl, parent, next) {
   try {
     await tauri.core.invoke("undismiss_record", { recordId });
@@ -1090,8 +1211,96 @@ async function undoDismiss(recordId, cardEl, parent, next) {
     // Fall through — still restore the view; the set is the source of truth for
     // this session and a re-fetch will reconcile.
   }
+  // Best-effort: tell the server the record is active again (mirrors the local
+  // un-suppress). Failure is non-fatal — the local restore below still happens.
+  try {
+    await tauri.core.invoke("set_record_disposition", {
+      recordId,
+      disposition: "active",
+    });
+  } catch (err) {
+    console.warn("[main] set_record_disposition (active/undo) failed:", err);
+  }
   _dismissedIds.delete(recordId);
   if (parent && !cardEl.isConnected) parent.insertBefore(cardEl, next || null);
+}
+
+// WP-THRESHOLD-RECORD-HITL — Resolve / Snooze.
+//
+// TODO(resolve/snooze UI): the Rust `set_record_disposition` command + server
+// endpoint fully support `state: "resolved"` and `state: "snoozed"` (with an
+// optional ISO `snoozeUntil`). The records panel does NOT yet host dedicated
+// Resolve / Snooze affordances (adding two more inline controls + a snooze
+// date-picker to every card is out of proportion for this cut). The helpers
+// below are wired end-to-end so the panel can call them once those affordances
+// land; Dismiss is the only gesture surfaced in the UI today.
+
+/** Mark a record resolved server-side (state=resolved) and locally suppress it.
+ *  Symmetric with dismissRecord but with no reason (resolve takes none). */
+async function resolveRecord(recordId, cardEl, summary) {
+  if (!recordId || !cardEl) return;
+  const parent = cardEl.parentNode;
+  const next = cardEl.nextSibling;
+  _dismissedIds.add(recordId);
+  cardEl.remove();
+  try {
+    await tauri.core.invoke("dismiss_record", { recordId });
+  } catch (err) {
+    console.warn("[main] dismiss_record (local, resolve) failed:", err);
+    _dismissedIds.delete(recordId);
+    if (parent) parent.insertBefore(cardEl, next || null);
+    showToast({ kind: "failure", title: "Couldn't resolve", body: "The change wasn't saved. Try again." });
+    return;
+  }
+  let serverOk = true;
+  try {
+    await tauri.core.invoke("set_record_disposition", { recordId, disposition: "resolved" });
+  } catch (err) {
+    serverOk = false;
+    console.warn("[main] set_record_disposition (resolved) failed:", err);
+  }
+  showToast({
+    kind: "success",
+    title: "Resolved",
+    body: serverOk ? (summary ? clampText(summary, 80) : "") : "Hidden locally — couldn't reach Apolla to record it.",
+    cta: { label: "Undo", onClick: () => undoDismiss(recordId, cardEl, parent, next) },
+  });
+}
+
+/** Snooze a record until `snoozeUntilIso` (ISO 8601) server-side and locally
+ *  suppress it for now. */
+async function snoozeRecord(recordId, cardEl, summary, snoozeUntilIso) {
+  if (!recordId || !cardEl) return;
+  const parent = cardEl.parentNode;
+  const next = cardEl.nextSibling;
+  _dismissedIds.add(recordId);
+  cardEl.remove();
+  try {
+    await tauri.core.invoke("dismiss_record", { recordId });
+  } catch (err) {
+    console.warn("[main] dismiss_record (local, snooze) failed:", err);
+    _dismissedIds.delete(recordId);
+    if (parent) parent.insertBefore(cardEl, next || null);
+    showToast({ kind: "failure", title: "Couldn't snooze", body: "The change wasn't saved. Try again." });
+    return;
+  }
+  let serverOk = true;
+  try {
+    await tauri.core.invoke("set_record_disposition", {
+      recordId,
+      disposition: "snoozed",
+      snoozeUntil: snoozeUntilIso || undefined,
+    });
+  } catch (err) {
+    serverOk = false;
+    console.warn("[main] set_record_disposition (snoozed) failed:", err);
+  }
+  showToast({
+    kind: "idempotent",
+    title: "Snoozed",
+    body: serverOk ? (summary ? clampText(summary, 80) : "") : "Hidden locally — couldn't reach Apolla to record it.",
+    cta: { label: "Undo", onClick: () => undoDismiss(recordId, cardEl, parent, next) },
+  });
 }
 
 /** Truncate to `max` chars on a word boundary, with an ellipsis. */
