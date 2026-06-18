@@ -101,3 +101,48 @@ body {
   border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
   word-break: break-word;
 }
+
+/* Expanded Definition card — "where it stands" execution block beneath the prose:
+ * open-item counts, past-due list, and the one focus. */
+.entity-exec {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--glass-border);
+}
+.entity-exec-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+  margin-bottom: 8px;
+}
+.entity-exec-counts {
+  font-size: 13px;
+  color: var(--glass-text);
+  margin-bottom: 6px;
+}
+.entity-exec-sublabel {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  margin: 10px 0 4px;
+}
+.entity-exec-item {
+  font-size: 12.5px;
+  color: var(--glass-text-dim);
+  line-height: 1.5;
+  padding: 1px 0;
+}
+.entity-exec-focus {
+  margin-top: 12px;
+  padding: 9px 12px;
+  background: rgba(255, 196, 64, 0.1);
+  border-left: 2px solid var(--glass-accent);
+  border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
+  font-size: 12.5px;
+  color: var(--glass-text);
+  line-height: 1.5;
+}
+.entity-exec-focus-label {
+  color: var(--glass-accent);
+  font-weight: 600;
+}

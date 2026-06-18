@@ -2695,8 +2695,61 @@ async function enterEntityCardView(entity) {
       p.textContent = para.trim();
       if (p.textContent) proseEl.appendChild(p);
     }
+    // Expanded card — where this subject stands (open items + focus).
+    if (data && data.execution) appendCardExecution(proseEl, data.execution);
   }
   if (footerEl) footerEl.hidden = false;
+}
+
+// Render the "where it stands" execution block beneath the definition prose:
+// open decision/commitment counts, the past-due items, and the one focus.
+function appendCardExecution(container, e) {
+  if (!container || !e) return;
+  const open = (e.openDecisions || 0) + (e.openCommitments || 0) + (e.undated || 0);
+  if (!open) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "entity-exec";
+
+  const head = document.createElement("div");
+  head.className = "entity-exec-head";
+  head.textContent = "Where it stands";
+  wrap.appendChild(head);
+
+  const counts = document.createElement("div");
+  counts.className = "entity-exec-counts";
+  const parts = [];
+  if (e.openDecisions) parts.push(`${e.openDecisions} open decision${e.openDecisions === 1 ? "" : "s"}`);
+  if (e.openCommitments) parts.push(`${e.openCommitments} open commitment${e.openCommitments === 1 ? "" : "s"}`);
+  if (e.undated) parts.push(`${e.undated} undated`);
+  counts.textContent = parts.join(" · ");
+  wrap.appendChild(counts);
+
+  if (Array.isArray(e.pastDue) && e.pastDue.length) {
+    const label = document.createElement("div");
+    label.className = "entity-exec-sublabel";
+    label.textContent = `Past due (${e.pastDue.length})`;
+    wrap.appendChild(label);
+    for (const i of e.pastDue.slice(0, 5)) {
+      const row = document.createElement("div");
+      row.className = "entity-exec-item";
+      row.textContent = `${i.summary}${i.owner ? " — " + i.owner : ""}${i.daysOverdue != null ? ` (${i.daysOverdue}d ago)` : ""}`;
+      wrap.appendChild(row);
+    }
+  }
+
+  if (e.focus && e.focus.text) {
+    const focus = document.createElement("div");
+    focus.className = "entity-exec-focus";
+    const fl = document.createElement("span");
+    fl.className = "entity-exec-focus-label";
+    fl.textContent = "Focus: ";
+    focus.appendChild(fl);
+    focus.appendChild(document.createTextNode(e.focus.text));
+    wrap.appendChild(focus);
+  }
+
+  container.appendChild(wrap);
 }
 
 // Definition entry — from the Receipts header (both are entity-scoped).
