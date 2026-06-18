@@ -2897,6 +2897,146 @@ function renderConflictsLens(edges, byId, baseUrl) {
 }
 
 /** Re-render the grouped list under the active status filter (no re-fetch). */
+// ───────── WP-THRESHOLD-STATE-OF-PLAY — per-person send-ready digest ─────────
+// Consolidated ONTO the By-Person lens (no new view): the person is already the
+// organizing unit here, so the digest is just the "send update" action on them.
+// The message itself comes from the engine (/api/person/:slug/state-of-play) —
+// single source of truth, identical to the web surface; this layer only places
+// the action and copies the result. Default is the instant deterministic
+// template; "Polish with AI" opts into the engine LLM reword.
+let _sopPolish = false;
+
+function buildSopCopyAllBar(count) {
+  const bar = document.createElement("div");
+  bar.className = "sop-copyall-bar";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sop-action sop-copyall";
+  btn.textContent = `Copy all (${count})`;
+  btn.title = "Copy a send-ready update for every person";
+  btn.addEventListener("click", () => copyAllStateOfPlay(btn));
+  bar.appendChild(btn);
+  return bar;
+}
+
+function buildSopBar(slug, label) {
+  const wrap = document.createElement("div");
+  wrap.className = "sop-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sop-action";
+  btn.textContent = "State of Play";
+  btn.setAttribute("aria-expanded", "false");
+  const panel = document.createElement("div");
+  panel.className = "sop-panel";
+  panel.hidden = true;
+  btn.addEventListener("click", () => togglePersonStateOfPlay(slug, label, panel, btn));
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+async function togglePersonStateOfPlay(slug, label, panel, btn) {
+  if (!panel.hidden) {
+    panel.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    return;
+  }
+  panel.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  await loadPersonStateOfPlay(slug, label, panel);
+}
+
+async function loadPersonStateOfPlay(slug, label, panel) {
+  panel.innerHTML = '<div class="sop-status">Composing the update…</div>';
+  try {
+    const res = await tauri.core.invoke("fetch_person_state_of_play", { slug, polish: _sopPolish });
+    if (!res || res.available === false) {
+      const reason = res && res.reason === "unavailable"
+        ? "Summaries aren't available on this server yet."
+        : "No open items for " + label + " right now.";
+      panel.innerHTML = '<div class="sop-status">' + escapeHtml(reason) + "</div>";
+      return;
+    }
+    renderSopPanel(panel, res, slug, label);
+  } catch (err) {
+    console.warn("[main] fetch_person_state_of_play failed:", err);
+    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  }
+}
+
+function renderSopPanel(panel, data, slug, label) {
+  panel.innerHTML = "";
+
+  const bar = document.createElement("div");
+  bar.className = "sop-toolbar";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "sop-copy";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
+    } catch (e) {
+      showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    }
+  });
+  bar.appendChild(copyBtn);
+
+  const polishBtn = document.createElement("button");
+  polishBtn.type = "button";
+  polishBtn.className = "sop-polish";
+  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
+  polishBtn.addEventListener("click", async () => {
+    _sopPolish = !data.polished;
+    await loadPersonStateOfPlay(slug, label, panel);
+  });
+  bar.appendChild(polishBtn);
+
+  if (data.polished) {
+    const tag = document.createElement("span");
+    tag.className = "sop-polished-tag";
+    tag.textContent = "AI-polished";
+    bar.appendChild(tag);
+  }
+  panel.appendChild(bar);
+
+  const msg = document.createElement("pre");
+  msg.className = "sop-message";
+  msg.textContent = data.message || "";
+  panel.appendChild(msg);
+}
+
+async function copyAllStateOfPlay(btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Composing…";
+  try {
+    const res = await tauri.core.invoke("fetch_team_state_of_play");
+    const people = res && Array.isArray(res.people) ? res.people : [];
+    if (!res || res.available === false || people.length === 0) {
+      showToast({ kind: "failure", title: "Nothing to copy", body: "No open items across the team." });
+      btn.textContent = orig;
+      btn.disabled = false;
+      return;
+    }
+    const text = people.map((p) => p.message).join("\n\n────────\n\n");
+    await tauri.core.invoke("copy_text", { text });
+    btn.textContent = `Copied ${people.length} ✓`;
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1600);
+  } catch (e) {
+    console.warn("[main] copyAllStateOfPlay failed:", e);
+    showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
 function renderDecisions() {
   const listEl = document.getElementById("decisions-list");
   const statusEl = document.getElementById("decisions-status");
@@ -2928,6 +3068,12 @@ function renderDecisions() {
   const ordered = groupRecords(filtered, _decisionsLens, docProjects);
 
   listEl.innerHTML = "";
+  // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
+  // By-Person lens (the one lens where per-person digests make sense).
+  if (_decisionsLens === "people") {
+    const realCount = ordered.filter((g) => !g.muted).length;
+    if (realCount) listEl.appendChild(buildSopCopyAllBar(realCount));
+  }
   if (statusEl) {
     if (filtered.length === 0) {
       statusEl.hidden = false;
@@ -2992,6 +3138,11 @@ function renderDecisions() {
     const body = document.createElement("div");
     body.className = "decisions-group-body";
     body.hidden = !expanded;
+    // WP-THRESHOLD-STATE-OF-PLAY — the send-ready digest for this person sits at
+    // the top of their group (By-Person lens only; never on Unassigned).
+    if (_decisionsLens === "people" && !grp.muted) {
+      body.appendChild(buildSopBar(grp.key, grp.label));
+    }
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
       if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));

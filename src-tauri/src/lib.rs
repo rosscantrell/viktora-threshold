@@ -1837,6 +1837,92 @@ async fn fetch_entity_card(
         .map_err(|e| format!("fetch_entity_card: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-STATE-OF-PLAY — one person's send-ready execution digest.
+/// Proxies GET /api/person/:slug/state-of-play (flag-gated ENABLE_SYNTHESIS on
+/// the engine). `polish=false` requests the instant deterministic template
+/// (?format=text); `polish=true` (default in the UI) lets the engine LLM-reword
+/// the same items. Mirrors fetch_entity_card's bearer-auth + URL-encode pattern;
+/// 404 (no open items) / 503 (synthesis off or no API key) degrade to
+/// `{ available:false }` so the panel shows a calm empty state.
+#[tauri::command]
+async fn fetch_person_state_of_play(
+    state: tauri::State<'_, AppState>,
+    slug: String,
+    polish: bool,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(slug.as_bytes()).collect();
+    let url = format!(
+        "{}/api/person/{}/state-of-play{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded,
+        if polish { "" } else { "?format=text" }
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 {
+        return Ok(serde_json::json!({ "available": false, "reason": "no_open_items" }));
+    }
+    if http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false, "reason": "unavailable" }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_person_state_of_play: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-STATE-OF-PLAY — the whole team's digests in one call, for the
+/// "Copy all" batch export. Proxies GET /api/synthesis/state-of-play
+/// (deterministic by default — no per-person LLM fan-out). 404 (flag off) →
+/// `{ available:false }`.
+#[tauri::command]
+async fn fetch_team_state_of_play(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/synthesis/state-of-play",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 {
+        return Ok(serde_json::json!({ "available": false, "reason": "unavailable" }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_team_state_of_play: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-SOURCE — the in-app source reader. Proxies GET /api/document/:id
 /// and returns the document detail JSON, which (server-side) now folds in the
 /// raw `body` text so the split-view panel renders the source (email / Plaud
@@ -5598,6 +5684,9 @@ pub fn run() {
             undismiss_record,
             // WP-THRESHOLD-LOG-UX — per-entity definition card
             fetch_entity_card,
+            // WP-THRESHOLD-STATE-OF-PLAY — per-person + team execution digests
+            fetch_person_state_of_play,
+            fetch_team_state_of_play,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,
