@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Hardened-runtime entitlements for the notarized macOS build (FN-OCR-13-03).
+
+  Apple notarization REQUIRES the hardened runtime. Tauri 2 enables the
+  hardened runtime automatically when it signs with a Developer ID identity
+  (i.e. when APPLE_SIGNING_IDENTITY / APPLE_CERTIFICATE are present in CI) and
+  applies these entitlements via `bundle.macOS.entitlements` in tauri.conf.json.
+
+  The three keys below are the standard set a WKWebView-backed app needs to run
+  under the hardened runtime — WebKit's JavaScript engine maps writable+
+  executable memory (JIT). Without them a notarized build can launch and then
+  crash on first page load. They are all on Apple's allowlist, so they do NOT
+  block notarization.
+
+  If a future audit wants the tightest possible surface, the two memory keys can
+  be trimmed and re-tested on a clean machine; disable-library-validation is only
+  needed if we ever load unsigned third-party dylibs. Left in for now because the
+  cost is low and the failure mode (silent crash on a pilot's machine) is high.
+
+  When the build runs WITHOUT signing secrets (ad-hoc / unsigned dev release),
+  these entitlements are simply applied during the ad-hoc codesign and are inert.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+  </dict>
+</plist>
