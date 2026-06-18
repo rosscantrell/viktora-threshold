@@ -2455,6 +2455,74 @@ if (logRefreshBtn) {
   });
 }
 
+// WP-THRESHOLD-STATE-OF-PLAY — corpus altitude on Today: the Monday overview
+// across all projects, on demand. Same engine as the per-person digest.
+let _corpusPolish = false;
+const logSopBtn = document.getElementById("btn-log-sop");
+if (logSopBtn) {
+  logSopBtn.addEventListener("click", () => {
+    const panel = document.getElementById("log-sop-panel");
+    if (!panel) return;
+    if (!panel.hidden) { panel.hidden = true; logSopBtn.setAttribute("aria-expanded", "false"); return; }
+    panel.hidden = false;
+    logSopBtn.setAttribute("aria-expanded", "true");
+    loadCorpusStateOfPlay(panel);
+  });
+}
+async function loadCorpusStateOfPlay(panel) {
+  panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
+  try {
+    const res = await tauri.core.invoke("fetch_corpus_state_of_play", { polish: _corpusPolish });
+    if (!res || res.available === false) {
+      panel.innerHTML = '<div class="sop-status">' +
+        (res && res.reason === "unavailable" ? "Overview isn't available on this server yet." : "No open items.") + "</div>";
+      return;
+    }
+    renderCorpusPanel(panel, res);
+  } catch (err) {
+    console.warn("[main] fetch_corpus_state_of_play failed:", err);
+    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  }
+}
+function renderCorpusPanel(panel, data) {
+  panel.innerHTML = "";
+  const bar = document.createElement("div");
+  bar.className = "sop-toolbar";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "sop-copy";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
+    } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
+  });
+  bar.appendChild(copyBtn);
+  const polishBtn = document.createElement("button");
+  polishBtn.type = "button";
+  polishBtn.className = "sop-polish";
+  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
+  polishBtn.addEventListener("click", async () => {
+    _corpusPolish = !data.polished;
+    await loadCorpusStateOfPlay(panel);
+  });
+  bar.appendChild(polishBtn);
+  if (data.polished) {
+    const t = document.createElement("span");
+    t.className = "sop-polished-tag";
+    t.textContent = "AI-polished";
+    bar.appendChild(t);
+  }
+  panel.appendChild(bar);
+  const msg = document.createElement("pre");
+  msg.className = "sop-message";
+  msg.textContent = data.message || "";
+  panel.appendChild(msg);
+}
+
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
 const logEdgesBtn = document.getElementById("btn-log-edges");
 if (logEdgesBtn) {
@@ -3160,8 +3228,61 @@ async function enterEntityCardView(entity) {
       p.textContent = para.trim();
       if (p.textContent) proseEl.appendChild(p);
     }
+    // Expanded card — where this subject stands (open items + focus).
+    if (data && data.execution) appendCardExecution(proseEl, data.execution);
   }
   if (footerEl) footerEl.hidden = false;
+}
+
+// Render the "where it stands" execution block beneath the definition prose:
+// open decision/commitment counts, the past-due items, and the one focus.
+function appendCardExecution(container, e) {
+  if (!container || !e) return;
+  const open = (e.openDecisions || 0) + (e.openCommitments || 0) + (e.undated || 0);
+  if (!open) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "entity-exec";
+
+  const head = document.createElement("div");
+  head.className = "entity-exec-head";
+  head.textContent = "Where it stands";
+  wrap.appendChild(head);
+
+  const counts = document.createElement("div");
+  counts.className = "entity-exec-counts";
+  const parts = [];
+  if (e.openDecisions) parts.push(`${e.openDecisions} open decision${e.openDecisions === 1 ? "" : "s"}`);
+  if (e.openCommitments) parts.push(`${e.openCommitments} open commitment${e.openCommitments === 1 ? "" : "s"}`);
+  if (e.undated) parts.push(`${e.undated} undated`);
+  counts.textContent = parts.join(" · ");
+  wrap.appendChild(counts);
+
+  if (Array.isArray(e.pastDue) && e.pastDue.length) {
+    const label = document.createElement("div");
+    label.className = "entity-exec-sublabel";
+    label.textContent = `Past due (${e.pastDue.length})`;
+    wrap.appendChild(label);
+    for (const i of e.pastDue.slice(0, 5)) {
+      const row = document.createElement("div");
+      row.className = "entity-exec-item";
+      row.textContent = `${i.summary}${i.owner ? " — " + i.owner : ""}${i.daysOverdue != null ? ` (${i.daysOverdue}d ago)` : ""}`;
+      wrap.appendChild(row);
+    }
+  }
+
+  if (e.focus && e.focus.text) {
+    const focus = document.createElement("div");
+    focus.className = "entity-exec-focus";
+    const fl = document.createElement("span");
+    fl.className = "entity-exec-focus-label";
+    fl.textContent = "Focus: ";
+    focus.appendChild(fl);
+    focus.appendChild(document.createTextNode(e.focus.text));
+    wrap.appendChild(focus);
+  }
+
+  container.appendChild(wrap);
 }
 
 // Definition entry — from the Receipts header (both are entity-scoped).
@@ -3222,8 +3343,11 @@ function deadlineBucket(due) {
  * — catch-all groups (Other / Unassigned / No due date) sort last and render
  * muted so the real organization leads.
  */
-function groupRecords(items, lens, docProjects) {
+function groupRecords(items, lens, docProjects, aliases) {
   const g = new Map();
+  // Resolve a slug to its canonical form so duplicate subjects collapse into one
+  // group (sora → project-sora). Identity when no alias is known.
+  const canon = (s) => (aliases && aliases[s]) || s;
   const ensure = (key, label, order, muted) => {
     if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
     return g.get(key);
@@ -3235,11 +3359,11 @@ function groupRecords(items, lens, docProjects) {
       const b = deadlineBucket(rec.due);
       ensure(b.key, b.label, b.order, b.muted).items.push(it);
     } else if (lens === "people") {
-      const key = rec.owner || "z-unassigned";
-      ensure(key, rec.owner ? prettySlug(rec.owner) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
+      const key = rec.owner ? canon(rec.owner) : "z-unassigned";
+      ensure(key, rec.owner ? prettySlug(key) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
     } else {
       const projs = docProjects.get(rec.documentId) || [];
-      const key = projs.length ? projs[0] : PROJECT_OTHER;
+      const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
       ensure(key, key === PROJECT_OTHER ? "Other" : prettySlug(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
     }
   }
@@ -3331,6 +3455,9 @@ async function enterDecisionsView(initialFilter, navCtx) {
     edges: Array.isArray(data && data.edges) ? data.edges : [],
     byId,
     baseUrl,
+    // Canonical alias map (slug → canonical) from the engine — consolidates
+    // duplicate subjects in the By-project lens (sora → project-sora).
+    aliases: data && data.aliases ? data.aliases : {},
   };
   renderDecisions();
 }
@@ -3362,12 +3489,261 @@ function renderConflictsLens(edges, byId, baseUrl) {
 }
 
 /** Re-render the grouped list under the active status filter (no re-fetch). */
+// ───────── WP-THRESHOLD-STATE-OF-PLAY — per-person send-ready digest ─────────
+// Consolidated ONTO the By-Person lens (no new view): the person is already the
+// organizing unit here, so the digest is just the "send update" action on them.
+// The message itself comes from the engine (/api/person/:slug/state-of-play) —
+// single source of truth, identical to the web surface; this layer only places
+// the action and copies the result. Default is the instant deterministic
+// template; "Polish with AI" opts into the engine LLM reword.
+let _sopPolish = false;
+
+function buildSopCopyAllBar(count) {
+  const bar = document.createElement("div");
+  bar.className = "sop-copyall-bar";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sop-action sop-copyall";
+  btn.textContent = `Copy all (${count})`;
+  btn.title = "Copy a send-ready update for every person";
+  btn.addEventListener("click", () => copyAllStateOfPlay(btn));
+  bar.appendChild(btn);
+  return bar;
+}
+
+function buildSopBar(slug, label) {
+  const wrap = document.createElement("div");
+  wrap.className = "sop-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sop-action";
+  btn.textContent = "State of Play";
+  btn.setAttribute("aria-expanded", "false");
+  const panel = document.createElement("div");
+  panel.className = "sop-panel";
+  panel.hidden = true;
+  btn.addEventListener("click", () => togglePersonStateOfPlay(slug, label, panel, btn));
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+async function togglePersonStateOfPlay(slug, label, panel, btn) {
+  if (!panel.hidden) {
+    panel.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    return;
+  }
+  panel.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  await loadPersonStateOfPlay(slug, label, panel);
+}
+
+async function loadPersonStateOfPlay(slug, label, panel) {
+  panel.innerHTML = '<div class="sop-status">Composing the update…</div>';
+  try {
+    const res = await tauri.core.invoke("fetch_person_state_of_play", { slug, polish: _sopPolish });
+    if (!res || res.available === false) {
+      const reason = res && res.reason === "unavailable"
+        ? "Summaries aren't available on this server yet."
+        : "No open items for " + label + " right now.";
+      panel.innerHTML = '<div class="sop-status">' + escapeHtml(reason) + "</div>";
+      return;
+    }
+    renderSopPanel(panel, res, slug, label);
+  } catch (err) {
+    console.warn("[main] fetch_person_state_of_play failed:", err);
+    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  }
+}
+
+function renderSopPanel(panel, data, slug, label) {
+  panel.innerHTML = "";
+
+  const bar = document.createElement("div");
+  bar.className = "sop-toolbar";
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "sop-copy";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
+    } catch (e) {
+      showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    }
+  });
+  bar.appendChild(copyBtn);
+
+  const polishBtn = document.createElement("button");
+  polishBtn.type = "button";
+  polishBtn.className = "sop-polish";
+  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
+  polishBtn.addEventListener("click", async () => {
+    _sopPolish = !data.polished;
+    await loadPersonStateOfPlay(slug, label, panel);
+  });
+  bar.appendChild(polishBtn);
+
+  if (data.polished) {
+    const tag = document.createElement("span");
+    tag.className = "sop-polished-tag";
+    tag.textContent = "AI-polished";
+    bar.appendChild(tag);
+  }
+  panel.appendChild(bar);
+
+  const msg = document.createElement("pre");
+  msg.className = "sop-message";
+  msg.textContent = data.message || "";
+  panel.appendChild(msg);
+}
+
+async function copyAllStateOfPlay(btn) {
+  if (btn.disabled) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Composing…";
+  try {
+    const res = await tauri.core.invoke("fetch_team_state_of_play");
+    const people = res && Array.isArray(res.people) ? res.people : [];
+    if (!res || res.available === false || people.length === 0) {
+      showToast({ kind: "failure", title: "Nothing to copy", body: "No open items across the team." });
+      btn.textContent = orig;
+      btn.disabled = false;
+      return;
+    }
+    const text = people.map((p) => p.message).join("\n\n────────\n\n");
+    await tauri.core.invoke("copy_text", { text });
+    btn.textContent = `Copied ${people.length} ✓`;
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1600);
+  } catch (e) {
+    console.warn("[main] copyAllStateOfPlay failed:", e);
+    showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    btn.textContent = orig;
+    btn.disabled = false;
+  }
+}
+
+// WP-THRESHOLD-STATE-OF-PLAY — PROJECT altitude on the By-project lens: the
+// team-addressed email PLUS per-teammate "copy individually" chips, on demand.
+const _projectPolish = {};
+
+function buildProjectSopBar(slug, label) {
+  const wrap = document.createElement("div");
+  wrap.className = "sop-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "sop-action";
+  btn.textContent = "State of Play";
+  btn.setAttribute("aria-expanded", "false");
+  const panel = document.createElement("div");
+  panel.className = "sop-panel";
+  panel.hidden = true;
+  btn.addEventListener("click", () => {
+    if (!panel.hidden) { panel.hidden = true; btn.setAttribute("aria-expanded", "false"); return; }
+    panel.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    loadProjectStateOfPlay(slug, label, panel);
+  });
+  wrap.appendChild(btn);
+  wrap.appendChild(panel);
+  return wrap;
+}
+
+async function loadProjectStateOfPlay(slug, label, panel) {
+  panel.innerHTML = '<div class="sop-status">Composing the team update…</div>';
+  try {
+    const res = await tauri.core.invoke("fetch_project_state_of_play", { slug, polish: !!_projectPolish[slug] });
+    if (!res || res.available === false) {
+      panel.innerHTML = '<div class="sop-status">No open items for ' + label + '.</div>';
+      return;
+    }
+    renderProjectPanel(panel, res, slug, label);
+  } catch (err) {
+    console.warn("[main] fetch_project_state_of_play failed:", err);
+    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  }
+}
+
+function renderProjectPanel(panel, data, slug, label) {
+  panel.innerHTML = "";
+
+  const bar = document.createElement("div");
+  bar.className = "sop-toolbar";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "sop-copy";
+  copyBtn.textContent = "Copy team email";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: data.teamMessage || "" });
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy team email"; copyBtn.disabled = false; }, 1600);
+    } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
+  });
+  bar.appendChild(copyBtn);
+  const polishBtn = document.createElement("button");
+  polishBtn.type = "button";
+  polishBtn.className = "sop-polish";
+  polishBtn.textContent = data.teamPolished ? "Plain text" : "Polish with AI";
+  polishBtn.addEventListener("click", async () => {
+    _projectPolish[slug] = !data.teamPolished;
+    await loadProjectStateOfPlay(slug, label, panel);
+  });
+  bar.appendChild(polishBtn);
+  if (data.teamPolished) {
+    const t = document.createElement("span");
+    t.className = "sop-polished-tag";
+    t.textContent = "AI-polished";
+    bar.appendChild(t);
+  }
+  panel.appendChild(bar);
+
+  const msg = document.createElement("pre");
+  msg.className = "sop-message";
+  msg.textContent = data.teamMessage || "";
+  panel.appendChild(msg);
+
+  const people = Array.isArray(data.people) ? data.people : [];
+  if (people.length) {
+    const sub = document.createElement("div");
+    sub.className = "sop-status";
+    sub.style.marginTop = "12px";
+    sub.textContent = "Or send individually:";
+    panel.appendChild(sub);
+    const chips = document.createElement("div");
+    chips.className = "sop-people-chips";
+    for (const p of people) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "sop-people-chip";
+      chip.textContent = `Copy ${p.displayName} (${p.openCount})`;
+      chip.addEventListener("click", async () => {
+        try {
+          await tauri.core.invoke("copy_text", { text: p.message || "" });
+          const o = chip.textContent;
+          chip.textContent = "Copied ✓";
+          setTimeout(() => { chip.textContent = o; }, 1400);
+        } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
+      });
+      chips.appendChild(chip);
+    }
+    panel.appendChild(chips);
+  }
+}
+
 function renderDecisions() {
   const listEl = document.getElementById("decisions-list");
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -3390,9 +3766,15 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects);
+  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases);
 
   listEl.innerHTML = "";
+  // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
+  // By-Person lens (the one lens where per-person digests make sense).
+  if (_decisionsLens === "people") {
+    const realCount = ordered.filter((g) => !g.muted).length;
+    if (realCount) listEl.appendChild(buildSopCopyAllBar(realCount));
+  }
   if (statusEl) {
     if (filtered.length === 0) {
       statusEl.hidden = false;
@@ -3457,6 +3839,14 @@ function renderDecisions() {
     const body = document.createElement("div");
     body.className = "decisions-group-body";
     body.hidden = !expanded;
+    // WP-THRESHOLD-STATE-OF-PLAY — the send-ready digest for this person sits at
+    // the top of their group (By-Person lens only; never on Unassigned).
+    if (_decisionsLens === "people" && !grp.muted) {
+      body.appendChild(buildSopBar(grp.key, grp.label));
+    } else if (_decisionsLens === "project" && !grp.muted) {
+      // Project altitude — the team email + per-teammate digests for this project.
+      body.appendChild(buildProjectSopBar(grp.key, grp.label));
+    }
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
       if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
