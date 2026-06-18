@@ -444,6 +444,55 @@ pub fn parse_configure_deep_link(url: &url::Url) -> Option<ConfigurePrefill> {
     })
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-THRESHOLD-APP-AUTH (email-login) — deep-link auth callback
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Payload emitted to the frontend when an `apolla-threshold://auth?token=...`
+/// URL is opened (the desktop magic-link carrier). The frontend listens on
+/// `threshold://auth-callback` and calls the `auth_verify(token)` IPC, which
+/// redeems the single-use magic `token` at `POST /api/auth/desktop/verify` for
+/// the user's per-user, revocable bearer and persists it to config.json.
+///
+/// The base URL is NOT carried here — it was persisted to config.json when the
+/// app called `auth_request_link` (moments earlier), so `auth_verify` already
+/// knows which server to redeem against. This mirrors how `ConfigurePrefill`
+/// reconstructs the base URL, but for auth the app is the one that chose it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthCallback {
+    /// Single-use magic token (opaque). Redeemed by `auth_verify`.
+    pub token: String,
+}
+
+/// Parse an `apolla-threshold://auth?token=...` URL into an `AuthCallback`.
+/// Returns `None` for malformed URLs (wrong scheme/host, missing token) so the
+/// deep-link handler can log + skip without crashing. Mirrors
+/// `parse_configure_deep_link`: accepts `auth` as either host or first path
+/// segment to tolerate custom-scheme URL-parser inconsistencies.
+pub fn parse_auth_deep_link(url: &url::Url) -> Option<AuthCallback> {
+    if url.scheme() != "apolla-threshold" {
+        return None;
+    }
+    let host_ok = url.host_str() == Some("auth");
+    let path_ok = url.path().trim_start_matches('/').split('/').next() == Some("auth")
+        && url.host_str().is_none();
+    if !host_ok && !path_ok {
+        return None;
+    }
+    let mut token: Option<String> = None;
+    for (k, v) in url.query_pairs() {
+        if k.as_ref() == "token" {
+            token = Some(v.into_owned());
+        }
+    }
+    let token = token?;
+    if token.is_empty() {
+        return None;
+    }
+    Some(AuthCallback { token })
+}
+
 fn config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("Viktora Threshold"))
 }
@@ -568,6 +617,205 @@ fn reregister_onenote_hotkey(
     // gate in `setup()`). Configure-pane writes still persist the hotkey
     // string in AppConfig so it survives across platforms (e.g., user
     // configures on Mac via shared config, runs on Windows).
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-THRESHOLD-APP-AUTH (email-login) — per-user magic-link sign-in IPC
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Flow (mirrors the server design):
+//   1. First-run screen → `auth_request_link(base_url, email)` persists the
+//      base URL and POSTs `{ email, desktop: true }` to
+//      `/api/auth/request-link`. The server emails an
+//      `apolla-threshold://auth?token=...` deep link.
+//   2. User clicks the link → OS launches the app → `on_open_url` parses it +
+//      emits `threshold://auth-callback` → frontend calls `auth_verify(token)`.
+//   3. `auth_verify` redeems the magic token at `/api/auth/desktop/verify` for
+//      the user's per-user, revocable bearer (`apolla_...`) and persists it as
+//      `bearer_token` in config.json — replacing the need to paste the shared
+//      INGESTION_API_KEY. All subsequent requests use this personal token.
+
+/// Build a reqwest client with the same posture as the ingestion paths:
+/// `danger_accept_invalid_certs(true)` for WP-OCR-08 local-HTTPS (mkcert CA).
+fn build_auth_http_client(timeout: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))
+}
+
+/// Map a reqwest transport error to a user-facing sign-in message.
+fn friendly_auth_net_err(e: reqwest::Error) -> String {
+    if e.is_timeout() {
+        "The server took too long to respond. Check the workspace URL and your connection.".into()
+    } else if e.is_connect() {
+        "Couldn't reach that workspace. Double-check the URL.".into()
+    } else {
+        format!("Network error: {}", e)
+    }
+}
+
+/// Persist (only) the base URL to config.json + the in-memory cache. Used by
+/// `auth_request_link` so that `auth_verify` — which fires later from the
+/// deep-link callback, possibly after an app restart — knows which server to
+/// redeem the magic token against. Leaves every other field intact (loads the
+/// existing config or defaults).
+fn persist_base_url(state: &tauri::State<AppState>, base_url: &str) -> Result<(), String> {
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    let mut cfg = state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .clone()
+        .unwrap_or_default();
+    cfg.base_url = base_url.to_string();
+    let json = serde_json::to_string_pretty(&cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    *state.config.lock().expect("config mutex poisoned") = Some(cfg);
+    Ok(())
+}
+
+/// First-run sign-in step 1: persist the workspace URL and ask the server to
+/// email a magic-link deep link. The server always returns `{ ok: true }`
+/// (invite-enumeration guard), so a success here means "if that email is
+/// invited, a link is on its way" — the UI shows the check-your-inbox state
+/// regardless.
+#[tauri::command]
+async fn auth_request_link(
+    state: tauri::State<'_, AppState>,
+    base_url: String,
+    email: String,
+) -> Result<(), String> {
+    let base = base_url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return Err("Enter your Apolla workspace URL first.".into());
+    }
+    let email = email.trim().to_string();
+    if !email.contains('@') || email.len() < 3 {
+        return Err("Enter a valid email address.".into());
+    }
+
+    // Persist base URL now (sync, before any await) so the deep-link callback
+    // can verify against the right server.
+    persist_base_url(&state, &base)?;
+
+    let url = format!("{}/api/auth/request-link", base);
+    let client = build_auth_http_client(Duration::from_secs(15))?;
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "email": email, "desktop": true }))
+        .send()
+        .await
+        .map_err(friendly_auth_net_err)?;
+
+    if !resp.status().is_success() {
+        let code = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        // 400 invalid_email is the only expected non-2xx; surface it plainly.
+        if code == 400 {
+            return Err("That doesn't look like a valid email address.".into());
+        }
+        return Err(format!("Server returned {} when requesting a sign-in link: {}", code, body));
+    }
+    log::info!("[auth] requested magic link for {} via {}", email, base);
+    Ok(())
+}
+
+/// Response shape from `POST /api/auth/desktop/verify`.
+#[derive(Deserialize)]
+struct DesktopVerifyResponse {
+    token: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    email: Option<String>,
+}
+
+/// First-run sign-in step 2 (fired from the `threshold://auth-callback` event):
+/// redeem the single-use magic `token` for this user's per-user bearer and
+/// persist it as `bearer_token` in config.json. Returns the updated AppConfig so
+/// the frontend can drop straight into the main view. The shared
+/// INGESTION_API_KEY is never touched.
+#[tauri::command]
+async fn auth_verify(
+    state: tauri::State<'_, AppState>,
+    token: String,
+) -> Result<AppConfig, String> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err("Sign-in link was missing its token.".into());
+    }
+    // base_url was persisted by auth_request_link.
+    let base = state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .as_ref()
+        .map(|c| c.base_url.trim_end_matches('/').to_string())
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| {
+            "No workspace URL on file. Start sign-in again from the welcome screen.".to_string()
+        })?;
+
+    let url = format!("{}/api/auth/desktop/verify", base);
+    let client = build_auth_http_client(Duration::from_secs(15))?;
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "token": token }))
+        .send()
+        .await
+        .map_err(friendly_auth_net_err)?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let code = status.as_u16();
+        let msg = match code {
+            400 => "This sign-in link is invalid, expired, or already used. Request a fresh one.".to_string(),
+            403 => "This email isn't on the invite list for this workspace. Ask your workspace champion to invite you.".to_string(),
+            _ => {
+                let body = resp.text().await.unwrap_or_default();
+                format!("Sign-in failed (HTTP {}): {}", code, body)
+            }
+        };
+        return Err(msg);
+    }
+
+    let parsed: DesktopVerifyResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Couldn't read the server's sign-in response: {}", e))?;
+    if parsed.token.trim().is_empty() {
+        return Err("The server returned an empty token.".into());
+    }
+
+    // Persist the per-user token as the bearer. Load existing config to keep
+    // hotkey / auto-watch / widget-position fields intact.
+    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+    let path = dir.join("config.json");
+    let mut cfg = state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .clone()
+        .unwrap_or_default();
+    cfg.base_url = base;
+    cfg.bearer_token = parsed.token;
+    cfg.last_used = Some(Utc::now().to_rfc3339());
+    let json = serde_json::to_string_pretty(&cfg)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
+    *state.config.lock().expect("config mutex poisoned") = Some(cfg.clone());
+    log::info!(
+        "[auth] desktop sign-in complete for {} (per-user token persisted)",
+        parsed.email.as_deref().unwrap_or("(unknown)")
+    );
+    Ok(cfg)
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -5321,6 +5569,15 @@ pub fn run() {
                             if let Err(e) = app_handle.emit("threshold://configure-prefill", &prefill) {
                                 log::warn!("emit configure-prefill failed: {e}");
                             }
+                        } else if let Some(callback) = parse_auth_deep_link(&url) {
+                            // WP-THRESHOLD-APP-AUTH (email-login) — magic-link
+                            // carrier. Emit to the frontend, which calls
+                            // auth_verify(token) to redeem it for a per-user
+                            // bearer. Token is redacted from the log.
+                            log::info!("deep-link parsed as auth callback (token redacted)");
+                            if let Err(e) = app_handle.emit("threshold://auth-callback", &callback) {
+                                log::warn!("emit auth-callback failed: {e}");
+                            }
                         } else {
                             log::warn!("deep-link unrecognized — host={:?} path={}", url.host_str(), url.path());
                         }
@@ -5571,6 +5828,9 @@ pub fn run() {
             load_config,
             save_config,
             test_connection,
+            // WP-THRESHOLD-APP-AUTH (email-login) — per-user magic-link sign-in
+            auth_request_link,
+            auth_verify,
             ingest_files,
             pick_files,
             run_screen_capture,
@@ -6745,6 +7005,54 @@ mod tests {
         .expect("hyphenated tenant parses");
         assert_eq!(prefill.tenant.as_deref(), Some("acme-corp-staging"));
         assert_eq!(prefill.base_url, "https://acme-corp-staging.viktora.ai");
+    }
+
+    // ───── WP-THRESHOLD-APP-AUTH (email-login) — auth deep-link parser ─────
+
+    fn parse_auth(s: &str) -> Option<AuthCallback> {
+        let url = url::Url::parse(s).expect("test URL parses");
+        parse_auth_deep_link(&url)
+    }
+
+    #[test]
+    fn auth_deep_link_happy_path() {
+        let cb = parse_auth("apolla-threshold://auth?token=VnL2UnrwPyN6EXlZ").expect("parses");
+        assert_eq!(cb.token, "VnL2UnrwPyN6EXlZ");
+    }
+
+    #[test]
+    fn auth_deep_link_rejects_wrong_scheme() {
+        assert!(parse_auth("https://auth?token=abc").is_none());
+        assert!(parse_auth("apolla-threshold-x://auth?token=abc").is_none());
+    }
+
+    #[test]
+    fn auth_deep_link_rejects_wrong_host() {
+        // The configure carrier must not be mistaken for an auth callback.
+        assert!(parse_auth("apolla-threshold://configure?token=abc").is_none());
+    }
+
+    #[test]
+    fn auth_deep_link_rejects_missing_or_empty_token() {
+        assert!(parse_auth("apolla-threshold://auth").is_none());
+        assert!(parse_auth("apolla-threshold://auth?token=").is_none());
+        assert!(parse_auth("apolla-threshold://auth?other=x").is_none());
+    }
+
+    #[test]
+    fn auth_deep_link_url_encoded_token_decodes() {
+        // Magic tokens are base64url; if a `+` or `/` ever slips in it arrives
+        // percent-encoded and query_pairs() must decode it.
+        let cb = parse_auth("apolla-threshold://auth?token=ab%2Bcd%2Fef%3D")
+            .expect("encoded token parses");
+        assert_eq!(cb.token, "ab+cd/ef=");
+    }
+
+    #[test]
+    fn auth_deep_link_ignores_extra_query_params() {
+        let cb = parse_auth("apolla-threshold://auth?token=abc123&future=xyz")
+            .expect("extra params tolerated");
+        assert_eq!(cb.token, "abc123");
     }
 
     // ───── WP-PLAUD-04a — Plaud Sync Queue helpers ─────

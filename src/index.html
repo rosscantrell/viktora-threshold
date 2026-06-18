@@ -111,22 +111,94 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
-         Wizard Step 1 — Welcome
+         Wizard Step 1 — Welcome / email sign-in (WP-THRESHOLD-APP-AUTH)
+         Per-user magic-link login: enter your workspace URL + work email,
+         we email a one-click sign-in link that opens this app and signs you
+         in with a personal, revocable token — no shared secret to paste.
+         The "Advanced" link preserves the manual base-URL + bearer path for
+         local dev + Ross's shared-key setup.
          ────────────────────────────────────────────────────────────────── -->
     <section id="view-welcome" class="view wizard-view" hidden>
       <div class="wizard-card">
-        <p class="wizard-step">Step 1 of 3</p>
-        <h1 class="wizard-title">Welcome to Viktora Threshold</h1>
+        <p class="wizard-step">Welcome</p>
+        <h1 class="wizard-title">Sign in to Viktora Threshold</h1>
         <p class="wizard-lede">
-          Capture documents and screenshots into your Apolla workspace.
+          We'll email you a one-click sign-in link — no password, no token to
+          paste. Capture documents and screenshots straight into your Apolla
+          workspace.
         </p>
-        <ul class="wizard-bullets">
-          <li>Drag and drop transcripts or notes from Finder</li>
-          <li>Pick a file with the Mac file picker</li>
-          <li>Region-select a screenshot for OCR + ingest</li>
-        </ul>
-        <button type="button" id="btn-wizard-start" class="btn btn-primary btn-lg">
-          Get started
+        <form id="login-form" class="configure-form" autocomplete="off">
+          <label class="field">
+            <span class="field-label">Workspace URL</span>
+            <input
+              type="text"
+              id="login-base-url"
+              placeholder="https://your-workspace.viktora.ai"
+              spellcheck="false"
+              autocapitalize="off"
+              autocorrect="off"
+            />
+            <span class="field-help">
+              Your Apolla workspace address. Ask the person who invited you if
+              you're not sure.
+            </span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Work email</span>
+            <input
+              type="email"
+              id="login-email"
+              placeholder="you@company.com"
+              spellcheck="false"
+              autocapitalize="off"
+              autocorrect="off"
+            />
+            <span class="field-help">
+              Use the address you were invited with.
+            </span>
+          </label>
+
+          <div id="login-result" class="result" hidden></div>
+
+          <button type="submit" id="btn-login-request" class="btn btn-primary btn-lg">
+            Email me a sign-in link
+          </button>
+        </form>
+
+        <button type="button" id="btn-login-use-token" class="btn btn-link">
+          Advanced: connect with a token instead
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         Check-your-inbox state (WP-THRESHOLD-APP-AUTH)
+         Shown after request-link succeeds. The deep-link callback
+         (threshold://auth-callback) completes sign-in automatically; this
+         window just needs to stay open.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-check-inbox" class="view wizard-view" hidden>
+      <div class="wizard-card">
+        <p class="wizard-step">Check your inbox</p>
+        <h1 class="wizard-title">Sign-in link sent</h1>
+        <p class="wizard-lede">
+          If <strong id="check-inbox-email">your email</strong> is on the invite
+          list, a sign-in link is on its way. Open the email on this computer and
+          click the button — Threshold finishes signing you in automatically.
+        </p>
+        <p class="wizard-lede" style="font-size:13px;opacity:0.75;">
+          The link expires in 15 minutes and can be used once. Keep this window
+          open.
+        </p>
+
+        <div id="check-inbox-result" class="result" hidden></div>
+
+        <button type="button" id="btn-login-resend" class="btn btn-secondary">
+          Resend link
+        </button>
+        <button type="button" id="btn-login-change-email" class="btn btn-link">
+          Use a different email or workspace
         </button>
       </div>
     </section>

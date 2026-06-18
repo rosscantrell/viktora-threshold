@@ -94,6 +94,8 @@ const pendingToasts = new Map();
 const VIEWS = [
   "view-loading",
   "view-welcome",
+  // WP-THRESHOLD-APP-AUTH — check-your-inbox state for email magic-link login
+  "view-check-inbox",
   "view-configure",
   "view-done",
   "view-main",
@@ -284,6 +286,16 @@ async function bootstrap() {
       autoWatchEl.checked = !!cfg.auto_watch;
     }
 
+    // WP-THRESHOLD-APP-AUTH — a config with a workspace URL but no bearer is a
+    // half-finished sign-in (e.g. auth_request_link persisted base_url, then
+    // the app was restarted before the magic link was clicked). Send the user
+    // back to the email-entry screen rather than into a main view that would
+    // 401 on every request. enterWizardWelcome() prefills the known base URL.
+    if (!cfg.bearer_token || !cfg.bearer_token.trim()) {
+      enterWizardWelcome(cfg);
+      return;
+    }
+
     // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
     // navigates here with #tidbit in the URL hash. Bootstrap detects it,
     // fetches the cached tidbit from AppState via IPC, and renders the
@@ -423,6 +435,15 @@ async function wireBackendEvents() {
     });
   });
 
+  // WP-THRESHOLD-APP-AUTH (email-login) — magic-link callback. The user clicks
+  // the `apolla-threshold://auth?token=...` link in their email; the Rust shell
+  // parses it + emits this event with { token }. handleAuthCallback redeems the
+  // token for a per-user bearer and signs the app in (no token pasted).
+  await tauri.event.listen("threshold://auth-callback", async (event) => {
+    const token = (event.payload || {}).token;
+    await handleAuthCallback(token);
+  });
+
   // Drag-drop paths from WindowEvent::DragDrop in the Rust shell.
   // Emit a pre-flight toast per dropped path, then kick off ingestion.
   await tauri.event.listen("threshold://drop-paths", async (event) => {
@@ -472,10 +493,156 @@ async function wireBackendEvents() {
 
 // ───────── Wizard chrome ─────────
 
-function enterWizardWelcome() {
+function enterWizardWelcome(cfg) {
   state.inWizard = true;
+  // WP-THRESHOLD-APP-AUTH — prefill the workspace URL when we already know it
+  // (returning to the email screen after a half-finished sign-in, or after the
+  // user clicks "use a different workspace"). Don't clobber a value the user is
+  // mid-typing if the field already has one.
+  const baseEl = document.getElementById("login-base-url");
+  if (baseEl && !baseEl.value && cfg && cfg.base_url) {
+    baseEl.value = cfg.base_url;
+  }
   showView("view-welcome");
   hideNav();
+  const emailEl = document.getElementById("login-email");
+  if (emailEl) emailEl.focus();
+}
+
+// ───────── WP-THRESHOLD-APP-AUTH — email magic-link sign-in ─────────
+
+function showLoginResult(elId, ok, message) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.removeAttribute("hidden");
+  el.className = "result " + (ok ? "ok" : "fail");
+  el.innerHTML = "<strong>" + (ok ? "✓ " : "✗ ") + escapeHtml(message) + "</strong>";
+}
+
+function hideLoginResult(elId) {
+  const el = document.getElementById(elId);
+  if (el) el.setAttribute("hidden", "");
+}
+
+/**
+ * Show the "check your inbox" state for the given email. The deep-link
+ * callback (threshold://auth-callback) completes sign-in; this view just
+ * keeps the window open and offers Resend / change-email.
+ */
+function enterCheckInbox(email) {
+  state.inWizard = true;
+  const emailEl = document.getElementById("check-inbox-email");
+  if (emailEl) emailEl.textContent = email;
+  hideLoginResult("check-inbox-result");
+  showView("view-check-inbox");
+  hideNav();
+}
+
+/**
+ * First-run sign-in step 1: ask the server to email a magic-link deep link.
+ * Persists the workspace URL (Rust side) so the deep-link callback can verify
+ * against the right server. Always advances to the check-inbox state on a 2xx
+ * (the server returns ok regardless of whether the email is invited — an
+ * enumeration guard), so we never reveal whether an address is on the list.
+ */
+async function handleLoginRequest(e) {
+  if (e) e.preventDefault();
+  const baseUrl = document.getElementById("login-base-url").value.trim();
+  const email = document.getElementById("login-email").value.trim();
+  if (!baseUrl) {
+    showLoginResult("login-result", false, "Enter your workspace URL first.");
+    return;
+  }
+  if (!email || !email.includes("@")) {
+    showLoginResult("login-result", false, "Enter a valid email address.");
+    return;
+  }
+  const btn = document.getElementById("btn-login-request");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+  }
+  try {
+    await tauri.core.invoke("auth_request_link", { baseUrl, email });
+    state.loginEmail = email;
+    state.loginBaseUrl = baseUrl;
+    enterCheckInbox(email);
+  } catch (err) {
+    showLoginResult("login-result", false, String(err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Email me a sign-in link";
+    }
+  }
+}
+
+/** Resend the magic link from the check-inbox state. */
+async function handleLoginResend() {
+  const baseUrl = state.loginBaseUrl;
+  const email = state.loginEmail;
+  if (!baseUrl || !email) {
+    handleLoginChangeEmail();
+    return;
+  }
+  const btn = document.getElementById("btn-login-resend");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Resending…";
+  }
+  try {
+    await tauri.core.invoke("auth_request_link", { baseUrl, email });
+    showLoginResult("check-inbox-result", true, "Sent again. Check your inbox.");
+  } catch (err) {
+    showLoginResult("check-inbox-result", false, String(err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Resend link";
+    }
+  }
+}
+
+/** Return to the email-entry screen to change email/workspace. */
+function handleLoginChangeEmail() {
+  hideLoginResult("login-result");
+  enterWizardWelcome();
+}
+
+/**
+ * Fired by the threshold://auth-callback event when the user clicks the magic
+ * link. Redeems the single-use token for this user's per-user bearer (Rust
+ * auth_verify persists it to config.json) and drops straight into the app.
+ * Works from any view — if verify fails, surfaces the reason (in the
+ * check-inbox result when visible, plus a toast).
+ */
+async function handleAuthCallback(token) {
+  if (!token) {
+    console.warn("[auth-callback] missing token in payload");
+    return;
+  }
+  try {
+    const cfg = await tauri.core.invoke("auth_verify", { token });
+    // Reset the cached viewer identity so the Mine filter + "captured by you"
+    // attribution re-resolve against the new per-user token.
+    _viewerEmail = undefined;
+    state.inWizard = false;
+    state.lastConfig = cfg;
+    // Hydrate the Configure fields so a later visit shows the live values.
+    const baseEl = document.getElementById("config-base-url");
+    const tokenEl = document.getElementById("config-bearer-token");
+    if (baseEl) baseEl.value = cfg.base_url || "";
+    if (tokenEl) tokenEl.value = cfg.bearer_token || "";
+    showToast({
+      kind: "success",
+      title: "You're signed in",
+      body: "Threshold is connected to " + (cfg.base_url || "your workspace") + ".",
+    });
+    enterMainView(cfg);
+  } catch (err) {
+    showLoginResult("check-inbox-result", false, String(err));
+    showToast({ kind: "failure", title: "Sign-in failed", body: String(err) });
+  }
 }
 
 function enterWizardConfigure() {
@@ -5097,8 +5264,19 @@ async function handleAutoImportPick(kind, option) {
 // ───────── Event wiring ─────────
 
 window.addEventListener("DOMContentLoaded", () => {
+  // WP-THRESHOLD-APP-AUTH — email magic-link sign-in (the first-run welcome).
+  // Submitting the form requests a link; "Advanced" drops to the manual
+  // base-URL + bearer Configure path (local dev + Ross's shared-key setup).
+  const loginForm = document.getElementById("login-form");
+  if (loginForm) loginForm.addEventListener("submit", handleLoginRequest);
+  const loginUseTokenBtn = document.getElementById("btn-login-use-token");
+  if (loginUseTokenBtn) loginUseTokenBtn.addEventListener("click", enterWizardConfigure);
+  const loginResendBtn = document.getElementById("btn-login-resend");
+  if (loginResendBtn) loginResendBtn.addEventListener("click", handleLoginResend);
+  const loginChangeEmailBtn = document.getElementById("btn-login-change-email");
+  if (loginChangeEmailBtn) loginChangeEmailBtn.addEventListener("click", handleLoginChangeEmail);
+
   // Wizard
-  document.getElementById("btn-wizard-start").addEventListener("click", enterWizardConfigure);
   document
     .querySelectorAll(".wizard-prompt")
     .forEach((btn) => btn.addEventListener("click", finishWizard));
