@@ -1138,6 +1138,93 @@ function openDismissReasonMenu(anchorBtn, recordId, cardEl, summary) {
   }, 0);
 }
 
+/** Snooze duration presets. Labels are plain text (no emoji); the chosen ms is
+ *  added to "now" to produce the ISO snoozeUntil the server reactivates after. */
+const SNOOZE_OPTIONS = [
+  { label: "1 day", ms: 1 * 86400000 },
+  { label: "3 days", ms: 3 * 86400000 },
+  { label: "1 week", ms: 7 * 86400000 },
+  { label: "2 weeks", ms: 14 * 86400000 },
+];
+
+/** Append the Resolve + Snooze disposition controls to a record's actions
+ *  footer, alongside the dismiss ✕. Resolve marks a commitment done; Snooze
+ *  hides it until a chosen duration elapses. Both reuse the already-wired
+ *  helpers (resolveRecord / snoozeRecord) which persist locally AND PATCH the
+ *  server. `margin-left:auto` on Resolve groups the disposition actions to the
+ *  right, next to ✕. */
+function appendResolveSnoozeControls(actionsEl, recordId, cardEl, summary) {
+  if (!recordId) return;
+
+  const resolveBtn = document.createElement("button");
+  resolveBtn.type = "button";
+  resolveBtn.className = "record-action-btn record-resolve-btn";
+  resolveBtn.title = "Resolve — mark this done";
+  resolveBtn.textContent = "Resolve";
+  resolveBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    resolveRecord(recordId, cardEl, summary);
+  });
+  actionsEl.appendChild(resolveBtn);
+
+  const snoozeBtn = document.createElement("button");
+  snoozeBtn.type = "button";
+  snoozeBtn.className = "record-action-btn record-snooze-btn";
+  snoozeBtn.title = "Snooze — hide until later";
+  snoozeBtn.textContent = "Snooze";
+  snoozeBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSnoozeMenu(snoozeBtn, recordId, cardEl, summary);
+  });
+  actionsEl.appendChild(snoozeBtn);
+}
+
+/** Snooze-duration popover. Same glass menu + single-open-at-a-time infra as the
+ *  dismiss-reason picker (reuses _openReasonMenu / closeDismissReasonMenu so
+ *  opening one closes the other). Picking a duration snoozes the record until
+ *  now + duration. */
+function openSnoozeMenu(anchorBtn, recordId, cardEl, summary) {
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu";
+  menu.setAttribute("role", "menu");
+
+  const heading = document.createElement("div");
+  heading.className = "record-reason-heading";
+  heading.textContent = "Snooze for…";
+  menu.appendChild(heading);
+
+  for (const { label, ms } of SNOOZE_OPTIONS) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "record-reason-item";
+    item.setAttribute("role", "menuitem");
+    item.textContent = label;
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeDismissReasonMenu();
+      const until = new Date(Date.now() + ms).toISOString();
+      snoozeRecord(recordId, cardEl, summary, until);
+    });
+    menu.appendChild(item);
+  }
+
+  document.body.appendChild(menu);
+  const r = anchorBtn.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  menu.style.right = `${Math.round(window.innerWidth - r.right)}px`;
+
+  _openReasonMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
+
 /** Optimistically remove `cardEl`, record the disposition server-side AND keep
  *  the local suppression cache, then show an Undo toast.
  *
@@ -1951,6 +2038,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
+  appendResolveSnoozeControls(actions, rec.recordId, card, rec.summary);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -2296,6 +2384,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     footer.appendChild(btn);
   }
   appendSourceBadge(footer, rec.documentId, rec.verbatim);
+  appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
   return row;
@@ -3451,6 +3540,7 @@ function renderDecisionCard(rec, recState, projects) {
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
+  appendResolveSnoozeControls(actions, rec.recordId, card, rec.summary);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
