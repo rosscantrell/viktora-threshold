@@ -47,6 +47,9 @@ jobs:
       AZURE_ENDPOINT: ${{ vars.AZURE_ENDPOINT }}
       AZURE_ACCOUNT: ${{ vars.AZURE_ACCOUNT }}
       AZURE_PROFILE: ${{ vars.AZURE_PROFILE }}
+      # Exposed at job level so the post-build DMG-notarization step can gate on
+      # it (presence of the cert == macOS signing is configured).
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
 
     steps:
       - name: Checkout source
@@ -144,3 +147,29 @@ jobs:
           # when Azure Trusted Signing is configured (empty otherwise). On macOS the
           # winsign step is skipped, so its output is empty and args is unchanged.
           args: --target ${{ matrix.target }} ${{ steps.winsign.outputs.extra_args }}
+
+      # tauri-action notarizes & staples the .app but NOT the .dmg container.
+      # A downloaded (quarantined) un-notarized DMG still trips a Gatekeeper
+      # "cannot be checked for malicious software" prompt when the user mounts it.
+      # So notarize + staple the DMG too, then re-upload it over the asset
+      # tauri-action already attached. No-op unless macOS signing is configured.
+      - name: Notarize & staple the DMG (macOS, when signing configured)
+        if: matrix.platform == 'macos-latest' && env.APPLE_CERTIFICATE != ''
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DMG=$(find src-tauri/target -name '*.dmg' -print -quit)
+          if [ -z "$DMG" ]; then echo "No DMG found to notarize" >&2; exit 1; fi
+          echo "Notarizing DMG: $DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          echo "Re-uploading stapled DMG over the release asset…"
+          gh release upload "${GITHUB_REF_NAME}" "$DMG" --clobber --repo "${GITHUB_REPOSITORY}"
