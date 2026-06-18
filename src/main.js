@@ -1990,6 +1990,74 @@ if (logRefreshBtn) {
   });
 }
 
+// WP-THRESHOLD-STATE-OF-PLAY — corpus altitude on Today: the Monday overview
+// across all projects, on demand. Same engine as the per-person digest.
+let _corpusPolish = false;
+const logSopBtn = document.getElementById("btn-log-sop");
+if (logSopBtn) {
+  logSopBtn.addEventListener("click", () => {
+    const panel = document.getElementById("log-sop-panel");
+    if (!panel) return;
+    if (!panel.hidden) { panel.hidden = true; logSopBtn.setAttribute("aria-expanded", "false"); return; }
+    panel.hidden = false;
+    logSopBtn.setAttribute("aria-expanded", "true");
+    loadCorpusStateOfPlay(panel);
+  });
+}
+async function loadCorpusStateOfPlay(panel) {
+  panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
+  try {
+    const res = await tauri.core.invoke("fetch_corpus_state_of_play", { polish: _corpusPolish });
+    if (!res || res.available === false) {
+      panel.innerHTML = '<div class="sop-status">' +
+        (res && res.reason === "unavailable" ? "Overview isn't available on this server yet." : "No open items.") + "</div>";
+      return;
+    }
+    renderCorpusPanel(panel, res);
+  } catch (err) {
+    console.warn("[main] fetch_corpus_state_of_play failed:", err);
+    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  }
+}
+function renderCorpusPanel(panel, data) {
+  panel.innerHTML = "";
+  const bar = document.createElement("div");
+  bar.className = "sop-toolbar";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "sop-copy";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      copyBtn.textContent = "Copied ✓";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
+    } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
+  });
+  bar.appendChild(copyBtn);
+  const polishBtn = document.createElement("button");
+  polishBtn.type = "button";
+  polishBtn.className = "sop-polish";
+  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
+  polishBtn.addEventListener("click", async () => {
+    _corpusPolish = !data.polished;
+    await loadCorpusStateOfPlay(panel);
+  });
+  bar.appendChild(polishBtn);
+  if (data.polished) {
+    const t = document.createElement("span");
+    t.className = "sop-polished-tag";
+    t.textContent = "AI-polished";
+    bar.appendChild(t);
+  }
+  panel.appendChild(bar);
+  const msg = document.createElement("pre");
+  msg.className = "sop-message";
+  msg.textContent = data.message || "";
+  panel.appendChild(msg);
+}
+
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
 const logEdgesBtn = document.getElementById("btn-log-edges");
 if (logEdgesBtn) {
