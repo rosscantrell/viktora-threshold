@@ -184,3 +184,25 @@ body {
   color: var(--glass-text-dim);
   padding: 4px 0;
 }
+/* Project altitude — "send individually" per-teammate copy chips. */
+.sop-people-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.sop-people-chip {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+.sop-people-chip:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
