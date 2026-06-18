@@ -19,17 +19,17 @@ Two-step install on Mac or Windows. ~2 minutes from download to first capture. N
 3. Drag `Viktora Threshold.app` into `/Applications`
 4. Eject the disk image
 
-### Step 2 — First launch (right-click Open ceremony)
+### Step 2 — First launch
 
-Because Threshold ships unsigned (signing tracked in FN-OCR-13-03), macOS Gatekeeper refuses to open it on a regular double-click. **One-time bypass:**
+Threshold is **signed with our Apple Developer ID and notarized by Apple** (FN-OCR-13-03), so it opens on a normal double-click — no quarantine dance:
 
 1. Open `/Applications` in Finder
-2. **Right-click** (or Ctrl-click) on `Viktora Threshold.app` → **Open**
-3. macOS warns: *"Viktora Threshold can't be opened because Apple cannot check it for malicious software"*
-4. Click **Open** in the warning dialog (the right-click path makes this button available; a normal double-click does not)
-5. The onboarding wizard appears in expanded-window mode
+2. **Double-click** `Viktora Threshold.app`
+3. The onboarding wizard appears in expanded-window mode
 
-Subsequent launches via Spotlight work normally — Gatekeeper remembers the exemption per-app. **Note:** v0.3 sets `LSUIElement = YES` so Threshold does NOT appear in the Dock or `Cmd-Tab`. To find a running Threshold, look for the floating widget in a screen corner (see "Widget UX" below).
+**Note:** v0.3 sets `LSUIElement = YES` so Threshold does NOT appear in the Dock or `Cmd-Tab`. To find a running Threshold, look for the floating widget in a screen corner (see "Widget UX" below).
+
+> **Got an older / unsigned build?** If you downloaded a build cut before signing was enabled, macOS may say *"…is damaged and can't be opened"* or *"cannot be checked for malicious software."* In that case: **right-click** the app → **Open** → **Open**, or in Terminal run `xattr -dr com.apple.quarantine "/Applications/Viktora Threshold.app"`. Current releases don't need this.
 
 ---
 
@@ -44,11 +44,14 @@ Two installer variants are attached to each release. Use **`setup.exe`** unless 
 | `Viktora Threshold_<version>_x64-setup.exe` | NSIS | **Recommended.** Smaller (~3.5 MB), simpler wizard, friendlier for individual users |
 | `Viktora Threshold_<version>_x64_en-US.msi` | Windows Installer | For corporate IT deployment scenarios |
 
+The installers are **Authenticode-signed via Azure Trusted Signing** (FN-OCR-13-02), so SmartScreen no longer blocks them.
+
 1. Download the chosen installer from [Releases](https://github.com/rosscantrell/viktora-threshold/releases)
 2. Double-click
-3. Windows SmartScreen warns: *"Microsoft Defender SmartScreen prevented an unrecognized app from starting"* (Threshold ships unsigned; Authenticode signing tracked in FN-OCR-13-02)
-4. Click **More info** → **Run anyway**
-5. Step through the installer (Next → Install → Finish)
+3. Approve the **User Account Control** prompt — it shows our verified publisher name (this is normal, not the SmartScreen wall)
+4. Step through the installer (Next → Install → Finish)
+
+> **Got an older / unsigned build?** If you downloaded a build cut before signing was enabled, SmartScreen may still warn *"Windows protected your PC."* In that case click **More info → Run anyway**. Current releases don't trigger this.
 
 ### Step 2 — First launch
 
@@ -151,7 +154,7 @@ When the tidbit is ready, three things happen at once:
 | Ingest fails with HTTP 401 toast | Bearer token doesn't match what the schema-browser was started with. Re-paste in Configure pane (right-click → Settings…). |
 | Capture Screen on Windows: "Couldn't open the Snipping Tool" | Your Windows version is below the v0.2 floor. Capture Screen requires Windows 10 May 2020 update (build 19041) or later for the `ms-screenclip:` URI. Update Windows; file upload + drag-drop still work in the meantime. |
 | Capture Screen on Windows: "Capture timed out — did you cancel?" | The snip didn't complete within 60s, OR you pressed Esc. Try again. |
-| `.app` won't open on Mac even after right-click → Open | The quarantine attribute may be stuck. In Terminal: `xattr -d com.apple.quarantine "/Applications/Viktora Threshold.app"` then try again. |
+| `.app` won't open on Mac ("damaged" / "can't be checked") | Current releases are notarized and shouldn't hit this. If you have an older unsigned build, in Terminal run `xattr -dr com.apple.quarantine "/Applications/Viktora Threshold.app"` then try again, or grab the latest signed release. |
 | Can't quit Threshold on Mac (Cmd+Q does nothing) | By design — `LSUIElement = YES` removes Threshold from the focused-app list. Right-click the widget → **Quit Threshold**. |
 | Widget vanishes the moment I close the expanded window | That's the collapse path. The widget is still running; look in the screen corner. The widget process keeps running in the background and waits up to 60s for in-flight ingestions before exit (D-12-02-AMEND). |
 | `sourceApp` shows empty on my Mac captures | Known limitation — see "Known limitations" below. Filter ships honest empty-string rather than the misleading self-attribution. |
@@ -162,8 +165,7 @@ When the tidbit is ready, three things happen at once:
 
 | Limitation | Workstream |
 |---|---|
-| Unsigned binaries (Gatekeeper / SmartScreen ceremony per install) | FN-OCR-13-02 (Windows Authenticode) + FN-OCR-13-03 (Apple Developer ID) |
-| Auto-update (manual download from GitHub Releases) | FN-OCR-13-09 (Sparkle + WinSparkle; requires signing first) |
+| Auto-update (manual download from GitHub Releases) | FN-OCR-13-09 (Sparkle + WinSparkle) |
 | Rich file formats (`.docx`, `.pdf`, `.pptx`) | FN-OCR-12-02; use inbox-watcher or plain-text exports |
 | `sourceApp` ships empty on **Mac** screen captures (asymmetric finding from v0.3 widget rollout) | The Mac widget click activates Threshold momentarily despite the v0.3 widget UX; the Mac `is_threshold_own_bundle_id` filter maps the self-reference to `""` rather than ship misleading data. **Windows captures DO attribute correctly** via `WS_EX_NOACTIVATE` shim (Phase 3) — empirically validated with `olk` (Outlook), `msedge` (Edge), etc. landing as the real `sourceApp` values. Mac NSPanel-style shim follow-up tracked as **FN-CUX-12** in the WP-Threshold-Compact-UX AAR. |
 | Mac Keychain / Windows Credential Manager token storage (currently plain JSON in user config dir) | FN-OCR-12-05 |

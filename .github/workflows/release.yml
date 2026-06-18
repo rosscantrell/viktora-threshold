@@ -32,6 +32,22 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
 
+    # Code-signing inputs. All are optional: when a secret/variable is unset the
+    # corresponding signing step is skipped and that platform's build ships
+    # unsigned (the old Gatekeeper / SmartScreen ceremony applies). Add the
+    # secrets/variables described in SIGNING.md and the next tagged build is
+    # automatically notarized (macOS) + signed (Windows) — no workflow edit
+    # needed. Azure Trusted Signing reads CLIENT_ID/SECRET/TENANT_ID from the
+    # environment; the endpoint/account/profile are non-secret config and live
+    # in repo Variables.
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_ENDPOINT: ${{ vars.AZURE_ENDPOINT }}
+      AZURE_ACCOUNT: ${{ vars.AZURE_ACCOUNT }}
+      AZURE_PROFILE: ${{ vars.AZURE_PROFILE }}
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -54,10 +70,47 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      # --- Windows code signing (Azure Trusted Signing) -------------------
+      # Both steps no-op unless AZURE_CLIENT_ID is set, so the matrix builds
+      # unsigned-but-green until the secrets land. trusted-signing-cli is the
+      # signer Tauri invokes per-artifact via the `signCommand` we inject below;
+      # it signs the inner .exe AND the NSIS/MSI installers (signtool ships with
+      # the windows-latest runner's Windows SDK).
+      - name: Install Azure Trusted Signing CLI (Windows, when configured)
+        if: matrix.platform == 'windows-latest' && env.AZURE_CLIENT_ID != ''
+        run: cargo install trusted-signing-cli
+
+      - name: Configure Windows signing overlay (when configured)
+        id: winsign
+        if: matrix.platform == 'windows-latest'
+        shell: bash
+        run: |
+          if [ -n "$AZURE_CLIENT_ID" ]; then
+            echo "Azure Trusted Signing configured — generating signCommand overlay."
+            # Build the JSON with node (already installed) so quoting in the
+            # signCommand is handled safely regardless of the description text.
+            node -e 'const fs=require("fs");const cmd=`trusted-signing-cli -e ${process.env.AZURE_ENDPOINT} -a ${process.env.AZURE_ACCOUNT} -c ${process.env.AZURE_PROFILE} -d "Viktora Threshold" %1`;fs.writeFileSync("src-tauri/tauri.signing.conf.json",JSON.stringify({bundle:{windows:{signCommand:cmd}}},null,2));'
+            cat src-tauri/tauri.signing.conf.json
+            echo "extra_args=--config src-tauri/tauri.signing.conf.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "Azure Trusted Signing NOT configured (no AZURE_CLIENT_ID) — Windows build will be unsigned."
+            echo "extra_args=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build Tauri bundle (DMG / MSI) and attach to release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing + notarization. tauri-action activates signing only
+          # when APPLE_CERTIFICATE is non-empty (otherwise ad-hoc/unsigned), and
+          # notarizes + staples automatically when the APPLE_ID credentials are
+          # present. All empty => unsigned build, no failure.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Viktora Threshold ${{ github.ref_name }}"
@@ -70,22 +123,24 @@ jobs:
 
             **macOS (Apple Silicon):**
             1. Download the `.dmg` below
-            2. Drag `Viktora Threshold.app` to `/Applications`
-            3. Right-click → Open (one-time Gatekeeper bypass for unsigned v0.2)
-            4. Launch normally on subsequent runs
+            2. Open it and drag `Viktora Threshold.app` to `/Applications`
+            3. Double-click to launch — it just opens (signed with our Apple Developer ID + notarized by Apple)
 
             **Windows (x86_64, Windows 10 May 2020 update or later):**
-            1. Download the `.msi` below
-            2. Double-click to install (Windows SmartScreen may warn on unsigned builds — click "More info" → "Run anyway")
-            3. Launch from Start menu
+            1. Download `…_x64-setup.exe` below
+            2. Double-click to install, then launch from the Start menu (signed installer — no SmartScreen "unrecognized app" wall)
 
             All three capture gestures — Upload File, drag-drop, and Capture Screen — work on both platforms. Capture Screen uses Apple Vision on Mac and `Windows.Media.Ocr` on Windows; no external utility install required (the v0.1 `setup.sh` ceremony is gone).
 
+            > If a build was cut before code-signing secrets were configured it may still be unsigned — in that case follow the one-time bypass in [PILOT-INSTALL.md](https://github.com/rosscantrell/viktora-threshold/blob/main/PILOT-INSTALL.md).
+
             ## Known limitations
 
-            - **Unsigned binaries** — Gatekeeper (Mac) / SmartScreen (Windows) ceremony required once per install. Code-signing tracked in FN-OCR-13-02 + FN-OCR-13-03.
             - **Plain-text formats only** for file upload + drag-drop: `.txt`, `.md`, `.vtt`, `.srt`, `.html`. Rich formats (`.docx`, `.pdf`, `.pptx`) tracked in FN-OCR-12-02.
             - **`sourceApp` ships empty on Mac screen captures** (asymmetric finding from v0.3 widget rollout). The Mac widget click activates Threshold momentarily despite the v0.3 widget UX; the Mac `is_threshold_own_bundle_id` filter maps the self-reference to `""` rather than ship misleading data. **Windows captures DO attribute correctly** via `WS_EX_NOACTIVATE` shim (Phase 3) — empirically validated 2026-05-21 with `olk` (Outlook), `msedge` (Edge), etc. landing as the real `sourceApp` values. The Mac NSPanel-style shim follow-up is tracked as FN-CUX-12 in the WP-Threshold-Compact-UX AAR (`AAR-WP-Threshold-Compact-UX.md`).
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          # On Windows, steps.winsign appends `--config src-tauri/tauri.signing.conf.json`
+          # when Azure Trusted Signing is configured (empty otherwise). On macOS the
+          # winsign step is skipped, so its output is empty and args is unchanged.
+          args: --target ${{ matrix.target }} ${{ steps.winsign.outputs.extra_args }}

@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Generated in CI by the release workflow's Windows signing step (Azure Trusted
+# Signing signCommand overlay). Never committed — values come from repo Variables.
+src-tauri/tauri.signing.conf.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
