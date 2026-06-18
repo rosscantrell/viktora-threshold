@@ -2757,8 +2757,11 @@ function deadlineBucket(due) {
  * — catch-all groups (Other / Unassigned / No due date) sort last and render
  * muted so the real organization leads.
  */
-function groupRecords(items, lens, docProjects) {
+function groupRecords(items, lens, docProjects, aliases) {
   const g = new Map();
+  // Resolve a slug to its canonical form so duplicate subjects collapse into one
+  // group (sora → project-sora). Identity when no alias is known.
+  const canon = (s) => (aliases && aliases[s]) || s;
   const ensure = (key, label, order, muted) => {
     if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
     return g.get(key);
@@ -2770,11 +2773,11 @@ function groupRecords(items, lens, docProjects) {
       const b = deadlineBucket(rec.due);
       ensure(b.key, b.label, b.order, b.muted).items.push(it);
     } else if (lens === "people") {
-      const key = rec.owner || "z-unassigned";
-      ensure(key, rec.owner ? prettySlug(rec.owner) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
+      const key = rec.owner ? canon(rec.owner) : "z-unassigned";
+      ensure(key, rec.owner ? prettySlug(key) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
     } else {
       const projs = docProjects.get(rec.documentId) || [];
-      const key = projs.length ? projs[0] : PROJECT_OTHER;
+      const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
       ensure(key, key === PROJECT_OTHER ? "Other" : prettySlug(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
     }
   }
@@ -2866,6 +2869,9 @@ async function enterDecisionsView(initialFilter, navCtx) {
     edges: Array.isArray(data && data.edges) ? data.edges : [],
     byId,
     baseUrl,
+    // Canonical alias map (slug → canonical) from the engine — consolidates
+    // duplicate subjects in the By-project lens (sora → project-sora).
+    aliases: data && data.aliases ? data.aliases : {},
   };
   renderDecisions();
 }
@@ -2902,7 +2908,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -2925,7 +2931,7 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects);
+  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases);
 
   listEl.innerHTML = "";
   if (statusEl) {
