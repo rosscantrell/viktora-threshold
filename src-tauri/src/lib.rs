@@ -1974,6 +1974,79 @@ async fn patch_edge_status(
         .map_err(|e| format!("patch_edge_status: parse response failed: {e}"))
 }
 
+/// WP-THRESHOLD-RECORD-HITL — set a record's disposition server-side, closing the
+/// calibration loop on the (formerly client-only) dismiss gesture. Proxies
+/// PATCH /api/decision-log/records/:id with a
+/// `{ state, reason?, comment?, snoozeUntil? }` body and the existing bearer-auth
+/// pattern. Mirrors `patch_edge_status` (client builder, bearer header, URL-encode,
+/// `plaud_status_error` non-2xx handling).
+///
+/// `state` ∈ active | dismissed | snoozed | resolved. The server REQUIRES `reason`
+/// to be one of `not-relevant | not-salient | already-known | closing-out` when
+/// `state == "dismissed"` — the frontend's reason menu only offers those four, but
+/// we surface the server's 400 verbatim if an out-of-set reason ever reaches here.
+/// Optional fields are omitted from the JSON body when `None` (so the server's
+/// own defaults / "field absent" semantics apply) rather than sent as `null`.
+/// Returns the updated record JSON so the caller can reflect the new state.
+#[tauri::command]
+async fn set_record_disposition(
+    state: tauri::State<'_, AppState>,
+    record_id: String,
+    // `state` is the disposition (active|dismissed|snoozed|resolved); named
+    // `disposition` here to avoid shadowing the `tauri::State` param above.
+    disposition: String,
+    reason: Option<String>,
+    comment: Option<String>,
+    snooze_until: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if record_id.trim().is_empty() {
+        return Err("set_record_disposition: empty record_id".into());
+    }
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(record_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/decision-log/records/{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+
+    // Build the body with only the fields that are present — omit `None`s rather
+    // than sending `null`, matching the server's optional-field contract.
+    let mut body = serde_json::Map::new();
+    body.insert("state".into(), serde_json::Value::String(disposition));
+    if let Some(r) = reason {
+        body.insert("reason".into(), serde_json::Value::String(r));
+    }
+    if let Some(c) = comment {
+        body.insert("comment".into(), serde_json::Value::String(c));
+    }
+    if let Some(s) = snooze_until {
+        body.insert("snoozeUntil".into(), serde_json::Value::String(s));
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("set_record_disposition: parse response failed: {e}"))
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // WP-THRESHOLD-DISMISS (first cut) — client-only record suppression
 // ───────────────────────────────────────────────────────────────────────────
@@ -5852,6 +5925,8 @@ pub fn run() {
             fetch_decision_log_full,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
             patch_edge_status,
+            // WP-THRESHOLD-RECORD-HITL — server-side record disposition
+            set_record_disposition,
             // WP-THRESHOLD-DISMISS — client-only record suppression
             get_dismissed_record_ids,
             dismiss_record,
