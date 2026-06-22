@@ -2041,6 +2041,168 @@ async fn set_record_disposition(
         .map_err(|e| format!("set_record_disposition: parse response failed: {e}"))
 }
 
+/// POST /api/decision-log/records/:id/edit — the typed draft-edit capture
+/// (TYPED-DIFF-CAPTURE Phase 1). DISTINCT from a disposition: an edit CORRECTS a
+/// field (owner / focus / summary), it never hides the record. The two keystone
+/// edits are owner-correction and focus-override; a prose summary edit with
+/// `classify_prose = true` is auto-classified substance-vs-voice server-side.
+///
+/// Mirrors `set_record_disposition` (client builder, bearer header, URL-encode,
+/// non-2xx → plaud_status_error). `edits` is the typed-diff array passed straight
+/// through. Flag-gated server-side (SOP_EDITS_ENABLED) — a 404 means editing is
+/// off; the frontend only shows the controls when the person digest advertises
+/// `editsEnabled`. Returns the server JSON `{ok, eventId, editType?, classification?}`.
+#[tauri::command]
+async fn edit_record(
+    state: tauri::State<'_, AppState>,
+    record_id: String,
+    edit_type: String,
+    edits: Option<serde_json::Value>,
+    action: Option<String>,
+    scope: Option<String>,
+    subject: Option<String>,
+    classify_prose: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if record_id.trim().is_empty() {
+        return Err("edit_record: empty record_id".into());
+    }
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(record_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/decision-log/records/{}/edit",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+
+    let mut body = serde_json::Map::new();
+    body.insert("editType".into(), serde_json::Value::String(edit_type));
+    if let Some(e) = edits {
+        body.insert("edits".into(), e);
+    }
+    if let Some(a) = action {
+        body.insert("action".into(), serde_json::Value::String(a));
+    }
+    if let Some(s) = scope {
+        body.insert("scope".into(), serde_json::Value::String(s));
+    }
+    if let Some(s) = subject {
+        body.insert("subject".into(), serde_json::Value::String(s));
+    }
+    if let Some(c) = classify_prose {
+        body.insert("classifyProse".into(), serde_json::Value::Bool(c));
+    }
+
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("edit_record: parse response failed: {e}"))
+}
+
+/// POST /api/synthesis/state-of-play/edit — the inline DIGEST edit decomposition
+/// (TYPED-DIFF-CAPTURE Phase B). Sends the before/after of an edited State-of-Play
+/// digest; the server decomposes it (reword/omission/addition/inform-set/priority)
+/// and returns PROPOSALS (never auto-applied). Mirrors edit_record's client/auth
+/// posture. Returns `{ok, eventId, decomposition}`.
+#[tauri::command]
+async fn edit_digest(
+    state: tauri::State<'_, AppState>,
+    scope: String,
+    subject: String,
+    system_digest: String,
+    human_digest: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/synthesis/state-of-play/edit",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::Map::new();
+    body.insert("scope".into(), serde_json::Value::String(scope));
+    body.insert("subject".into(), serde_json::Value::String(subject));
+    body.insert("systemDigest".into(), serde_json::Value::String(system_digest));
+    body.insert("humanDigest".into(), serde_json::Value::String(human_digest));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("edit_digest: parse response failed: {e}"))
+}
+
+/// POST /api/decision-log/records/create-from-proposal — create a record from a
+/// candidate the human APPROVED out of a digest-edit decomposition (Phase B). The
+/// ONLY corpus write; fires on explicit approval only. `candidate` is the JSON
+/// object from the decomposition's proposals.candidateRecords[]. Returns
+/// `{ok, created, recordId, record}`.
+#[tauri::command]
+async fn create_record_from_proposal(
+    state: tauri::State<'_, AppState>,
+    candidate: serde_json::Value,
+    source_text: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/records/create-from-proposal",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::Map::new();
+    body.insert("candidate".into(), candidate);
+    if let Some(s) = source_text {
+        body.insert("sourceText".into(), serde_json::Value::String(s));
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("create_record_from_proposal: parse response failed: {e}"))
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // WP-THRESHOLD-DISMISS (first cut) — client-only record suppression
 // ───────────────────────────────────────────────────────────────────────────
@@ -5803,6 +5965,11 @@ pub fn run() {
             patch_edge_status,
             // WP-THRESHOLD-RECORD-HITL — server-side record disposition
             set_record_disposition,
+            // TYPED-DIFF-CAPTURE Phase 1 — typed draft-edit (owner / focus / prose)
+            edit_record,
+            // TYPED-DIFF-CAPTURE Phase B — inline digest decomposition + approve
+            edit_digest,
+            create_record_from_proposal,
             // WP-THRESHOLD-DISMISS — client-only record suppression
             get_dismissed_record_ids,
             dismiss_record,

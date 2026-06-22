@@ -185,6 +185,198 @@ body {
   padding: 4px 0;
 }
 
+/* TYPED-DIFF-CAPTURE Phase 1 — inline edit controls on the per-person digest. */
+.sop-edit-section {
+  margin: 4px 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sop-edit-heading {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.sop-edit-card {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  padding: 9px 11px;
+  transition: opacity 0.12s ease;
+}
+.sop-edit-card.sop-edit-busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.sop-edit-text {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--glass-text);
+  margin-bottom: 7px;
+}
+.sop-edit-subject,
+.sop-edit-due {
+  color: var(--glass-text-dim);
+}
+.sop-edit-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.sop-edit-fieldlabel {
+  font-size: 10.5px;
+  color: var(--glass-text-dim);
+}
+.sop-edit-owner {
+  font-size: 11.5px;
+  padding: 3px 6px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.sop-edit-btn {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.sop-edit-btn:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.sop-edit-save {
+  color: var(--glass-accent);
+}
+.sop-edit-editor {
+  margin-top: 7px;
+}
+.sop-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 6px 8px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface-inset, var(--glass-surface));
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+  resize: vertical;
+}
+.sop-edit-editor-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+.sop-proposals {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sop-proposals:empty {
+  display: none;
+}
+
+/* TYPED-DIFF-CAPTURE Phase A — record-level inline editing (type / summary /
+ * owner / due). Click-to-edit affordances on the record cards. */
+.record-editable {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.12s ease;
+}
+.record-editable:hover {
+  background: var(--glass-surface-hover);
+  box-shadow: 0 0 0 2px var(--glass-surface-hover);
+}
+.record-meta-empty {
+  font-style: italic;
+  opacity: 0.6;
+}
+.record-edit-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 160px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--surface-raised, var(--glass-surface));
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+}
+.record-edit-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 6px 9px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.record-edit-menu-item:hover {
+  background: var(--glass-surface-hover);
+}
+.record-edit-menu-item[data-current="true"] {
+  color: var(--glass-accent);
+}
+.record-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 6px 8px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--surface-inset, var(--glass-surface));
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+  resize: vertical;
+}
+.record-edit-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 5px;
+}
+.record-edit-btn {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.record-edit-btn:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.record-edit-save {
+  color: var(--glass-accent);
+}
+.record-edit-date {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-inset, var(--glass-surface));
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+}
+
 /* Expanded Definition card — "where it stands" execution block beneath the prose:
  * open-item counts, past-due list, and the one focus. */
 .entity-exec {
