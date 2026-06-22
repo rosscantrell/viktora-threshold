@@ -214,116 +214,170 @@
         <button type="button" id="btn-back-to-main" class="btn btn-link" hidden>← Back</button>
       </header>
 
+      <!-- ──────────────────────────────────────────────────────────────────
+           Settings = master-detail: a left rail of groups (Connection,
+           OneNote, …) + a right detail pane showing the selected group's
+           fields. main.js's switchSettingsPanel() toggles `.is-active`.
+           The same view backs the first-run wizard; in that mode main.js
+           adds `.is-wizard` to the form, which hides the group rail and
+           shows only the Connection panel so onboarding stays linear.
+           ────────────────────────────────────────────────────────────────── -->
       <form id="configure-form" class="configure-form" autocomplete="off">
-        <label class="field">
-          <span class="field-label">Apolla base URL</span>
-          <input
-            type="text"
-            id="config-base-url"
-            placeholder="http://localhost:3001"
-            spellcheck="false"
-            autocapitalize="off"
-            autocorrect="off"
-          />
-          <span class="field-help">
-            Where your schema-browser is running. Use <code>http://localhost:3001</code> for local-server
-            (WP-OCR-08), <code>https://localhost:3001</code> if you've enabled local-HTTPS, or your
-            hosted Apolla URL once WP-OCR-09 ships.
-          </span>
-        </label>
+        <div class="settings-shell">
+          <nav class="settings-nav" id="settings-nav" aria-label="Settings sections">
+            <button type="button" class="settings-nav-item is-active" data-panel="connection">
+              Connection
+            </button>
+            <button type="button" class="settings-nav-item" data-panel="integrations">
+              Integrations
+            </button>
+          </nav>
 
-        <label class="field">
-          <span class="field-label">Bearer token</span>
-          <input
-            type="password"
-            id="config-bearer-token"
-            placeholder="paste your INGESTION_API_KEY"
-            spellcheck="false"
-            autocapitalize="off"
-            autocorrect="off"
-          />
-          <span class="field-help">
-            The <code>INGESTION_API_KEY</code> value the schema-browser was started with (same value
-            the OCR utility and Outlook Add-in use).
-          </span>
-        </label>
+          <div class="settings-detail">
+            <!-- ── Connection panel ── -->
+            <section class="settings-panel is-active" data-panel="connection">
+              <h2 class="settings-panel-title">Connection</h2>
 
-        <!-- ──────────────────────────────────────────────────────────────
-             WP-ONENOTE-EXPORT-03 — OneNote subsection
-             Lives inside the Configure form (mirrors the existing field
-             pattern) so the same Save button persists all fields in one
-             go. v1 ships the hotkey configurator only; WP-05 (auto-watch)
-             will append its toggle to this same subsection.
-             ────────────────────────────────────────────────────────────── -->
-        <fieldset class="config-subsection" id="config-onenote-section">
-          <legend class="config-subsection-legend">OneNote</legend>
+              <label class="field">
+                <span class="field-label">Apolla base URL</span>
+                <input
+                  type="text"
+                  id="config-base-url"
+                  placeholder="http://localhost:3001"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocorrect="off"
+                />
+                <span class="field-help">
+                  Where your schema-browser is running. Use <code>http://localhost:3001</code> for local-server
+                  (WP-OCR-08), <code>https://localhost:3001</code> if you've enabled local-HTTPS, or your
+                  hosted Apolla URL once WP-OCR-09 ships.
+                </span>
+              </label>
 
-          <label class="field">
-            <span class="field-label">Send-current-page hotkey</span>
-            <div class="hotkey-row">
-              <input
-                type="text"
-                id="config-onenote-hotkey"
-                readonly
-                value="Ctrl+Shift+O"
-                aria-label="Global hotkey for sending the current OneNote page"
-              />
-              <button type="button" id="btn-onenote-hotkey-capture" class="btn btn-secondary btn-compact">
-                Change…
+              <label class="field">
+                <span class="field-label">Bearer token</span>
+                <input
+                  type="password"
+                  id="config-bearer-token"
+                  placeholder="paste your INGESTION_API_KEY"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  autocorrect="off"
+                />
+                <span class="field-help">
+                  The <code>INGESTION_API_KEY</code> value the schema-browser was started with (same value
+                  the OCR utility and Outlook Add-in use).
+                </span>
+              </label>
+            </section>
+
+            <!-- ── Integrations panel ──
+                 WP-ONENOTE-EXPORT-03 / WP-PLAUD-07b / WP-AUTO-IMPORT — single
+                 home for all source-integration config: the OneNote
+                 send-current-page hotkey, the Plaud connect/disconnect card
+                 (folded in from the old standalone "Sources…" view), and the
+                 unified auto-import controls (master toggle + interval + source
+                 list spanning both, rendered by renderAutoImport()). The hotkey
+                 persists via the global Save; Plaud + auto-import toggles
+                 persist immediately via their own IPC. -->
+            <section class="settings-panel" data-panel="integrations">
+              <h2 class="settings-panel-title">Integrations</h2>
+
+              <!-- OneNote -->
+              <h3 class="settings-subhead">OneNote</h3>
+              <label class="field">
+                <span class="field-label">Send-current-page hotkey</span>
+                <div class="hotkey-row">
+                  <input
+                    type="text"
+                    id="config-onenote-hotkey"
+                    readonly
+                    value="Ctrl+Shift+O"
+                    aria-label="Global hotkey for sending the current OneNote page"
+                  />
+                  <button type="button" id="btn-onenote-hotkey-capture" class="btn btn-secondary btn-compact">
+                    Change…
+                  </button>
+                  <button type="button" id="btn-onenote-hotkey-reset" class="btn-inline-link">
+                    Reset
+                  </button>
+                </div>
+                <span class="field-help">
+                  Press anywhere on Windows to send the OneNote page you're currently viewing
+                  to Apolla. Default <code>Ctrl+Shift+O</code>. The hotkey is registered only
+                  on Windows (OneNote COM is Windows-only); the menu item "Send current
+                  OneNote page" works on all platforms but only succeeds on Windows.
+                </span>
+                <span class="field-help" id="onenote-hotkey-capture-status" hidden></span>
+              </label>
+
+              <!-- Plaud — connect/disconnect (folded in from the old Sources view) -->
+              <h3 class="settings-subhead">Plaud</h3>
+              <div class="connections-card" id="connection-plaud">
+                <div class="connections-card-header">
+                  <h2 class="connections-card-title">Plaud</h2>
+                  <span class="connections-card-tag">Connected Recorder</span>
+                </div>
+
+                <p class="connections-card-status" id="plaud-status">
+                  Status: Not connected
+                </p>
+
+                <p class="connections-card-progress" id="plaud-progress" hidden></p>
+
+                <div class="connections-card-actions">
+                  <button type="button" id="btn-plaud-connect" class="btn btn-primary">
+                    Connect Plaud
+                  </button>
+                  <button type="button" id="btn-plaud-cancel" class="btn btn-secondary" hidden>
+                    Cancel
+                  </button>
+                  <button type="button" id="btn-plaud-disconnect" class="btn btn-secondary" hidden>
+                    Disconnect
+                  </button>
+                </div>
+
+                <p class="connections-card-help" id="plaud-help">
+                  Connect Plaud to have new recordings show up in your Apolla Plaud
+                  queue automatically. Sign-in happens in your default browser; no
+                  credentials touch this app.
+                </p>
+
+                <p class="connections-card-banner" id="plaud-disconnect-banner" hidden>
+                  Local status cleared. Plaud tokens are still on the droplet — SSH in
+                  and delete <code>/home/deploy/.plaud/tokens.json</code> to fully
+                  revoke.
+                </p>
+              </div>
+
+              <!-- Auto-import — unified across OneNote notebooks + Plaud devices -->
+              <h3 class="settings-subhead">Auto-import</h3>
+              <div class="field">
+                <div id="config-auto-import-body" class="auto-import-list">
+                  <!-- Master toggle (+ inline interval) + source rows +
+                       "Add a source" rendered by renderAutoImport() in main.js. -->
+                </div>
+                <span class="field-help">
+                  Designate OneNote notebooks (or Plaud devices) and Threshold pulls
+                  in anything new on its own, on the interval you pick. OneNote
+                  sources are Windows-only and pause on Mac.
+                </span>
+              </div>
+            </section>
+
+            <div class="actions">
+              <button type="button" id="btn-test-connection" class="btn btn-secondary">
+                Test connection
               </button>
-              <button type="button" id="btn-onenote-hotkey-reset" class="btn-inline-link">
-                Reset
+              <button type="submit" id="btn-save" class="btn btn-primary">
+                Save
               </button>
             </div>
-            <span class="field-help">
-              Press anywhere on Windows to send the OneNote page you're currently viewing
-              to Apolla. Default <code>Ctrl+Shift+O</code>. The hotkey is registered only
-              on Windows (OneNote COM is Windows-only); the menu item "Send current
-              OneNote page" works on all platforms but only succeeds on Windows.
-            </span>
-            <span class="field-help" id="onenote-hotkey-capture-status" hidden></span>
-          </label>
 
-          <!-- WP-ONENOTE-EXPORT-05 — auto-watch toggle + live counter.
-               Toggle defaults OFF per brief §3.5 (opt-in only — first-week
-               LLM-cost protection from risk #4). Hooked to the
-               `onenote_set_auto_watch` IPC on change for immediate
-               start/stop of the polling loop AND inclusion in `auto_watch`
-               on the Save payload so it persists. The status line below
-               polls `onenote_auto_watch_status` every 30s while the
-               Configure pane is visible (and on toggle change). -->
-          <label class="field">
-            <span class="field-label">
-              <input
-                type="checkbox"
-                id="config-onenote-auto-watch"
-                aria-label="Auto-send OneNote pages I view"
-              />
-              Auto-send pages I view in OneNote (5-10s after last change)
-            </span>
-            <span class="field-help">
-              When on, Threshold watches the page you're viewing in OneNote and
-              sends it to Apolla automatically after you've dwelled on it for
-              about 10 seconds (cross-recording dedup means each page sends
-              at most once per session). Windows-only — the toggle is safe to
-              flip on Mac but won't fire any sends.
-            </span>
-            <span class="field-help" id="config-onenote-auto-watch-status">
-              Auto-watch off
-            </span>
-          </label>
-        </fieldset>
-
-        <div class="actions">
-          <button type="button" id="btn-test-connection" class="btn btn-secondary">
-            Test connection
-          </button>
-          <button type="submit" id="btn-save" class="btn btn-primary">
-            Save
-          </button>
+            <div id="connection-result" class="result" hidden></div>
+          </div>
         </div>
-
-        <div id="connection-result" class="result" hidden></div>
       </form>
     </section>
 
@@ -790,87 +844,6 @@
          providers (Limitless / Otter / Granola — brief §1.4 v2 deferral)
          would each get their own card on this same surface.
          ────────────────────────────────────────────────────────────────── -->
-    <section id="view-connections" class="view view-connections" hidden>
-      <header class="connections-header">
-        <h1 class="connections-title">Sources</h1>
-        <p class="connections-subtitle">Where your decisions &amp; commitments come from.</p>
-      </header>
-
-      <div class="connections-card" id="connection-plaud">
-        <div class="connections-card-header">
-          <h2 class="connections-card-title">Plaud</h2>
-          <span class="connections-card-tag">Connected Recorder</span>
-        </div>
-
-        <p class="connections-card-status" id="plaud-status">
-          Status: Not connected
-        </p>
-
-        <p class="connections-card-progress" id="plaud-progress" hidden></p>
-
-        <div class="connections-card-actions">
-          <button type="button" id="btn-plaud-connect" class="btn btn-primary">
-            Connect Plaud
-          </button>
-          <button type="button" id="btn-plaud-cancel" class="btn btn-secondary" hidden>
-            Cancel
-          </button>
-          <button type="button" id="btn-plaud-disconnect" class="btn btn-secondary" hidden>
-            Disconnect
-          </button>
-        </div>
-
-        <p class="connections-card-help" id="plaud-help">
-          Connect Plaud to have new recordings show up in your Apolla Plaud
-          queue automatically. Sign-in happens in your default browser; no
-          credentials touch this app.
-        </p>
-
-        <p class="connections-card-banner" id="plaud-disconnect-banner" hidden>
-          Local status cleared. Plaud tokens are still on the droplet — SSH in
-          and delete <code>/home/deploy/.plaud/tokens.json</code> to fully
-          revoke.
-        </p>
-      </div>
-
-      <div class="connections-footer">
-        <button type="button" id="btn-connections-back" class="btn btn-secondary">
-          ← Back to widget
-        </button>
-      </div>
-    </section>
-
-    <!-- ──────────────────────────────────────────────────────────────────
-         WP-AUTO-IMPORT — Auto-import pane.
-         Reached via right-click menu → "Auto-import…" (fires widget_expand
-         with target_tab="auto-import"). main.js's bootstrap hash-router
-         detects #auto-import and calls enterAutoImportView(), which loads
-         the persisted auto_import config (get_auto_import_config) +
-         available sources (auto_import_available_sources) and renders the
-         designated-source list with per-source toggles plus an
-         "Add a source" picker. New items from enabled sources are pulled in
-         silently by the Rust polling loop; each import fires a toast.
-         ────────────────────────────────────────────────────────────────── -->
-    <section id="view-auto-import" class="view view-auto-import" hidden>
-      <header class="auto-import-header">
-        <h1 class="auto-import-title">Auto-import</h1>
-        <p class="auto-import-subtitle">
-          New items from designated sources arrive on their own — no manual step.
-        </p>
-      </header>
-
-      <div id="auto-import-body" class="auto-import-list">
-        <!-- Master toggle + source rows + "Add a source" rendered by
-             renderAutoImport() in main.js. -->
-      </div>
-
-      <div class="auto-import-footer">
-        <button type="button" id="btn-auto-import-back" class="btn btn-secondary">
-          ← Back to widget
-        </button>
-      </div>
-    </section>
-
     <!-- ──────────────────────────────────────────────────────────────────
          Full-window drag-drop overlay — appears while user drags a file
          ────────────────────────────────────────────────────────────────── -->

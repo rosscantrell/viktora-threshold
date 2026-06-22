@@ -111,41 +111,9 @@ static ONENOTE_BULK_SEND_IN_FLIGHT: Mutex<bool> = Mutex::new(false);
 /// current page before the loop short-circuits (matches brief §3.4 AC).
 static ONENOTE_BULK_SEND_CANCEL: AtomicBool = AtomicBool::new(false);
 
-// ───────────────────────────────────────────────────────────────────────────
-// WP-ONENOTE-EXPORT-05 — auto-watch loop statics
-// ───────────────────────────────────────────────────────────────────────────
-//
-// Single-process tracker + run flag for the auto-watch polling loop.
-// Loop is spawned once per "enable" toggle; the run flag short-circuits
-// the loop body when toggled off (loop self-terminates rather than
-// being join-aborted). Tracker is preserved across toggle off/on so the
-// counter ("Sent today: N") survives a mid-day pause.
-//
-// `LazyLock` is the canonical-since-1.80 idiom for non-const-eval
-// statics. AutoWatchTracker has a HashSet field, so its `new` isn't
-// const-fn-callable.
-
-/// WP-ONENOTE-EXPORT-05 — true while the polling loop is running. Source
-/// of truth for the loop's "should I keep polling?" check. Persisted to
-/// disk via `AppConfig.auto_watch` (the in-process flag here mirrors
-/// the config field at steady state; transient skew during toggle is
-/// acceptable). Distinct from `AppConfig.auto_watch` so the loop can be
-/// instructed to stop without rewriting the config file.
-static ONENOTE_AUTO_WATCH_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// WP-ONENOTE-EXPORT-05 — process-global tracker. Shared between the
-/// polling loop (single mutator), the `onenote_auto_watch_status` IPC
-/// (reader for status payload), and the `build_widget_menu` builder
-/// (reader for the "Sent today: N pages" label). LazyLock-wrapped
-/// Mutex so the const-eval limitation on AutoWatchTracker::new doesn't
-/// force us into OnceCell init plumbing.
-static ONENOTE_AUTO_WATCH_TRACKER: std::sync::LazyLock<Mutex<onenote_windows::AutoWatchTracker>> =
-    std::sync::LazyLock::new(|| Mutex::new(onenote_windows::AutoWatchTracker::new()));
-
 /// WP-AUTO-IMPORT — true while the designated-source auto-import loop is
-/// running. Mirrors the auto-watch flag pattern: the loop self-terminates
-/// when this flips to false. Persisted intent lives in
-/// `AppConfig.auto_import.enabled`.
+/// running. The loop self-terminates when this flips to false. Persisted
+/// intent lives in `AppConfig.auto_import.enabled`.
 static AUTO_IMPORT_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// WP-AUTO-IMPORT — process-global set of source-item keys already imported
@@ -229,16 +197,6 @@ pub struct AppConfig {
     /// field continue to work (additive-only schema delta).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub onenote_hotkey: Option<String>,
-    /// WP-ONENOTE-EXPORT-05 — opt-in auto-watch mode. When `true`,
-    /// Threshold polls OneNote's active page every 2s; once the same
-    /// page has been observed for ≥10s consecutive AND has not yet been
-    /// sent in this session, it auto-fires the same send flow as the
-    /// hotkey / menu item. Default `false` (opt-in per brief §2.3 +
-    /// §3.5 — "Configure pane toggle defaulted OFF"). `#[serde(default)]`
-    /// (via the struct-level attribute) means existing configs without
-    /// this field deserialize cleanly as `false`.
-    #[serde(default)]
-    pub auto_watch: bool,
     /// WP-PLAUD-07b — local cached "Plaud Connected" status, set on every
     /// successful `plaud_connect_start` and cleared by the soft-clear
     /// Disconnect button. UX hint only — the droplet's
@@ -248,10 +206,10 @@ pub struct AppConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plaud_connect: Option<plaud_oauth::PlaudConnectStatus>,
     /// WP-AUTO-IMPORT — designated-source background auto-import settings.
-    /// Distinct from `auto_watch` (which sends the page you're *currently
-    /// viewing*): this watches user-designated OneNote notebooks + Plaud
-    /// devices and silently pulls in anything *new* since the source was
-    /// designated. `#[serde(default)]` (struct-level) means legacy configs
+    /// Watches user-designated OneNote notebooks + Plaud devices and silently
+    /// pulls in anything *new* since the source was designated, on the
+    /// user-configured `interval_minutes` cadence. `#[serde(default)]`
+    /// (struct-level) means legacy configs
     /// without the field deserialize as `AutoImportConfig::default()`
     /// (everything off / empty) — additive-only schema delta.
     #[serde(default)]
@@ -277,7 +235,6 @@ impl Default for AppConfig {
             widget_x: None,
             widget_y: None,
             onenote_hotkey: None,
-            auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
@@ -292,7 +249,7 @@ impl Default for AppConfig {
 /// Top-level auto-import settings persisted inside `AppConfig`. `enabled` is
 /// the master switch; individual sources also carry their own `enabled` flag
 /// so a user can keep a source designated but temporarily pause it.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AutoImportConfig {
     /// Master on/off. The polling loop runs only when this is true AND at
@@ -304,6 +261,32 @@ pub struct AutoImportConfig {
     pub onenote_notebooks: Vec<AutoImportOneNoteSource>,
     /// Plaud devices (by serial number) to auto-import new recordings from.
     pub plaud_devices: Vec<AutoImportPlaudSource>,
+    /// How often the polling loop sweeps designated sources, in minutes.
+    /// User-configurable from the Auto-import view. Clamped to
+    /// `MIN_AUTO_IMPORT_INTERVAL_MINUTES` at read time. Legacy configs without
+    /// the field deserialize to the `Default` (15) via the container-level
+    /// `#[serde(default)]`.
+    pub interval_minutes: u64,
+}
+
+/// Default sweep cadence in minutes. Surfaced as the default selection in the
+/// Auto-import view's interval dropdown.
+const DEFAULT_AUTO_IMPORT_INTERVAL_MINUTES: u64 = 15;
+
+/// Floor for the user-chosen sweep cadence — guards against a 0 (busy-loop) or
+/// missing value. The OneNote enumerate + Plaud inbox fetch are non-trivial, so
+/// 1 minute is the tightest we allow.
+const MIN_AUTO_IMPORT_INTERVAL_MINUTES: u64 = 1;
+
+impl Default for AutoImportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            onenote_notebooks: Vec::new(),
+            plaud_devices: Vec::new(),
+            interval_minutes: DEFAULT_AUTO_IMPORT_INTERVAL_MINUTES,
+        }
+    }
 }
 
 /// A single designated OneNote notebook.
@@ -321,6 +304,17 @@ pub struct AutoImportOneNoteSource {
     /// never bulk-imports its back-catalogue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermark: Option<String>,
+    /// When set, scope auto-import to this one section of the notebook rather
+    /// than the whole notebook. `None` = whole-notebook (the original
+    /// behaviour, so existing configs need no migration). A source's identity
+    /// is the (`notebook_id`, `section_id`) pair, so a notebook can have both a
+    /// whole-notebook watch and one or more section watches, each with its own
+    /// independent `watermark`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<String>,
+    /// Display name of the designated section (for the source-list label).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_name: Option<String>,
 }
 
 /// A single designated Plaud device.
@@ -794,7 +788,7 @@ async fn auth_verify(
     }
 
     // Persist the per-user token as the bearer. Load existing config to keep
-    // hotkey / auto-watch / widget-position fields intact.
+    // hotkey / widget-position fields intact.
     let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
     let path = dir.join("config.json");
@@ -3201,7 +3195,7 @@ async fn onenote_get_active_page() -> Result<ActivePageReport, String> {
 /// Full per-page capture flow: resolve `pageId` (via `get_active_page` if
 /// not supplied) → enrich via `enumerate_hierarchy` → `Application.Publish`
 /// to a temp PDF → `pdf_extract::extract_pdf_text` → POST to Apolla. WP-03
-/// (hotkey), WP-04 (bulk-send iteration), WP-05 (auto-watch) all reduce to
+/// (hotkey) and WP-04 (bulk-send iteration) both reduce to
 /// "call this command."
 ///
 /// Returns an `IngestionOutcome` so the frontend can render the same
@@ -3762,10 +3756,9 @@ async fn fire_onenote_send_active_section_flow(app: tauri::AppHandle) {
 /// temp-PDF cleanup, COM error → `OneNoteError::user_message()` mapping.
 ///
 /// Lives here so the hotkey + menu dispatch path doesn't replicate the
-/// 100-line publish-and-post body; future calls (WP-04 bulk-send loop,
-/// WP-05 auto-watch tick) can call this too. The IPC command becomes a
-/// 1-line wrapper in a follow-on cleanup pass (left as-is for now to
-/// minimize the WP-03 diff).
+/// 100-line publish-and-post body; the WP-04 bulk-send loop calls this
+/// too. The IPC command becomes a 1-line wrapper in a follow-on cleanup
+/// pass (left as-is for now to minimize the WP-03 diff).
 async fn run_onenote_send_inline(
     cfg: AppConfig,
     page_id: Option<String>,
@@ -3938,268 +3931,10 @@ async fn run_onenote_send_inline(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// WP-ONENOTE-EXPORT-05 — auto-watch polling loop + start/stop helpers
-// ───────────────────────────────────────────────────────────────────────────
-//
-// The polling loop runs on a dedicated `tauri::async_runtime::spawn` task
-// (tokio task; not a native OS thread because the body needs to .await
-// the run_onenote_send_inline future). Cadence:
-//   - Every `AUTO_WATCH_POLL_INTERVAL` (2s): call get_active_page().
-//   - Feed result to the AutoWatchTracker (debounce + dedup).
-//   - On AutoWatchAction::FireSend(page_id): kick off the same send
-//     flow the hotkey uses (run_onenote_send_inline) and on success
-//     mark_sent() on the tracker.
-//
-// Loop self-terminates when `ONENOTE_AUTO_WATCH_ACTIVE` flips to false
-// (checked at the top of each tick). Restart cost is one cargo-spawn
-// per enable; no native thread join ceremony.
-
-/// WP-ONENOTE-EXPORT-05 — kick off the auto-watch polling loop.
-///
-/// Idempotent: if the loop is already running (flag is true), this is a
-/// no-op. Toggling off-then-on still works because the previous loop's
-/// next tick will see the flag false and self-terminate; this fresh
-/// `spawn` always wins. Cross-platform: COM operations only succeed on
-/// Windows, but the loop body is platform-agnostic (the underlying
-/// `get_active_page` returns `PlatformUnsupported` on Mac/Linux, which
-/// the loop maps to "wait" — see `tick_auto_watch_loop` below).
-fn start_auto_watch_loop(app: tauri::AppHandle) {
-    // Idempotency guard: already-running loop → nothing to do.
-    if ONENOTE_AUTO_WATCH_ACTIVE.swap(true, Ordering::SeqCst) {
-        log::info!("WP-ONENOTE-EXPORT-05: auto-watch loop already running; start is no-op");
-        return;
-    }
-    log::info!("WP-ONENOTE-EXPORT-05: starting auto-watch loop");
-
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        loop {
-            // Steady-state check: was the loop disabled since last
-            // tick? Bail before doing any work.
-            if !ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst) {
-                log::info!("WP-ONENOTE-EXPORT-05: auto-watch loop self-terminating");
-                return;
-            }
-            tick_auto_watch_loop(&app_handle).await;
-            tokio::time::sleep(onenote_windows::AUTO_WATCH_POLL_INTERVAL).await;
-        }
-    });
-}
-
-/// WP-ONENOTE-EXPORT-05 — flip the auto-watch active flag false. The
-/// loop's next tick will observe the change and self-terminate. Does
-/// NOT reset the tracker — counters survive the off-toggle so the user
-/// sees a consistent "Sent today: N" across pauses. Idempotent.
-fn stop_auto_watch_loop() {
-    let was_active = ONENOTE_AUTO_WATCH_ACTIVE.swap(false, Ordering::SeqCst);
-    if was_active {
-        log::info!("WP-ONENOTE-EXPORT-05: auto-watch loop stop requested");
-    }
-}
-
-/// WP-ONENOTE-EXPORT-05 — single polling tick. Extracted from
-/// `start_auto_watch_loop` so the body is testable end-to-end in
-/// integration tests (without spawning a real tokio task) and so the
-/// inner-loop body stays readable.
-///
-/// Per-tick work:
-///   1. Call get_active_page() (returns Option<page_id> on Windows, or
-///      Err(PlatformUnsupported) on Mac/Linux).
-///   2. Feed the result into the tracker. On Mac/Linux this is always
-///      Wait (the loop is allowed to run on those platforms but never
-///      fires a send — the AppConfig persists the toggle uniformly).
-///   3. On FireSend(page_id): emit a pre-send toast, run the send
-///      flow via run_onenote_send_inline, mark_sent on success.
-async fn tick_auto_watch_loop(app: &tauri::AppHandle) {
-    let now = std::time::Instant::now();
-
-    // 1. Cheap active-page lookup. Runs on a blocking thread because
-    //    PowerShell shell-out is sync (~50-150ms).
-    let page_id_res = tauri::async_runtime::spawn_blocking(|| {
-        onenote_windows::get_active_page()
-    })
-    .await;
-
-    let current_page_id: Option<String> = match page_id_res {
-        Ok(Ok(Some(id))) => Some(id),
-        Ok(Ok(None)) => None, // no notebook open — treat as reset
-        Ok(Err(_)) => {
-            // PlatformUnsupported or COM error — don't spam the log
-            // every 2s. Just treat as "no observation" and let the
-            // tracker reset. The loop continues; user gets feedback
-            // only when they enable the toggle (lib.rs warns at the
-            // enable site if registration fails).
-            None
-        }
-        Err(_join_err) => {
-            // Blocking task panicked. Log + skip; loop continues.
-            log::warn!("WP-ONENOTE-EXPORT-05: get_active_page task panicked; skipping tick");
-            return;
-        }
-    };
-
-    // 2. Feed into tracker; decide whether to fire.
-    let action = {
-        let mut tracker = ONENOTE_AUTO_WATCH_TRACKER
-            .lock()
-            .expect("auto-watch tracker mutex poisoned");
-        tracker.observe(current_page_id.as_deref(), now)
-    };
-
-    if let onenote_windows::AutoWatchAction::FireSend(page_id) = action {
-        log::info!(
-            "WP-ONENOTE-EXPORT-05: auto-watch firing send for page {}",
-            page_id
-        );
-        // Resolve config; bail silently if Configure isn't done (the
-        // hotkey/menu surface emits the "Configure first" toast on
-        // demand — the auto-watch loop should not spam toasts every
-        // 12s while the user is mid-onboarding).
-        let cfg = match current_config_opt(app) {
-            Some(c) => c,
-            None => {
-                log::warn!(
-                    "WP-ONENOTE-EXPORT-05: auto-watch fire skipped — \
-                     AppConfig not loaded yet"
-                );
-                return;
-            }
-        };
-        // Pre-send toast so the user knows the auto-watch loop did
-        // something. Mirrors fire_onenote_send_flow's pre-send toast.
-        let _ = app.emit(
-            "threshold://toast",
-            IngestionOutcome {
-                kind: "success".into(),
-                title: format!("Auto-sending OneNote page {}…", page_id),
-                body: Some(
-                    "Threshold detected you've been viewing this page for \
-                     10+ seconds; sending to Apolla automatically."
-                        .into(),
-                ),
-                source_path: None,
-            },
-        );
-        let outcome = run_onenote_send_inline(cfg, Some(page_id.clone())).await;
-        let kind_for_check = outcome.kind.clone();
-        let _ = app.emit("threshold://toast", outcome);
-        // Only mark_sent on success — failure paths (PDF extract,
-        // handwriting-skip, COM error) leave the page eligible for
-        // retry on the next observation, which is the right UX.
-        if kind_for_check == "success" {
-            let today = chrono::Local::now().date_naive();
-            let mut tracker = ONENOTE_AUTO_WATCH_TRACKER
-                .lock()
-                .expect("auto-watch tracker mutex poisoned");
-            tracker.mark_sent(&page_id, today);
-        } else {
-            log::info!(
-                "WP-ONENOTE-EXPORT-05: send failed for page {} ({}); \
-                 NOT marking sent — eligible for retry next observation",
-                page_id,
-                kind_for_check
-            );
-        }
-    }
-}
-
-/// WP-ONENOTE-EXPORT-05 — IPC: toggle auto-watch on/off.
-///
-/// Persists the flag to AppConfig (so it survives app restart) AND
-/// starts/stops the polling loop in-process. Loop start is cross-
-/// platform; on Mac/Linux it spins but never fires (since the
-/// underlying `get_active_page` returns PlatformUnsupported — the
-/// tracker treats it as "no observation").
-#[tauri::command]
-async fn onenote_set_auto_watch(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    enabled: bool,
-) -> Result<(), String> {
-    // Update the in-memory config + persist to disk. We do this even
-    // when the value is unchanged so the timestamp + on-disk schema
-    // stay current.
-    let mut cfg = state
-        .config
-        .lock()
-        .ok()
-        .and_then(|guard| guard.clone())
-        .unwrap_or_default();
-    cfg.auto_watch = enabled;
-
-    // Inline the relevant bits of save_config (the existing IPC takes
-    // a full AppConfig from the JS side; here we're mutating a single
-    // field so a wholesale re-save would duplicate the JS code's
-    // shape).
-    let dir = config_dir().ok_or_else(|| "Could not resolve config directory".to_string())?;
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
-    let path = dir.join("config.json");
-    let mut to_write = cfg.clone();
-    to_write.last_used = Some(Utc::now().to_rfc3339());
-    let json = serde_json::to_string_pretty(&to_write)
-        .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Failed to write config: {}", e))?;
-    log::info!(
-        "WP-ONENOTE-EXPORT-05: set auto_watch={} (config persisted)",
-        enabled
-    );
-    *state.config.lock().expect("config mutex poisoned") = Some(to_write);
-
-    // Apply the toggle to the in-process loop. start is idempotent;
-    // stop is too (no-op if not running).
-    if enabled {
-        start_auto_watch_loop(app);
-    } else {
-        stop_auto_watch_loop();
-    }
-    Ok(())
-}
-
-/// WP-ONENOTE-EXPORT-05 — IPC: read the current auto-watch status.
-///
-/// Returns the loop's enable flag + the tracker's counters. Cheap
-/// (mutex lock + clone of a small struct). Called by:
-///   - Configure pane on view enter + every 30s (status refresh)
-///   - main.js when the user toggles the checkbox (for immediate
-///     post-toggle confirmation of the new state)
-#[tauri::command]
-fn onenote_auto_watch_status() -> Result<onenote_windows::AutoWatchStatus, String> {
-    let tracker = ONENOTE_AUTO_WATCH_TRACKER
-        .lock()
-        .map_err(|e| format!("auto-watch tracker mutex poisoned: {}", e))?;
-    let enabled = ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst);
-    Ok(onenote_windows::AutoWatchStatus::from_tracker(&tracker, enabled))
-}
-
-/// WP-ONENOTE-EXPORT-05 — composed menu-label text for the disabled
-/// counter MenuItem in the widget right-click menu. Reads the live
-/// tracker on every menu-build (no set_text plumbing needed since the
-/// menu is rebuilt per popup; see `build_widget_menu`).
-///
-/// Format mirrors brief §3.5 ("Sent today: N pages"). When the loop is
-/// off the label switches to "Auto-watch off" so the user gets a
-/// clear "feature disabled" signal vs "feature on but 0 sends so far."
-fn auto_watch_counter_label() -> String {
-    let enabled = ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst);
-    if !enabled {
-        return "Auto-watch off".to_string();
-    }
-    let count = ONENOTE_AUTO_WATCH_TRACKER
-        .lock()
-        .map(|t| t.sent_today())
-        .unwrap_or(0);
-    if count == 1 {
-        "Sent today: 1 page".to_string()
-    } else {
-        format!("Sent today: {} pages", count)
-    }
-}
-
-// ───────────────────────────────────────────────────────────────────────────
 // WP-AUTO-IMPORT — designated-source background auto-import
 // ───────────────────────────────────────────────────────────────────────────
 //
-// A single polling loop (cadence AUTO_IMPORT_POLL_INTERVAL) sweeps the user's
+// A single polling loop (cadence = the user-configured interval_minutes) sweeps the user's
 // designated sources and silently pulls in anything new:
 //   - Plaud devices (by serial): import pending inbox items discovered after
 //     the device's `since` timestamp. Cross-platform — works on Mac.
@@ -4209,10 +3944,17 @@ fn auto_watch_counter_label() -> String {
 //     that half).
 // Each import emits a `threshold://toast` so the user sees what landed.
 
-/// Poll cadence. Heavier than the 2s auto-watch tick (this hits the Plaud
-/// server + enumerates the full OneNote hierarchy), so 90s keeps load modest
-/// while still surfacing new items within a couple of minutes.
-const AUTO_IMPORT_POLL_INTERVAL: Duration = Duration::from_secs(90);
+/// Resolve the configured sweep cadence (minutes → Duration), clamped to the
+/// `MIN_AUTO_IMPORT_INTERVAL_MINUTES` floor. Falls back to the default when no
+/// config is loaded yet. Read fresh each loop iteration so a UI change to the
+/// interval takes effect on the next tick without restarting the loop.
+fn auto_import_poll_interval(app: &tauri::AppHandle) -> Duration {
+    let mins = current_config_opt(app)
+        .map(|c| c.auto_import.interval_minutes)
+        .unwrap_or(DEFAULT_AUTO_IMPORT_INTERVAL_MINUTES)
+        .max(MIN_AUTO_IMPORT_INTERVAL_MINUTES);
+    Duration::from_secs(mins * 60)
+}
 
 /// Parse an RFC3339 / ISO8601 timestamp (OneNote emits e.g.
 /// `2026-05-27T12:00:00.000Z`; Plaud emits RFC3339). `None` on failure.
@@ -4254,6 +3996,7 @@ fn auto_import_has_enabled_source(cfg: &AppConfig) -> bool {
 fn auto_import_persist_onenote_watermark(
     app: &tauri::AppHandle,
     notebook_id: &str,
+    section_id: Option<&str>,
     watermark: &str,
 ) {
     let state = app.state::<AppState>();
@@ -4264,7 +4007,9 @@ fn auto_import_persist_onenote_watermark(
     let mut cfg = guard.clone().unwrap_or_default();
     let mut changed = false;
     for src in cfg.auto_import.onenote_notebooks.iter_mut() {
-        if src.notebook_id == notebook_id {
+        // Identity is the (notebook, section) pair so a whole-notebook watch
+        // and a section watch on the same notebook keep separate watermarks.
+        if src.notebook_id == notebook_id && src.section_id.as_deref() == section_id {
             src.watermark = Some(watermark.to_string());
             changed = true;
         }
@@ -4369,8 +4114,7 @@ async fn auto_import_plaud_one(cfg: &AppConfig, id: &str) -> Result<PlaudIngestR
         .map_err(|e| format!("parse ingest: {}", e))
 }
 
-/// WP-AUTO-IMPORT — kick off the polling loop. Idempotent (mirrors
-/// start_auto_watch_loop).
+/// WP-AUTO-IMPORT — kick off the polling loop. Idempotent.
 fn start_auto_import_loop(app: tauri::AppHandle) {
     if AUTO_IMPORT_ACTIVE.swap(true, Ordering::SeqCst) {
         log::info!("WP-AUTO-IMPORT: loop already running; start is no-op");
@@ -4385,7 +4129,7 @@ fn start_auto_import_loop(app: tauri::AppHandle) {
                 return;
             }
             tick_auto_import(&app_handle).await;
-            tokio::time::sleep(AUTO_IMPORT_POLL_INTERVAL).await;
+            tokio::time::sleep(auto_import_poll_interval(&app_handle)).await;
         }
     });
 }
@@ -4497,9 +4241,15 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             Some(n) => n,
             None => continue,
         };
-        // (page_id, lastModifiedTime) for every timestamped page.
+        // (page_id, lastModifiedTime) for every timestamped page. When the
+        // source is section-scoped, restrict the sweep to that one section.
         let mut pages: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = Vec::new();
         for section in &notebook.sections {
+            if let Some(want) = src.section_id.as_deref() {
+                if section.section_id != want {
+                    continue;
+                }
+            }
             for page in &section.pages {
                 if let Some(dt) = page.last_modified_time.as_deref().and_then(parse_ts) {
                     pages.push((page.page_id.clone(), dt));
@@ -4517,11 +4267,16 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
                 auto_import_persist_onenote_watermark(
                     app,
                     &src.notebook_id,
+                    src.section_id.as_deref(),
                     &newest.to_rfc3339(),
                 );
                 log::info!(
-                    "WP-AUTO-IMPORT: baselined OneNote notebook '{}' at {}",
+                    "WP-AUTO-IMPORT: baselined OneNote source '{}'{} at {}",
                     src.name,
+                    src.section_name
+                        .as_deref()
+                        .map(|s| format!(" · {}", s))
+                        .unwrap_or_default(),
                     newest.to_rfc3339()
                 );
                 continue;
@@ -4569,7 +4324,12 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             }
         }
         if max_seen > watermark {
-            auto_import_persist_onenote_watermark(app, &src.notebook_id, &max_seen.to_rfc3339());
+            auto_import_persist_onenote_watermark(
+                app,
+                &src.notebook_id,
+                src.section_id.as_deref(),
+                &max_seen.to_rfc3339(),
+            );
         }
     }
 }
@@ -4581,6 +4341,11 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
 struct AutoImportSourceOption {
     id: String,
     name: String,
+    /// For OneNote notebooks: the notebook's sections, so the picker can offer
+    /// "whole notebook" plus per-section watches. Empty (and omitted from JSON)
+    /// for Plaud devices and for section entries themselves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sections: Vec<AutoImportSourceOption>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -4639,7 +4404,7 @@ async fn set_auto_import_config(
                 .auto_import
                 .onenote_notebooks
                 .iter()
-                .find(|p| p.notebook_id == src.notebook_id)
+                .find(|p| p.notebook_id == src.notebook_id && p.section_id == src.section_id)
             {
                 src.watermark = prev.watermark.clone();
             }
@@ -4716,6 +4481,15 @@ async fn auto_import_available_sources(
                 .map(|n| AutoImportSourceOption {
                     id: n.notebook_id,
                     name: n.name,
+                    sections: n
+                        .sections
+                        .into_iter()
+                        .map(|s| AutoImportSourceOption {
+                            id: s.section_id,
+                            name: s.name,
+                            sections: Vec::new(),
+                        })
+                        .collect(),
                 })
                 .collect(),
             _ => Vec::new(),
@@ -4734,6 +4508,7 @@ async fn auto_import_available_sources(
                     out.push(AutoImportSourceOption {
                         id: it.serial_number.clone(),
                         name: format!("Plaud {}", it.serial_number),
+                        sections: Vec::new(),
                     });
                 }
             }
@@ -5185,27 +4960,12 @@ const MENU_ONENOTE_SEND_SECTION: &str = "menu.onenote_send_section";
 /// the notebook → section → page tree and per-section "Send all N pages"
 /// buttons that dispatch to `onenote_send_section`.
 const MENU_ONENOTE_BROWSE: &str = "menu.onenote_browse";
-/// WP-PLAUD-07b — opens the Settings → Connections pane. Same
-/// widget_expand mechanism as Plaud-queue / Settings; URL fragment
-/// routes main.js's bootstrap to enterConnectionsView().
-const MENU_CONNECTIONS: &str = "menu.connections";
-/// WP-AUTO-IMPORT — opens the Auto-import pane (designated OneNote notebooks
-/// + Plaud devices). Same widget_expand mechanism as Connections; main.js's
-/// hash-router calls enterAutoImportView() on `#auto-import`.
-const MENU_AUTO_IMPORT: &str = "menu.auto_import";
 /// WP-THRESHOLD-LOG-UX — opens the "Today" decision/commitment-log view
 /// (`view-log`). Same widget_expand mechanism as the other panes; main.js's
 /// hash-router calls enterLogView() on `#log`. Sits at the top of the review
 /// group (just below the capture surfaces) since it's the always-on "what needs
 /// attention" entry point.
 const MENU_LOG: &str = "menu.log";
-/// WP-ONENOTE-EXPORT-05 — disabled menu item that surfaces the live
-/// "Sent today: N pages" counter from the auto-watch loop. Disabled
-/// (un-clickable) per brief §3.5 — it's a visual indicator, not an
-/// actionable command. Label text is composed live in `build_widget_menu`
-/// by reading the tracker (the menu is rebuilt on every right-click, so
-/// no MenuItem::set_text plumbing is needed).
-const MENU_ONENOTE_AUTOWATCH_COUNTER: &str = "menu.onenote_autowatch_counter";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
 /// that opens Tauri's devtools for diagnosis. Constant + menu builder
 /// branch + event handler arm are all #[cfg(debug_assertions)] gated so
@@ -5259,30 +5019,8 @@ fn build_widget_menu(
         true,
         None::<&str>,
     )?;
-    // WP-ONENOTE-EXPORT-05 — disabled (un-clickable) counter shown
-    // beneath the OneNote action items so the user sees auto-watch's
-    // current activity at a glance. Label is composed from the live
-    // tracker via `auto_watch_counter_label()` — switches between
-    // "Auto-watch off" and "Sent today: N pages" / "Sent today: 1 page".
-    // The menu is rebuilt on every right-click (popup-only; no
-    // persistent menu reference) so reading the tracker here gives a
-    // fresh count without any set_text plumbing.
-    let onenote_autowatch_counter = MenuItem::with_id(
-        app,
-        MENU_ONENOTE_AUTOWATCH_COUNTER,
-        auto_watch_counter_label(),
-        false, // disabled — visual-only
-        None::<&str>,
-    )?;
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
-    // WP-PLAUD-07b — Connections sits with Settings (workspace controls).
-    // Lives below Settings so the high-frequency capture/send items stay
-    // at the top of the menu.
-    let connections = MenuItem::with_id(app, MENU_CONNECTIONS, "Sources…", true, None::<&str>)?;
-    // WP-AUTO-IMPORT — sits next to Connections (both are "set up where your
-    // content comes from" surfaces).
-    let auto_import = MenuItem::with_id(app, MENU_AUTO_IMPORT, "Auto-import…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
 
@@ -5308,11 +5046,8 @@ fn build_widget_menu(
                 &onenote_send_current_page,
                 &onenote_send_section,
                 &onenote_browse,
-                &onenote_autowatch_counter,
                 &expand,
                 &settings,
-                &connections,
-                &auto_import,
                 &sep2,
                 &quit,
                 &sep_dev,
@@ -5333,11 +5068,8 @@ fn build_widget_menu(
             &onenote_send_current_page,
             &onenote_send_section,
             &onenote_browse,
-            &onenote_autowatch_counter,
             &expand,
             &settings,
-            &connections,
-            &auto_import,
             &sep2,
             &quit,
         ],
@@ -5982,28 +5714,6 @@ pub fn run() {
                 }
             }
 
-            // WP-ONENOTE-EXPORT-05 — if the persisted config has
-            // `auto_watch: true`, start the polling loop at app launch
-            // so the toggle survives restart. Cross-platform: the loop
-            // spins on Mac/Linux too but never fires (the underlying
-            // get_active_page returns PlatformUnsupported — the tracker
-            // treats it as "no observation" and never reaches FireSend).
-            // We start the loop even on non-Windows so the AppConfig
-            // round-trip is byte-equal across platforms (the toggle
-            // renders + persists the same way on Mac so Ross can test
-            // the UI without needing a Windows VM).
-            if preloaded_cfg
-                .as_ref()
-                .map(|c| c.auto_watch)
-                .unwrap_or(false)
-            {
-                log::info!(
-                    "WP-ONENOTE-EXPORT-05: auto-watch enabled in persisted config; \
-                     starting polling loop at app launch"
-                );
-                start_auto_watch_loop(app.handle().clone());
-            }
-
             // WP-AUTO-IMPORT — if the persisted config has auto-import enabled
             // with at least one enabled source, start the polling loop at
             // launch so designated sources keep syncing across restarts.
@@ -6134,9 +5844,6 @@ pub fn run() {
             onenote_send_section,
             onenote_send_active_section,
             onenote_cancel_bulk_send,
-            // WP-ONENOTE-EXPORT-05 — opt-in auto-watch toggle + status
-            onenote_set_auto_watch,
-            onenote_auto_watch_status,
             // WP-AUTO-IMPORT — designated-source background auto-import
             get_auto_import_config,
             set_auto_import_config,
@@ -6189,30 +5896,6 @@ pub fn run() {
                             Some("configure".into()),
                         ) {
                             log::warn!("menu settings failed: {e}");
-                        }
-                    }
-                    MENU_CONNECTIONS => {
-                        // WP-PLAUD-07b — open the Settings → Connections
-                        // pane. main.js's bootstrap hash-router calls
-                        // enterConnectionsView() when it sees #connections.
-                        if let Err(e) = widget_expand(
-                            app.state::<AppState>(),
-                            window.clone(),
-                            Some("connections".into()),
-                        ) {
-                            log::warn!("menu connections failed: {e}");
-                        }
-                    }
-                    MENU_AUTO_IMPORT => {
-                        // WP-AUTO-IMPORT — open the Auto-import pane. main.js's
-                        // hash-router calls enterAutoImportView() on
-                        // #auto-import.
-                        if let Err(e) = widget_expand(
-                            app.state::<AppState>(),
-                            window.clone(),
-                            Some("auto-import".into()),
-                        ) {
-                            log::warn!("menu auto_import failed: {e}");
                         }
                     }
                     MENU_LOG => {
@@ -6280,14 +5963,6 @@ pub fn run() {
                         // D-12-02-AMEND drains in-flight ingestions before
                         // exiting; the existing close handler covers this.
                         app.exit(0);
-                    }
-                    MENU_ONENOTE_AUTOWATCH_COUNTER => {
-                        // WP-ONENOTE-EXPORT-05 — disabled menu item; should
-                        // never fire a click event (Tauri suppresses events
-                        // on disabled items). Defensive no-op so the
-                        // unhandled-event log line doesn't spam if a future
-                        // platform-specific menu impl re-emits events
-                        // anyway.
                     }
                     #[cfg(debug_assertions)]
                     MENU_DEVTOOLS => {
@@ -6631,7 +6306,6 @@ mod tests {
             widget_x: Some(1820),
             widget_y: Some(980),
             onenote_hotkey: None,
-            auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
@@ -6696,7 +6370,6 @@ mod tests {
             widget_x: None,
             widget_y: None,
             onenote_hotkey: Some("Ctrl+Shift+T".to_string()),
-            auto_watch: false,
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
@@ -6706,170 +6379,6 @@ mod tests {
         assert_eq!(parsed.onenote_hotkey, cfg.onenote_hotkey);
         assert_eq!(resolved_onenote_hotkey(&parsed), "Ctrl+Shift+T");
     }
-
-    // ───── WP-ONENOTE-EXPORT-05 — AppConfig.auto_watch persistence ─────
-    //
-    // The auto_watch field is `bool` with `#[serde(default)]`. Tests
-    // cover: default value, explicit true/false serde round-trips,
-    // legacy-config compatibility (no `auto_watch` key on disk → reads
-    // as false). Also covers auto_watch_counter_label which composes
-    // the menu-counter label from the live tracker.
-
-    #[test]
-    fn app_config_default_auto_watch_is_false() {
-        // Brief §3.5: toggle defaults OFF. The default impl is the
-        // source of truth for a fresh-install AppConfig.
-        let cfg = AppConfig::default();
-        assert!(!cfg.auto_watch);
-    }
-
-    #[test]
-    fn config_round_trips_with_auto_watch_true() {
-        // Companion to config_round_trips_through_json (which covers
-        // auto_watch: false) — explicitly verify the true case round-
-        // trips cleanly through JSON serde.
-        let cfg = AppConfig {
-            base_url: "https://hosted.viktora.ai".to_string(),
-            bearer_token: "test-token-789".to_string(),
-            last_used: None,
-            mode: "workspace".to_string(),
-            widget_x: None,
-            widget_y: None,
-            onenote_hotkey: None,
-            auto_watch: true,
-            plaud_connect: None,
-            auto_import: AutoImportConfig::default(),
-            dismissed_record_ids: Vec::new(),
-        };
-        let json = serde_json::to_string(&cfg).expect("should serialize");
-        // The auto_watch field must appear in serialized JSON (no
-        // skip_serializing_if for the bool case — we want to persist
-        // both `true` and `false` to disk explicitly).
-        assert!(json.contains("\"auto_watch\":true"), "got: {}", json);
-        let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
-        assert!(parsed.auto_watch);
-    }
-
-    #[test]
-    fn config_legacy_without_auto_watch_field_deserializes_as_false() {
-        // Legacy-config-compat: a config.json written by Threshold
-        // pre-WP-EXPORT-05 doesn't have `auto_watch`. The struct-level
-        // `#[serde(default)]` attr means missing-field deserializes to
-        // the type default (bool::default() = false). Verify this
-        // explicitly so a refactor can't silently break additive-only
-        // schema compatibility.
-        let legacy_json = r#"{
-            "base_url": "http://localhost:3001",
-            "bearer_token": "legacy-token",
-            "last_used": null,
-            "mode": "workspace"
-        }"#;
-        let parsed: AppConfig =
-            serde_json::from_str(legacy_json).expect("legacy config should deserialize");
-        assert!(!parsed.auto_watch);
-        assert_eq!(parsed.bearer_token, "legacy-token");
-        assert_eq!(parsed.onenote_hotkey, None); // also missing — same compat path
-    }
-
-    /// WP-ONENOTE-EXPORT-05 — process-global serialization gate for
-    /// the auto-watch state tests. Tests that touch
-    /// ONENOTE_AUTO_WATCH_ACTIVE or ONENOTE_AUTO_WATCH_TRACKER must
-    /// hold this Mutex for their full duration so parallel test
-    /// execution doesn't race on the shared LazyLock state.
-    ///
-    /// Mirrors the bulk-send test pattern's implicit serialization (via
-    /// shared `ONENOTE_BULK_SEND_IN_FLIGHT` Mutex). Tests use
-    /// `let _guard = AUTO_WATCH_TEST_LOCK.lock().unwrap();` at the top.
-    static AUTO_WATCH_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Helper: reset the process-global auto-watch state to a known
-    /// pristine state. Called at the top of every test that exercises
-    /// the global flag or tracker. Returns the test-lock guard so the
-    /// caller's test body runs under the serialization gate.
-    fn reset_auto_watch_for_test() -> std::sync::MutexGuard<'static, ()> {
-        let guard = AUTO_WATCH_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        ONENOTE_AUTO_WATCH_ACTIVE.store(false, Ordering::SeqCst);
-        let mut tracker = ONENOTE_AUTO_WATCH_TRACKER
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *tracker = onenote_windows::AutoWatchTracker::new();
-        guard
-    }
-
-    #[test]
-    fn auto_watch_counter_label_off_when_loop_inactive() {
-        // The counter label is the live string the menu MenuItem renders.
-        // Tests guard against the menu builder reading from stale state.
-        let _guard = reset_auto_watch_for_test();
-        let label = auto_watch_counter_label();
-        assert_eq!(label, "Auto-watch off");
-    }
-
-    #[test]
-    fn auto_watch_counter_label_singular_plural_when_loop_active() {
-        // Hold the serialization gate for the full body so sibling
-        // tests don't flip ONENOTE_AUTO_WATCH_ACTIVE mid-test.
-        let _guard = reset_auto_watch_for_test();
-        // Setup: enable the loop flag (without actually spawning the
-        // task — we're just testing the label-composition logic).
-        ONENOTE_AUTO_WATCH_ACTIVE.store(true, Ordering::SeqCst);
-        // Zero sends → "Sent today: 0 pages"
-        let label = auto_watch_counter_label();
-        assert_eq!(label, "Sent today: 0 pages");
-        // One send → singular "1 page"
-        {
-            let mut tracker = ONENOTE_AUTO_WATCH_TRACKER
-                .lock()
-                .expect("tracker mutex poisoned");
-            tracker.mark_sent(
-                "{PG-A}",
-                chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
-            );
-        }
-        let label = auto_watch_counter_label();
-        assert_eq!(label, "Sent today: 1 page");
-        // Two sends → plural "2 pages"
-        {
-            let mut tracker = ONENOTE_AUTO_WATCH_TRACKER
-                .lock()
-                .expect("tracker mutex poisoned");
-            tracker.mark_sent(
-                "{PG-B}",
-                chrono::NaiveDate::from_ymd_opt(2026, 5, 28).unwrap(),
-            );
-        }
-        let label = auto_watch_counter_label();
-        assert_eq!(label, "Sent today: 2 pages");
-    }
-
-    #[test]
-    fn auto_watch_active_flag_default_is_false() {
-        // The static AtomicBool defaults to false. Verify the loop is
-        // OFF on fresh process start (mirrors `app_config_default_auto_watch_is_false`
-        // for the in-process flag). Belt-and-suspenders — a future
-        // refactor that flips the default to true would be a bad-news
-        // change for users who never opted in.
-        let _guard = reset_auto_watch_for_test();
-        assert!(!ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn stop_auto_watch_loop_is_idempotent() {
-        // Calling stop when the loop is already off must not error or
-        // log spam. Mirrors the bulk-send cancel-flag idempotency
-        // contract.
-        let _guard = reset_auto_watch_for_test();
-        stop_auto_watch_loop(); // no-op
-        stop_auto_watch_loop(); // also no-op
-        assert!(!ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst));
-        // After flipping on + stop, flag should be off.
-        ONENOTE_AUTO_WATCH_ACTIVE.store(true, Ordering::SeqCst);
-        stop_auto_watch_loop();
-        assert!(!ONENOTE_AUTO_WATCH_ACTIVE.load(Ordering::SeqCst));
-    }
-
     // ───── Screenshot payload (WP-OCR-13 AC-19) ─────
     //
     // Round-trip the screenshot payload through `serde_json::Value` and

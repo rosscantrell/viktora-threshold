@@ -100,6 +100,29 @@
         aria-label="Open Today (items need attention)"
         hidden
       ></button>
+
+      <!--
+        Always-visible expand affordance. The widget previously only expanded
+        via the right-click menu's "Expand…" item (not discoverable). This
+        small bottom-left button invokes `widget_expand` (no target → main
+        view). Sits opposite the bottom-right status dot; the top corners are
+        reserved for the conditional tidbit / log alert badges.
+      -->
+      <button
+        id="expand-btn"
+        type="button"
+        title="Expand to full view"
+        aria-label="Expand to full view"
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="15 3 21 3 21 9"></polyline>
+          <polyline points="9 21 3 21 3 15"></polyline>
+          <line x1="21" y1="3" x2="14" y2="10"></line>
+          <line x1="3" y1="21" x2="10" y2="14"></line>
+        </svg>
+      </button>
     </div>
   </body>
 </html>

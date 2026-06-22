@@ -25,6 +25,7 @@ const listen = tauri.event.listen;
 const captureBtn = document.getElementById("capture-btn");
 const uploadBtn = document.getElementById("upload-btn");
 const statusDot = document.getElementById("status-dot");
+const expandBtn = document.getElementById("expand-btn");
 
 function setStatus(state) {
   statusDot.classList.remove("status-unknown", "status-ok", "status-err");
@@ -168,6 +169,19 @@ uploadBtn.addEventListener("click", async (e) => {
   } catch (err) {
     console.warn("[widget] upload failed:", err);
     setStatus("err");
+  }
+});
+
+// Expand button — opens the full window (main view). Mirrors the right-click
+// "Expand…" menu item but as an always-visible affordance. Same drag-vs-click
+// guard as the other buttons so a drag that ends over it doesn't expand.
+expandBtn.addEventListener("click", async (e) => {
+  if (dragInitiated) return;
+  e.stopPropagation();
+  try {
+    await invoke("widget_expand", { targetTab: null });
+  } catch (err) {
+    console.warn("[widget] expand failed:", err);
   }
 });
 
@@ -410,20 +424,23 @@ if (logIndicator) {
  */
 async function refreshLogBadge() {
   if (!logIndicator) return;
+  let shown = false;
   try {
     const count = await invoke("get_decision_log_summary");
     const n = typeof count === "number" ? count : 0;
     if (n > 0) {
       logIndicator.textContent = n > 99 ? "99+" : String(n);
-      logIndicator.hidden = false;
       logIndicator.title = `${n} item${n === 1 ? "" : "s"} need attention — open Today`;
-    } else {
-      logIndicator.hidden = true;
+      shown = true;
     }
   } catch (err) {
     console.warn("[widget] log summary fetch failed:", err);
-    logIndicator.hidden = true;
   }
+  logIndicator.hidden = !shown;
+  // The expand icon shares the top-left slot with the badge — show it only when
+  // the badge isn't there. When the badge IS shown, clicking it expands too
+  // (to Today), so the expand affordance is never actually lost.
+  if (expandBtn) expandBtn.hidden = shown;
 }
 
 // Fetch the badge count now and hourly thereafter (per-capture refresh is wired
