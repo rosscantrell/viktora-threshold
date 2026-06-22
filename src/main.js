@@ -1807,6 +1807,185 @@ function renderRecords(items, edges, attribution) {
 /** Build one record card element. Verbatim is rendered as a quotation ONLY
  *  when verbatimVerified is true (an unverified quote is a hypothesis, never
  *  shown as a quotation — the hard constraint). */
+// ── TYPED-DIFF-CAPTURE Phase A — record-level inline editing ─────────────────
+// Edits live at the DECISION/COMMITMENT level (a record property), not on the
+// State-of-Play synthesis. A correction here propagates to every projection via
+// the server's shared overlay. Gated on `_recordEditsEnabled` (the engine's
+// editsEnabled capability); `_reloadRecordView` re-fetches the current surface
+// after a save so the effect (e.g. an item moving owners) shows immediately.
+let _recordEditsEnabled = false;
+let _reloadRecordView = null;
+
+/** Commit one field correction via the edit_record IPC, then reload the view. */
+async function commitRecordEdit(rec, field, to, editType, classify) {
+  if (!rec || !rec.recordId) return;
+  try {
+    await tauri.core.invoke("edit_record", {
+      recordId: rec.recordId,
+      editType,
+      ...(classify ? { classifyProse: true } : {}),
+      edits: [{ field, from: rec[field] == null ? null : String(rec[field]), to, type: editType }],
+    });
+    if (typeof _reloadRecordView === "function") _reloadRecordView();
+  } catch (e) {
+    showToast({ kind: "failure", title: "Couldn't save edit", body: String(e) });
+  }
+}
+
+/** Small glass popover (design-system dropdown — replaces native <select>). */
+function openRecordEditMenu(anchorEl, options, current, onPick) {
+  const existing = document.querySelector(".record-edit-menu");
+  if (existing) existing.remove();
+  const menu = document.createElement("div");
+  menu.className = "record-edit-menu";
+  for (const o of options) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "record-edit-menu-item";
+    if (o.value === current) item.dataset.current = "true";
+    item.textContent = o.label;
+    item.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      menu.remove();
+      if (o.value !== current) onPick(o.value);
+    });
+    menu.appendChild(item);
+  }
+  const r = anchorEl.getBoundingClientRect();
+  menu.style.left = `${Math.round(r.left)}px`;
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  document.body.appendChild(menu);
+  const close = (ev) => {
+    if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener("mousedown", close); }
+  };
+  setTimeout(() => document.addEventListener("mousedown", close), 0);
+}
+
+/** Make the summary click-to-edit: swaps to an inline textarea; Save classifies
+ *  substance-vs-voice server-side. */
+function makeEditableSummary(el, rec) {
+  el.classList.add("record-editable");
+  el.title = "Click to edit";
+  el.addEventListener("click", () => {
+    if (el.dataset.editing === "true") return;
+    el.dataset.editing = "true";
+    const orig = rec.summary || "";
+    el.innerHTML = "";
+    const ta = document.createElement("textarea");
+    ta.className = "record-edit-textarea";
+    ta.rows = 2;
+    ta.value = orig;
+    const row = document.createElement("div");
+    row.className = "record-edit-row";
+    const save = document.createElement("button");
+    save.type = "button"; save.className = "record-edit-btn record-edit-save"; save.textContent = "Save";
+    save.addEventListener("click", (ev) => {
+      ev.stopPropagation(); // don't bubble to el's click-to-edit (would re-open the editor)
+      if (ta.value.trim() !== orig.trim()) commitRecordEdit(rec, "summary", ta.value, "substance", true);
+      else { el.dataset.editing = ""; el.textContent = orig; }
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "record-edit-btn"; cancel.textContent = "Cancel";
+    cancel.addEventListener("click", (ev) => { ev.stopPropagation(); el.dataset.editing = ""; el.textContent = orig; });
+    row.appendChild(save); row.appendChild(cancel);
+    // The textarea/editor live INSIDE the clickable element; stop their clicks
+    // from bubbling back into the click-to-edit handler.
+    ta.addEventListener("click", (ev) => ev.stopPropagation());
+    el.appendChild(ta); el.appendChild(row);
+    ta.focus();
+  });
+}
+
+/** Make an owner span click-to-edit via the themed dropdown (team roster). */
+function makeEditableOwner(el, rec) {
+  el.classList.add("record-editable");
+  el.title = "Click to reassign";
+  el.addEventListener("click", async () => {
+    const roster = await getSopRoster();
+    const opts = (roster.length ? roster : [{ owner: rec.owner || "", displayName: prettySlug(rec.owner || "—") }])
+      .map((o) => ({ value: o.owner, label: o.displayName }));
+    openRecordEditMenu(el, opts, rec.owner || "", (val) => commitRecordEdit(rec, "owner", val, "owner", false));
+  });
+}
+
+/** Make a due span click-to-edit via an inline date input. */
+function makeEditableDue(el, rec) {
+  el.classList.add("record-editable");
+  el.title = "Click to set the date";
+  el.addEventListener("click", () => {
+    if (el.dataset.editing === "true") return;
+    el.dataset.editing = "true";
+    const orig = rec.due || "";
+    const input = document.createElement("input");
+    input.type = "date"; input.className = "record-edit-date";
+    if (/^\d{4}-\d{2}-\d{2}/.test(orig)) input.value = orig.slice(0, 10);
+    el.textContent = ""; el.appendChild(input);
+    input.focus();
+    const commit = () => {
+      const v = input.value;
+      if (v && v !== orig.slice(0, 10)) commitRecordEdit(rec, "due", v, "substance", false);
+      else { el.dataset.editing = ""; el.textContent = orig ? "due " + formatDueDate(orig) : "add date"; }
+    };
+    input.addEventListener("change", commit);
+    input.addEventListener("blur", () => setTimeout(commit, 120));
+  });
+}
+
+/** Make the type chip click-to-edit (Decision ↔ Commitment) via the dropdown. */
+function makeEditableType(chip, rec) {
+  chip.classList.add("record-editable");
+  chip.title = "Click to change type";
+  chip.addEventListener("click", () => {
+    openRecordEditMenu(chip, [
+      { value: "decision", label: "Decision" },
+      { value: "commitment", label: "Commitment" },
+    ], rec.type || "", (val) => commitRecordEdit(rec, "type", val, "scope", false));
+  });
+}
+
+/** Wire inline click-to-edit on an already-built record card (type chip, summary,
+ *  owner, due). Shared by renderRecordCard + renderDecisionCard. No-op unless the
+ *  engine advertised editsEnabled and the record has an id. */
+function applyRecordCardEditing(card, rec) {
+  if (!_recordEditsEnabled || !rec || !rec.recordId) return;
+  const chip = card.querySelector(".record-chip");
+  if (chip) makeEditableType(chip, rec);
+  // `.record-summary` on cards, `.log-row-summary` on the Today attention row.
+  const sum = card.querySelector(".record-summary, .log-row-summary");
+  if (sum) makeEditableSummary(sum, rec);
+  const owner = card.querySelector(".record-meta-owner");
+  if (owner) makeEditableOwner(owner, rec);
+  const due = card.querySelector(".record-meta-due");
+  if (due) makeEditableDue(due, rec);
+}
+
+/** Build the meta line as discrete owner/due spans (editable-targetable). When
+ *  editing is off, renders exactly the prior owner · due text; when on, also
+ *  shows "add owner"/"add date" affordances so empty fields can be set.
+ *  Returns the number of segments appended. */
+function buildRecordMetaSegments(meta, rec) {
+  const segs = [];
+  if (rec.owner || _recordEditsEnabled) {
+    const o = document.createElement("span");
+    o.className = "record-meta-owner";
+    if (!rec.owner) o.classList.add("record-meta-empty");
+    o.textContent = rec.owner ? prettySlug(rec.owner) : "add owner";
+    segs.push(o);
+  }
+  if (rec.due || _recordEditsEnabled) {
+    const d = document.createElement("span");
+    d.className = "record-meta-due";
+    if (!rec.due) d.classList.add("record-meta-empty");
+    d.textContent = rec.due ? "due " + formatDueDate(rec.due) : "add date";
+    segs.push(d);
+  }
+  segs.forEach((s, i) => {
+    if (i) meta.appendChild(document.createTextNode(" · "));
+    meta.appendChild(s);
+  });
+  return segs.length;
+}
+
 function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   const card = document.createElement("div");
   card.className = "record-card";
@@ -1838,18 +2017,15 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
-  // Meta: owner · due dim; the overdue/silent count amber (when overdue+silent).
-  const dimMeta = [];
-  if (rec.owner) dimMeta.push(prettySlug(rec.owner));
-  if (rec.due) dimMeta.push("due " + formatDueDate(rec.due));
+  // Meta: owner · due dim (editable spans); the overdue/silent count amber.
   const cardOverdue =
     lifecycle && lifecycle.overdueSilent && typeof lifecycle.silentDays === "number";
-  if (dimMeta.length || cardOverdue || attribution) {
+  {
     const meta = document.createElement("p");
     meta.className = "record-meta";
-    meta.textContent = dimMeta.join(" · ");
+    const segCount = buildRecordMetaSegments(meta, rec);
     if (cardOverdue) {
-      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      if (segCount) meta.appendChild(document.createTextNode(" · "));
       const overdue = document.createElement("span");
       overdue.className = "record-meta-overdue";
       overdue.textContent = lifecycle.silentDays + "d silent";
@@ -1864,7 +2040,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
       attr.textContent = attribution;
       meta.appendChild(attr);
     }
-    card.appendChild(meta);
+    if (meta.childNodes.length) card.appendChild(meta);
   }
 
   // Verbatim — quotation ONLY when verified.
@@ -1911,6 +2087,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
+  applyRecordCardEditing(card, rec);
   return card;
 }
 
@@ -2018,6 +2195,7 @@ async function enterLogView() {
   } catch (err) {
     console.warn("[main] fetch_decision_log failed:", err);
     if (attentionList) attentionList.innerHTML = "";
+    _recordEditsEnabled = false;
     if (attentionEmpty) attentionEmpty.hidden = true;
     if (contradictionsSection) contradictionsSection.hidden = true;
     if (ownersSection) ownersSection.hidden = true;
@@ -2032,6 +2210,10 @@ async function enterLogView() {
   }
 
   if (statusEl) statusEl.hidden = true;
+
+  // Record-level inline editing capability + reload hook (Phase A).
+  _recordEditsEnabled = !!(data && data.editsEnabled);
+  _reloadRecordView = enterLogView;
 
   const summary = data && data.summary ? data.summary : {};
   const states = summary.states || {};
@@ -2210,21 +2392,18 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   summary.textContent = rec.summary || "";
   row.appendChild(summary);
 
-  // Metadata: owner + due are dim; only the overdue/silent count is amber.
-  const dimParts = [];
-  if (rec.owner) dimParts.push(prettySlug(rec.owner));
-  if (rec.due) dimParts.push("due " + formatDueDate(rec.due));
+  // Metadata: owner + due as editable spans (dim); the overdue/silent count amber.
   const hasSilent = typeof lc.silentDays === "number";
   // WP-N1 #6 — attribution from the join: "captured by you" (submitter == me),
   // "captured by <local-part>" (someone else), or omitted (no submitter on the
   // doc — pre-flag or shared-key capture). Never "unknown".
   const attribution = captureAttribution(rec.documentId, submitterByDoc, viewerEmail);
-  if (dimParts.length || hasSilent || attribution) {
+  {
     const meta = document.createElement("p");
     meta.className = "log-row-meta";
-    meta.textContent = dimParts.join(" · ");
+    const segCount = buildRecordMetaSegments(meta, rec);
     if (hasSilent) {
-      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      if (segCount) meta.appendChild(document.createTextNode(" · "));
       const overdue = document.createElement("span");
       overdue.className = "log-meta-overdue";
       overdue.textContent = lc.silentDays + "d silent";
@@ -2237,7 +2416,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
       attr.textContent = attribution;
       meta.appendChild(attr);
     }
-    row.appendChild(meta);
+    if (meta.childNodes.length) row.appendChild(meta);
   }
 
   // Actions: "Show receipts" (when the row has a subject) + Dismiss. Always
@@ -2256,6 +2435,8 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
+
+  applyRecordCardEditing(row, rec); // Today/daily inline editing (same helpers as the cards)
   return row;
 }
 
@@ -2390,6 +2571,8 @@ function renderCorpusPanel(panel, data) {
   msg.className = "sop-message";
   msg.textContent = data.message || "";
   panel.appendChild(msg);
+  // Phase B — inline digest edit (corpus altitude).
+  attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
 }
 
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
@@ -3318,6 +3501,10 @@ async function enterDecisionsView(initialFilter, navCtx) {
     baseUrl = (cfg && cfg.base_url) || "";
   } catch (_e) { /* source links omitted if config unavailable */ }
 
+  // Record-level inline editing capability + reload hook (Phase A).
+  _recordEditsEnabled = !!(data && data.editsEnabled);
+  _reloadRecordView = () => enterDecisionsView();
+
   _decisionsCtx = {
     items,
     docProjects,
@@ -3464,13 +3651,177 @@ function renderSopPanel(panel, data, slug, label) {
     tag.textContent = "AI-polished";
     bar.appendChild(tag);
   }
-  panel.appendChild(bar);
 
   const msg = document.createElement("pre");
   msg.className = "sop-message";
   msg.textContent = data.message || "";
+
+  panel.appendChild(bar);
   panel.appendChild(msg);
+  // Phase B — inline digest edit (person altitude).
+  attachDigestEditor({ panel, bar, msg, scope: "person", subject: slug, label, message: data.message || "", editsEnabled: data.editsEnabled });
 }
+
+/**
+ * Shared inline-digest editor (Phase B), used by the person / project / corpus
+ * digests. Adds an "Edit message" button to `bar`; on Save it POSTs the
+ * before/after to /state-of-play/edit at the given altitude `scope` and renders
+ * the returned proposals (candidate records / inform / priority / fieldChanges)
+ * below `msg`. Proposal-only — nothing is applied until the user approves.
+ */
+function attachDigestEditor({ panel, bar, msg, scope, subject, label, message, editsEnabled }) {
+  const proposals = document.createElement("div");
+  proposals.className = "sop-proposals";
+  panel.appendChild(proposals);
+  if (!editsEnabled) return;
+  const editBtn = document.createElement("button");
+  editBtn.type = "button";
+  editBtn.className = "sop-polish";
+  editBtn.textContent = "Edit message";
+  editBtn.addEventListener("click", () => {
+    if (msg.dataset.editing === "true") return;
+    msg.dataset.editing = "true";
+    const orig = message || "";
+    msg.innerHTML = "";
+    const ta = document.createElement("textarea");
+    ta.className = "sop-edit-textarea";
+    ta.rows = Math.min(16, Math.max(6, orig.split("\n").length + 1));
+    ta.value = orig;
+    const row = document.createElement("div");
+    row.className = "sop-edit-editor-row";
+    const save = document.createElement("button");
+    save.type = "button"; save.className = "sop-edit-btn record-edit-save"; save.textContent = "Save & analyze";
+    save.addEventListener("click", async () => {
+      const human = ta.value;
+      msg.dataset.editing = ""; msg.textContent = human;
+      if (human.trim() === orig.trim()) return;
+      proposals.innerHTML = '<div class="sop-status">Analyzing your edits…</div>';
+      try {
+        const r = await tauri.core.invoke("edit_digest", { scope, subject, systemDigest: orig, humanDigest: human });
+        renderDigestProposals(proposals, r && r.decomposition, subject, label, panel);
+      } catch (e) {
+        proposals.innerHTML = "";
+        showToast({ kind: "failure", title: "Couldn't analyze edits", body: String(e) });
+      }
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "sop-edit-btn"; cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => { msg.dataset.editing = ""; msg.textContent = orig; });
+    row.appendChild(save); row.appendChild(cancel);
+    msg.appendChild(ta); msg.appendChild(row);
+    ta.focus();
+  });
+  bar.appendChild(editBtn);
+}
+
+/** Render the digest-edit decomposition as inline proposals (proposal-only —
+ *  candidate records can be Approved into the corpus; the rest are informational
+ *  signals the human can dismiss). */
+function renderDigestProposals(container, decomp, slug, label, panel) {
+  container.innerHTML = "";
+  if (!decomp) return;
+  const p = decomp.proposals || {};
+  const section = (title) => {
+    const h = document.createElement("div");
+    h.className = "sop-edit-heading";
+    h.textContent = title;
+    container.appendChild(h);
+  };
+  const card = () => {
+    const c = document.createElement("div");
+    c.className = "sop-edit-card";
+    container.appendChild(c);
+    return c;
+  };
+
+  const cands = Array.isArray(p.candidateRecords) ? p.candidateRecords : [];
+  if (cands.length) {
+    section("New decisions / commitments to capture");
+    for (const cand of cands) {
+      const c = card();
+      const txt = document.createElement("div");
+      txt.className = "sop-edit-text";
+      txt.textContent = `${cand.type === "decision" ? "Decision" : "Commitment"}: ${cand.summary}`;
+      c.appendChild(txt);
+      const row = document.createElement("div");
+      row.className = "sop-edit-controls";
+      const approve = document.createElement("button");
+      approve.type = "button"; approve.className = "sop-edit-btn record-edit-save"; approve.textContent = "Add to log";
+      approve.addEventListener("click", async () => {
+        c.style.opacity = "0.5";
+        try {
+          await tauri.core.invoke("create_record_from_proposal", { candidate: cand, sourceText: cand.sourceText || "" });
+          c.innerHTML = '<div class="sop-edit-text">Added to the log ✓</div>';
+        } catch (e) { c.style.opacity = "1"; showToast({ kind: "failure", title: "Couldn't add", body: String(e) }); }
+      });
+      const dismiss = document.createElement("button");
+      dismiss.type = "button"; dismiss.className = "sop-edit-btn"; dismiss.textContent = "Dismiss";
+      dismiss.addEventListener("click", () => c.remove());
+      row.appendChild(approve); row.appendChild(dismiss);
+      c.appendChild(row);
+    }
+  }
+
+  const inform = Array.isArray(p.informSet) ? p.informSet : [];
+  if (inform.length) {
+    section("People to loop in");
+    const c = card();
+    c.appendChild(Object.assign(document.createElement("div"), {
+      className: "sop-edit-text",
+      textContent: inform.map((i) => i.displayName).join(", "),
+    }));
+  }
+
+  const shs = Array.isArray(p.shouldHaveSurfaced) ? p.shouldHaveSurfaced : [];
+  if (shs.length) {
+    section("Already tracked — surfaced because you added them");
+    for (const s of shs) {
+      const c = card();
+      c.appendChild(Object.assign(document.createElement("div"), { className: "sop-edit-text", textContent: s.text }));
+    }
+  }
+
+  const pri = Array.isArray(p.priority) ? p.priority : [];
+  if (pri.length) {
+    section("Priority you flagged");
+    for (const s of pri) {
+      const c = card();
+      c.appendChild(Object.assign(document.createElement("div"), { className: "sop-edit-text", textContent: s.text }));
+    }
+  }
+
+  const fc = Array.isArray(p.fieldChanges) ? p.fieldChanges : [];
+  if (fc.length) {
+    section("Facts you changed on tracked items");
+    for (const f of fc) {
+      const c = card();
+      c.appendChild(Object.assign(document.createElement("div"), { className: "sop-edit-text", textContent: f.to }));
+    }
+  }
+
+  if (!cands.length && !inform.length && !shs.length && !pri.length && !fc.length) {
+    container.appendChild(Object.assign(document.createElement("div"), {
+      className: "sop-status",
+      textContent: decomp.llmUsed ? "Edits captured — no new items detected." : "Edits captured.",
+    }));
+  }
+}
+
+// Team roster (slug → displayName) for the owner-reassign dropdown. Fetched once
+// from the batch digest and cached; refreshed lazily if empty.
+let _sopRoster = null;
+async function getSopRoster() {
+  if (_sopRoster) return _sopRoster;
+  try {
+    const res = await tauri.core.invoke("fetch_team_state_of_play");
+    const people = res && Array.isArray(res.people) ? res.people : [];
+    _sopRoster = people.map((p) => ({ owner: p.owner, displayName: p.displayName || prettySlug(p.owner) }));
+  } catch {
+    _sopRoster = [];
+  }
+  return _sopRoster;
+}
+
 
 async function copyAllStateOfPlay(btn) {
   if (btn.disabled) return;
@@ -3578,6 +3929,8 @@ function renderProjectPanel(panel, data, slug, label) {
   msg.className = "sop-message";
   msg.textContent = data.teamMessage || "";
   panel.appendChild(msg);
+  // Phase B — inline digest edit (project altitude).
+  attachDigestEditor({ panel, bar, msg, scope: "project", subject: data.project || slug, label: data.projectLabel || label, message: data.teamMessage || "", editsEnabled: data.editsEnabled });
 
   const people = Array.isArray(data.people) ? data.people : [];
   if (people.length) {
@@ -3765,14 +4118,11 @@ function renderDecisionCard(rec, recState, projects) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
-  const dim = [];
-  if (rec.owner) dim.push(prettySlug(rec.owner));
-  if (rec.due) dim.push("due " + formatDueDate(rec.due));
-  if (dim.length) {
+  {
     const meta = document.createElement("p");
     meta.className = "record-meta";
-    meta.textContent = dim.join(" · ");
-    card.appendChild(meta);
+    const segCount = buildRecordMetaSegments(meta, rec);
+    if (segCount) card.appendChild(meta);
   }
 
   if (projects && projects.length) {
@@ -3803,6 +4153,7 @@ function renderDecisionCard(rec, recState, projects) {
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
+  applyRecordCardEditing(card, rec);
   return card;
 }
 
