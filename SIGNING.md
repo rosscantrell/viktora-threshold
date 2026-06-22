@@ -1,214 +1,153 @@
-# Code Signing — Setup Runbook
+# Code Signing — Runbook & Reference
 
-This is the operator runbook for making tagged Threshold builds install **cleanly**
-on macOS and Windows — no "damaged / can't be opened" (macOS) and no SmartScreen
-"unrecognized app" wall (Windows).
+Tagged Threshold builds install **cleanly** on macOS and Windows:
 
-**The workflow is already wired.** `.github/workflows/release.yml` + `src-tauri/tauri.conf.json`
-are done. Signing turns on automatically the moment the secrets/variables below
-exist — you do **not** edit any code. Until then, tagged builds still succeed; they
-just ship unsigned (the old Gatekeeper / SmartScreen ceremony in `PILOT-INSTALL.md`
-applies).
+- **macOS** — signed with an Apple **Developer ID** + **notarized** (app *and* DMG). Opens on a normal double-click; no "damaged / can't be opened", no `xattr` dance.
+- **Windows** — installers **Authenticode-signed** via **Azure Trusted Signing** (a.k.a. Azure Artifact Signing), chaining to a Microsoft public-trust root. No SmartScreen "unrecognized app" wall.
 
-- macOS work → **FN-OCR-13-03** (Apple Developer ID + notarization)
-- Windows work → **FN-OCR-13-02** (Authenticode via Azure Trusted Signing)
+It's all wired into `.github/workflows/release.yml`. Push a `v*` tag → the build signs + notarizes (macOS) and signs (Windows) automatically, and attaches the artifacts to a **draft** GitHub Release for you to review + publish.
 
-Everything is added in **GitHub → repo → Settings → Secrets and variables → Actions**.
-That page has two tabs: **Secrets** (encrypted, write-only) and **Variables**
-(plain text, readable). Put each item on the tab named below.
+**Publisher identity:** both certs are **individual** (Viktora AI isn't a registered legal entity yet), so the macOS signer and Windows publisher both read **"James Cantrell"** (Apple Team ID `UM4X982395`). When the business is registered, you can re-do both as **Organization** validation to rebrand the publisher to "Viktora" — see [Future: switch to Organization](#future-switch-to-organization).
+
+Everything below is the **as-built** state, plus how to rotate/renew and the gotchas we hit (so you don't re-hit them).
 
 ---
 
-## Part A — macOS (notarized DMG)
+## What's configured (GitHub → Settings → Secrets and variables → Actions)
 
-### A1. Accounts / artifacts to procure (one-time)
+**Secrets** (9):
 
-1. **Apple Developer Program** — enroll at <https://developer.apple.com/programs/> ($99/yr).
-   Note your **Team ID** (10-char, e.g. `AB12CD34EF`) from
-   <https://developer.apple.com/account> → Membership.
-2. **Developer ID Application certificate** — in Xcode (Settings → Accounts →
-   Manage Certificates → `+` → *Developer ID Application*) **or** at
-   <https://developer.apple.com/account/resources/certificates> → `+` →
-   *Developer ID Application*.
-   - This is the only cert type whose apps run **outside** the App Store. Do **not**
-     use "Apple Development" or "Mac App Distribution" — those won't open on pilots' Macs.
-3. **Export it as a `.p12`** — open **Keychain Access** → *My Certificates* →
-   right-click the "Developer ID Application: …" entry → **Export** → `.p12` → set a
-   password (you'll paste this password as a secret). The export must include the
-   **private key** (expand the cert with the ▸ disclosure triangle and confirm a key
-   is nested under it before exporting).
-4. **App-specific password for notarization** — at <https://account.apple.com> →
-   Sign-In and Security → App-Specific Passwords → generate one (label it "threshold
-   notarize"). This is **not** your normal Apple password. Format looks like
-   `abcd-efgh-ijkl-mnop`.
+| Secret | What | Notes |
+|---|---|---|
+| `APPLE_CERTIFICATE` | base64 of the Developer ID `.p12` | exported with `openssl ... -legacy` (see gotchas) |
+| `APPLE_CERTIFICATE_PASSWORD` | the `.p12` export password | |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: James Cantrell (UM4X982395)` | |
+| `APPLE_ID` | Apple account email | ross.cantrell@gmail.com |
+| `APPLE_PASSWORD` | app-specific password (notarization) | `account.apple.com` → labeled "threshold notarize" |
+| `APPLE_TEAM_ID` | `UM4X982395` | |
+| `AZURE_CLIENT_ID` | app registration (client) ID | SP `viktora-threshold-signing` |
+| `AZURE_CLIENT_SECRET` | app registration client secret | **rotate periodically** (24-mo expiry) |
+| `AZURE_TENANT_ID` | personal directory tenant ID | |
 
-### A2. Convert the `.p12` to base64
+**Variables** (3, non-secret):
 
-GitHub secrets are text, so the binary `.p12` must be base64-encoded:
+| Variable | Value |
+|---|---|
+| `AZURE_ENDPOINT` | `https://eus.codesigning.azure.net` |
+| `AZURE_ACCOUNT` | `viktora-signing` |
+| `AZURE_PROFILE` | `viktora-threshold` |
 
-```bash
-base64 -i /path/to/DeveloperID_Application.p12 | pbcopy   # now on your clipboard
-```
-
-### A3. Secrets to add (Settings → … → Actions → **Secrets** tab → *New repository secret*)
-
-| Secret name                  | Value                                                                                   |
-|------------------------------|-----------------------------------------------------------------------------------------|
-| `APPLE_CERTIFICATE`          | The base64 string from A2 (paste from clipboard)                                        |
-| `APPLE_CERTIFICATE_PASSWORD` | The password you set when exporting the `.p12` in A1.3                                   |
-| `APPLE_SIGNING_IDENTITY`     | The full identity name, exactly: `Developer ID Application: Your Name (TEAMID)` †        |
-| `APPLE_ID`                   | The Apple account email enrolled in the Developer Program                               |
-| `APPLE_PASSWORD`             | The **app-specific** password from A1.4 (the `abcd-efgh-…` one, not your login password)|
-| `APPLE_TEAM_ID`              | Your 10-char Team ID from A1.1                                                           |
-
-† Get the exact string by running `security find-identity -v -p codesigning` on a
-Mac that has the cert installed — copy the quoted name verbatim, including the
-`(TEAMID)` suffix.
-
-That's it for macOS. On the next `v*` tag, `tauri-action` imports the cert into a
-temporary keychain, signs `Viktora Threshold.app` with the hardened runtime +
-`src-tauri/entitlements.plist`, submits it to Apple notarization, waits, and staples
-the ticket into the DMG — all automatically.
-
-> **Notarization alternative (optional):** instead of `APPLE_ID` / `APPLE_PASSWORD` /
-> `APPLE_TEAM_ID` you can use an App Store Connect API key
-> (`APPLE_API_ISSUER` + `APPLE_API_KEY` + `APPLE_API_KEY_PATH`). The Apple-ID path
-> above is simpler for a single signer; only switch if you hit 2FA friction. If you
-> go this route, tell me and I'll add those three env vars to the build step.
+When all are present, signing turns on automatically. When absent, that platform builds **unsigned-but-green** (graceful degrade — see end).
 
 ---
 
-## Part B — Windows (signed installer, no SmartScreen)
+## macOS — how it was set up (Apple Developer ID + notarization)
 
-Recommended path: **Azure Trusted Signing** (~$10/mo) — modern, cloud-based, no
-hardware token, and it earns SmartScreen trust without the per-download reputation
-wait that plain OV certs suffer. The workflow signs the inner `.exe` **and** the
-NSIS `setup.exe` / MSI via `trusted-signing-cli`.
+1. **Apple Developer Program** (Individual enrollment, $99/yr). Team ID `UM4X982395`.
+2. **Developer ID Application certificate.** Created via OpenSSL (this Mac had no Keychain Access app):
+   ```bash
+   # CSR + private key
+   openssl req -new -newkey rsa:2048 -nodes -keyout developerID.key -out developerID.csr -subj "/CN=James Cantrell"
+   # upload developerID.csr at developer.apple.com → Certificates → + → Developer ID Application (G2 Sub-CA) → download .cer
+   # build the .p12 (note -legacy, see gotchas):
+   openssl x509 -inform DER -in developerID_application.cer -out developerID.pem
+   curl -s -o DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+   openssl x509 -inform DER -in DeveloperIDG2CA.cer -out DeveloperIDG2CA.pem
+   openssl pkcs12 -export -legacy -inkey developerID.key -in developerID.pem \
+     -certfile DeveloperIDG2CA.pem -name "Developer ID Application: James Cantrell" -out developerID.p12
+   # secrets:
+   base64 -i developerID.p12 | pbcopy        # → APPLE_CERTIFICATE
+   ```
+3. **App-specific password** at `account.apple.com` → Sign-In and Security → App-Specific Passwords → `APPLE_PASSWORD`.
+4. **Workflow:** `tauri-action` reads the `APPLE_*` env, signs the `.app` with hardened runtime + `src-tauri/entitlements.plist`, notarizes, and staples. A post-build step then **also notarizes + staples the `.dmg`** (tauri only does the `.app`; an un-notarized DMG still trips Gatekeeper on mount).
 
-### B1. Azure setup to procure (one-time)
-
-1. **Azure subscription** — <https://portal.azure.com> (pay-as-you-go is fine).
-2. **Trusted Signing account** — Portal → create resource → *Trusted Signing Account*.
-   Note the **account name** and the **endpoint URI** for its region
-   (e.g. `https://eus.codesigning.azure.net` for East US — the exact host is shown on
-   the account's Overview page).
-3. **Identity validation + Certificate Profile** — inside the Trusted Signing account:
-   complete the one-time **identity validation** (individual or organization; org
-   validation needs a D-U-N-S number and takes a few business days), then create a
-   **Certificate Profile** (type *Public Trust*). Note the **profile name**.
-4. **App registration (service principal)** for CI auth — Portal → *Microsoft Entra ID*
-   → App registrations → New registration. Then:
-   - Create a **client secret** (Certificates & secrets → New client secret) — copy the
-     **Value** immediately (it's shown once).
-   - Note the **Application (client) ID** and **Directory (tenant) ID** from Overview.
-   - Grant this app the **Trusted Signing Certificate Profile Signer** role on the
-     Trusted Signing account (account → Access control (IAM) → Add role assignment).
-
-### B2. Secrets to add (Settings → … → Actions → **Secrets** tab)
-
-| Secret name           | Value                                              |
-|-----------------------|----------------------------------------------------|
-| `AZURE_CLIENT_ID`     | App registration's Application (client) ID (B1.4)  |
-| `AZURE_CLIENT_SECRET` | The client secret **Value** (B1.4)                 |
-| `AZURE_TENANT_ID`     | Directory (tenant) ID (B1.4)                       |
-
-> `AZURE_CLIENT_ID` is the on/off switch: its presence is what flips the Windows job
-> from unsigned to signed. The three together are how `trusted-signing-cli`
-> authenticates to Azure.
-
-### B3. Variables to add (Settings → … → Actions → **Variables** tab → *New repository variable*)
-
-These aren't secret (they appear in build logs), so they live on the Variables tab.
-
-| Variable name    | Value                                                              |
-|------------------|--------------------------------------------------------------------|
-| `AZURE_ENDPOINT` | Your account's signing endpoint, e.g. `https://eus.codesigning.azure.net` (B1.2) |
-| `AZURE_ACCOUNT`  | Trusted Signing **account name** (B1.2)                            |
-| `AZURE_PROFILE`  | Certificate **profile name** (B1.3)                                |
-
-The workflow assembles these into the `trusted-signing-cli` command at build time —
-no source edit needed.
-
-> **Don't have Azure / prefer a cert file?** Two alternatives, both a workflow tweak
-> (ping me and I'll wire whichever you pick):
-> - **EV or OV `.pfx` cert:** add `WINDOWS_CERTIFICATE` (base64) + `WINDOWS_CERTIFICATE_PASSWORD`
->   secrets and switch the bundle to `certificateThumbprint`/signtool. EV = instant
->   SmartScreen trust but needs a hardware token/HSM (awkward in CI). OV = cheaper but
->   SmartScreen reputation is earned over download volume.
-> - **`azure/trusted-signing-action`** as a post-build step instead of `trusted-signing-cli`
->   (signs the installer artifacts but not the inner `.exe`; the in-bundle `signCommand`
->   path we chose is stronger).
+Apple cert expires **2031-06-19**. Back up `developerID.p12` + its password off-machine (it *is* the signing identity).
 
 ---
 
-## Part C — Verify on a test tag
+## Windows — how it was set up (Azure Trusted Signing)
 
-After the secrets/variables are in, cut a throwaway tag and confirm the artifacts are
-genuinely signed. (The release is created as a **draft** — delete it + the tag when done.)
+1. **Azure subscription.** ⚠️ Must be a **personal / individual-billed** subscription — an org-billed subscription **cannot** do *Individual* identity validation (see gotchas). We used a personal Pay-As-You-Go sub (tenant = personal "Default Directory", subscription `37441897-2676-478d-8b8e-6c0d02b30f8c`).
+2. **Register provider** `Microsoft.CodeSigning` on the subscription.
+3. **Artifact Signing account** `viktora-signing` (East US, Basic ~$10/mo) → endpoint `https://eus.codesigning.azure.net`.
+4. **Identity validation** — *Individual*, type *Public*. Requires the **Artifact Signing Identity Verifier** role on the account, then a **Face Check** in Microsoft Authenticator against a government photo ID. ⚠️ Use a **driver's license** (carries a home address) — a **passport fails** ("home address not provided").
+5. **Certificate profile** `viktora-threshold`, type **Public Trust**, linked to the completed validation. Status must be **Active**.
+6. **App registration** (service principal) `viktora-threshold-signing` → `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` + a client secret (`AZURE_CLIENT_SECRET`). Grant it the **Artifact Signing Certificate Profile Signer** role on the `viktora-signing` account.
+7. **Workflow:** Microsoft's official **`azure/trusted-signing-action`** runs *after* the build, signing the NSIS `setup.exe` + MSI under the bundle dir, then re-uploading them over the release assets. SP creds are passed to the action **explicitly** (inputs + step env), not via job-env (see gotchas).
 
+Resulting signature chain (verified): `CN=James Cantrell` → `Microsoft ID Verified Code Signing PCA 2021` → `Microsoft ID Verified CS EOC CA 03` → `Microsoft Identity Verification Root Certificate Authority 2020`.
+
+---
+
+## Verify a tagged build
+
+### macOS — download the DMG to a clean path
 ```bash
-git tag v0.8.1-signtest && git push origin v0.8.1-signtest
+spctl -a -vvv -t open --context context:primary-signature "Viktora Threshold_<ver>_aarch64.dmg"   # accepted / Notarized Developer ID
+hdiutil attach "Viktora Threshold_<ver>_aarch64.dmg" -nobrowse
+codesign -dvvv "/Volumes/Viktora Threshold/Viktora Threshold.app"   # TeamIdentifier=UM4X982395, flags=runtime
+spctl -a -vvv -t exec "/Volumes/Viktora Threshold/Viktora Threshold.app"   # accepted / Notarized Developer ID
+xcrun stapler validate "/Volumes/Viktora Threshold/Viktora Threshold.app"  # + validate the .dmg too
 ```
+Pass = double-clicking the downloaded DMG mounts with no warning, and the app launches with no "damaged" dialog.
 
-Watch the run in **Actions**. Both the macOS and Windows logs should show signing
-activity (macOS: "Signing … / Notarizing"; Windows: the "Configure Windows signing
-overlay" step prints `Azure Trusted Signing configured …` and `trusted-signing-cli`
-runs during bundling).
-
-### macOS — download the DMG to a clean path and verify
-
-```bash
-# Simulate a real download (adds the com.apple.quarantine attribute):
-cd ~/Downloads && curl -L -O "<DMG asset URL from the draft release>"
-
-# Gatekeeper assessment — must say "accepted" + "Notarized Developer ID":
-spctl -a -vvv -t install "Viktora Threshold_0.8.1-signtest_aarch64.dmg"
-
-# Mount, then inspect the .app signature — TeamIdentifier must NOT be "not set":
-codesign -dvvv "/Volumes/Viktora Threshold/Viktora Threshold.app"
-
-# Confirm the notarization ticket is stapled (offline-verifiable):
-xcrun stapler validate "/Volumes/Viktora Threshold/Viktora Threshold.app"
-```
-
-**Pass = ** double-clicking the mounted `.app` opens with **no** "damaged" dialog and
-**no** `xattr` dance; `spctl` reports *accepted / source=Notarized Developer ID*;
-`codesign` shows a real `TeamIdentifier=<your team id>` and `Authority=Developer ID
-Application: …`; `stapler validate` reports *The validate action worked*.
-
-### Windows — verify on a fresh download (run on a Windows box)
-
+### Windows — on a Windows box (authoritative)
 ```powershell
-# signtool ships with the Windows SDK; verify the installer chains to a trusted root:
-signtool verify /pa /v ".\Viktora Threshold_0.8.1-signtest_x64-setup.exe"
-
-# And the inner executable after install:
-signtool verify /pa /v "C:\Program Files\Viktora Threshold\Viktora Threshold.exe"
+signtool verify /pa /v ".\Viktora Threshold_<ver>_x64-setup.exe"   # Successfully verified
 ```
+Pass = `signtool` verifies, Properties → Digital Signatures shows "James Cantrell", and a fresh download installs with no "Windows protected your PC" wall (a "verified publisher" UAC prompt is normal).
 
-**Pass = ** `signtool verify` reports *Successfully verified*; the file's
-Properties → **Digital Signatures** tab shows your identity; and double-clicking the
-freshly-downloaded `setup.exe` installs **without** the "Windows protected your PC"
-blue wall (a brief "publisher verified" UAC prompt is normal and expected).
-
-### Clean up the test
-
+### Windows — quick signature check from macOS (no signtool)
+Parse the PE Certificate Table and read the signer; confirms a signature is embedded and shows the chain:
 ```bash
-git push --delete origin v0.8.1-signtest && git tag -d v0.8.1-signtest
-# then delete the draft release in the GitHub Releases UI
+python3 - <<'PY'
+import struct
+f=open("Viktora Threshold_<ver>_x64-setup.exe","rb").read()
+pe=struct.unpack_from("<I",f,0x3C)[0]; opt=pe+24
+magic=struct.unpack_from("<H",f,opt)[0]; ddir=opt+(112 if magic==0x20b else 96)
+off,size=struct.unpack_from("<II",f,ddir+4*8)
+open("sig.p7","wb").write(f[off+8:off+size]) if size else print("NO SIGNATURE")
+PY
+openssl pkcs7 -inform DER -in sig.p7 -print_certs -noout | grep -i subject=
 ```
 
 ---
 
-## How the graceful-degrade works (so nothing breaks before secrets exist)
+## Rotating / renewing
 
-- **macOS:** `tauri-action` only sets up signing when `APPLE_CERTIFICATE` is non-empty;
-  otherwise it ad-hoc-signs (unsigned). All Apple env vars empty ⇒ normal unsigned build.
-- **Windows:** the signing steps are gated on `AZURE_CLIENT_ID != ''`. No secret ⇒ the
-  `signCommand` overlay is never generated and `trusted-signing-cli` is never installed ⇒
-  normal unsigned build.
-- `src-tauri/entitlements.plist` is referenced unconditionally but is inert during an
-  unsigned/ad-hoc codesign, so it never causes a failure.
+- **Azure client secret** (`AZURE_CLIENT_SECRET`): App registrations → `viktora-threshold-signing` → Certificates & secrets → New client secret → copy the **Value** → update the GitHub secret → delete the old secret. (Default expiry 24 months; rotate before then, or immediately if it's ever exposed.)
+- **Azure cert profile**: renews automatically while the account + identity validation stay valid.
+- **Apple app-specific password**: regenerate at `account.apple.com` if revoked, update `APPLE_PASSWORD`.
+- **Apple Developer ID cert**: expires 2031; renew via the same OpenSSL flow + re-base64 into `APPLE_CERTIFICATE`.
 
-This is why the deliverable is "ready" and the only remaining work is pasting the
-secrets above.
+---
+
+## Gotchas we hit (don't re-learn these)
+
+- **OpenSSL 3 `.p12` won't import on macOS.** A `.p12` made by Homebrew OpenSSL 3 fails `security import` with *"MAC verification failed"* — macOS's `security` can't read its modern crypto. Export with **`-legacy`**.
+- **Org-billed Azure subscription blocks Individual validation** (*"billing account does not indicate ownership by an individual"*). Use a **personal** subscription for individual validation.
+- **Passport has no address** → individual validation fails on missing home address. Use a **driver's license / state ID**.
+- **tauri's in-bundle `signCommand` swallows the signer's stderr.** Our first Windows approach (`trusted-signing-cli` via `signCommand`) failed with an opaque *"failed to run trusted-signing-cli"*. The official `azure/trusted-signing-action` (post-build) prints real errors — use it.
+- **`DefaultAzureCredential` didn't pick up job-level env** in the action (*"EnvironmentCredential not fully configured"*) even with valid creds. Pass `azure-client-id/secret/tenant-id` **explicitly** as action inputs (+ step env).
+- **Verify SP creds directly** when auth fails — a client-credentials token request isolates "bad secret" from "plumbing":
+  ```bash
+  curl -s -X POST "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
+    -d "client_id=$AZURE_CLIENT_ID" -d "scope=https://management.azure.com/.default" \
+    -d "grant_type=client_credentials" --data-urlencode "client_secret=<value>"
+  ```
+
+---
+
+## Future: switch to Organization
+
+Once **Viktora AI** is a registered legal entity, you can rebrand the publisher to "Viktora" on both platforms:
+- **Windows:** new Trusted Signing **Organization** identity validation (needs the legal entity + Microsoft review, days) → new Public Trust cert profile → point `AZURE_PROFILE` at it.
+- **macOS:** re-enroll the Apple Developer Program as an **Organization** (needs a D-U-N-S number) → new Developer ID cert → update the `APPLE_*` secrets.
+
+Neither is required to ship; both are cosmetic (publisher name). The individual setup is fully functional.
+
+---
+
+## Graceful degrade
+
+Every signing path is gated on its secret. No `APPLE_CERTIFICATE` ⇒ macOS builds ad-hoc/unsigned. No `AZURE_CLIENT_ID` ⇒ Windows builds unsigned. The build stays green either way; signing simply switches on when the secrets exist.
