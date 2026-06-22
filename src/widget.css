@@ -103,6 +103,55 @@ html, body {
 .status-ok      { background: #4ade80; }
 .status-err     { background: #f87171; }
 
+/* Expand affordance — small neutral utility in the TOP-LEFT corner, sharing
+ * that slot with the log "needs attention" badge: widget.js shows this icon
+ * only while the badge is hidden, so the corner reads as one thing at a time.
+ * Quiet by default (so it doesn't compete with the Capture/Upload buttons),
+ * brightens on hover to read as clickable. Centered on the same point as the
+ * badge so the swap doesn't visually jump. */
+#expand-btn {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #e8eaed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.7;
+  transition: opacity 0.12s ease-out,
+              background 0.12s ease-out,
+              border-color 0.12s ease-out,
+              transform 0.08s ease-out;
+  z-index: 2;
+}
+
+/* `display: flex` above overrides the default `hidden` behaviour, so spell out
+ * the hidden case explicitly (same pattern as the badges). */
+#expand-btn[hidden] {
+  display: none;
+}
+
+#expand-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+#expand-btn:active {
+  transform: scale(0.92);
+}
+
+#expand-btn:focus {
+  outline: none;
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * WP-Threshold-Tidbit-Return Phase B — indicator badge + pulse
  * ──────────────────────────────────────────────────────────────────────── */

@@ -57,11 +57,6 @@ const state = {
     sectionId: null,
     sectionName: null,
   },
-  // WP-ONENOTE-EXPORT-05 — periodic refresh handle for the auto-watch
-  // status line in the Configure pane. Set when the Configure view is
-  // shown; cleared when it's hidden (avoid background polling when the
-  // status display isn't visible to the user).
-  onenoteAutoWatchStatusInterval: null,
   // WP-AUTO-IMPORT — Auto-import pane working state. `config` is the
   // persisted AutoImportConfig (camelCase from Rust:
   // { enabled, onenoteNotebooks: [{notebookId, name, enabled, watermark?}],
@@ -77,12 +72,6 @@ const state = {
     busy: false,
   },
 };
-
-// WP-ONENOTE-EXPORT-05 — refresh cadence for the Configure-pane status
-// line. The Rust polling loop ticks every 2s but the status display
-// doesn't need sub-second freshness; 30s strikes a balance between
-// staleness and per-tick IPC cost (a tracker mutex lock + struct clone).
-const ONENOTE_AUTO_WATCH_STATUS_REFRESH_MS = 30 * 1000;
 
 // Maps source_path → pending toast ID so we can dismiss the pre-flight toast
 // when the response toast arrives. Screen captures use the special key
@@ -104,10 +93,6 @@ const VIEWS = [
   "view-plaud-queue",
   // WP-ONENOTE-EXPORT-04 — OneNote Browse
   "view-onenote-browse",
-  // WP-PLAUD-07b — Settings → Connections (Connect Plaud)
-  "view-connections",
-  // WP-AUTO-IMPORT — designated-source auto-import
-  "view-auto-import",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
@@ -138,14 +123,6 @@ function showView(id) {
     if (!el) continue;
     if (v === id) el.removeAttribute("hidden");
     else el.setAttribute("hidden", "");
-  }
-  // WP-ONENOTE-EXPORT-05 — tear down the auto-watch status refresh loop
-  // when navigating away from the Configure pane. The enterWizard/Standalone
-  // Configure handlers re-start it on view-enter; this single chokepoint
-  // covers every navigation path away (Save, Cancel, widget_collapse,
-  // hash-driven routing to Plaud/OneNote-browse/tidbit, etc.).
-  if (id !== "view-configure") {
-    stopAutoWatchStatusRefresh();
   }
 }
 
@@ -275,17 +252,6 @@ async function bootstrap() {
         : DEFAULT_ONENOTE_HOTKEY;
     }
 
-    // WP-ONENOTE-EXPORT-05 — hydrate the auto-watch toggle from the
-    // persisted AppConfig. `auto_watch` is `bool` on the Rust side
-    // (#[serde(default)] so legacy configs without the field deserialize
-    // as `false`). The Rust startup hook in setup() already starts the
-    // polling loop when this is true; the toggle UI just mirrors the
-    // current state.
-    const autoWatchEl = document.getElementById("config-onenote-auto-watch");
-    if (autoWatchEl) {
-      autoWatchEl.checked = !!cfg.auto_watch;
-    }
-
     // WP-THRESHOLD-APP-AUTH — a config with a workspace URL but no bearer is a
     // half-finished sign-in (e.g. auth_request_link persisted base_url, then
     // the app was restarted before the magic link was clicked). Send the user
@@ -356,22 +322,6 @@ async function bootstrap() {
     // OneNote…" item), land in the browse view.
     if (window.location.hash === "#onenote-browse") {
       enterOneNoteBrowseView();
-      return;
-    }
-
-    // WP-PLAUD-07b — when widget_expand was invoked with
-    // target_tab="connections" (from the right-click menu's
-    // "Connections…" item), land in the Settings → Connections pane.
-    if (window.location.hash === "#connections") {
-      enterConnectionsView();
-      return;
-    }
-
-    // WP-AUTO-IMPORT — when widget_expand was invoked with
-    // target_tab="auto-import" (from the right-click menu's "Auto-import…"
-    // item), land in the Auto-import pane.
-    if (window.location.hash === "#auto-import") {
-      enterAutoImportView();
       return;
     }
 
@@ -653,14 +603,33 @@ function enterWizardConfigure() {
     "Paste your Apolla base URL and the bearer token your server was started with.";
   document.getElementById("btn-back-to-main").setAttribute("hidden", "");
   document.getElementById("btn-save").textContent = "Next";
+  // Wizard = linear single-column form (no group rail); only the Connection
+  // panel is relevant during onboarding.
+  setSettingsMode("wizard");
+  switchSettingsPanel("connection");
   showView("view-configure");
   hideNav();
-  // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
-  // refresh so the counter line below the toggle stays current while
-  // the Configure pane is visible. Safe in the wizard path too (the
-  // status line just reads "Auto-watch off" pre-first-toggle).
-  startAutoWatchStatusRefresh();
   document.getElementById("config-base-url").focus();
+}
+
+// Toggle the Configure view between the linear wizard form and the
+// standalone two-pane Settings layout via a class on the form.
+function setSettingsMode(mode) {
+  const form = document.getElementById("configure-form");
+  if (!form) return;
+  form.classList.toggle("is-wizard", mode === "wizard");
+  form.classList.toggle("is-settings", mode === "settings");
+}
+
+// Master-detail: activate the named settings group (left rail) and show its
+// detail panel on the right.
+function switchSettingsPanel(name) {
+  for (const item of document.querySelectorAll(".settings-nav-item")) {
+    item.classList.toggle("is-active", item.dataset.panel === name);
+  }
+  for (const panel of document.querySelectorAll(".settings-panel")) {
+    panel.classList.toggle("is-active", panel.dataset.panel === name);
+  }
 }
 
 function enterWizardDone(cfg) {
@@ -684,13 +653,16 @@ function enterStandaloneConfigure() {
     "Update your Apolla workspace connection.";
   document.getElementById("btn-back-to-main").removeAttribute("hidden");
   document.getElementById("btn-save").textContent = "Save";
+  // Standalone Settings = two-pane master-detail; default to the Connection
+  // group.
+  setSettingsMode("settings");
+  switchSettingsPanel("connection");
   showView("view-configure");
   setNav([{ label: "Settings" }], { back: () => goHome() });
-  // WP-ONENOTE-EXPORT-05 — kick off the periodic auto-watch status
-  // refresh so the counter line below the toggle stays current while
-  // the Configure pane is visible.
-  startAutoWatchStatusRefresh();
   document.getElementById("config-base-url").focus();
+  // Populate the Integrations panel: auto-import block + Plaud connection card.
+  initConfigAutoImport();
+  refreshPlaudConnectionCard();
 }
 
 // ───────── Configure form logic ─────────
@@ -755,21 +727,12 @@ async function handleSave(e) {
   // re-registration of the global shortcut when the value changes.
   const hotkeyEl = document.getElementById("config-onenote-hotkey");
   const onenoteHotkey = hotkeyEl ? hotkeyEl.value.trim() : "";
-  // WP-ONENOTE-EXPORT-05 — include the auto-watch flag in the save
-  // payload. Defaults to false (toggle off) when the element is missing
-  // (defensive against older index.html builds, same pattern as the
-  // optional hotkey block). The toggle's change listener already drove
-  // `onenote_set_auto_watch` for instant feedback; this round-trip just
-  // keeps the full-config save_config IPC's view of disk consistent.
-  const autoWatchEl = document.getElementById("config-onenote-auto-watch");
-  const autoWatch = autoWatchEl ? autoWatchEl.checked : false;
   const config = {
     base_url: baseUrl,
     bearer_token: bearerToken,
     last_used: null,
     mode: "workspace",
     onenote_hotkey: onenoteHotkey || null,
-    auto_watch: autoWatch,
   };
 
   try {
@@ -787,100 +750,6 @@ async function handleSave(e) {
     enterWizardDone(config);
   } else {
     enterMainView(config);
-  }
-}
-
-// ───────── WP-ONENOTE-EXPORT-05 — auto-watch toggle + status refresh ─────────
-
-/**
- * Refresh the auto-watch status display in the Configure pane.
- *
- * Invokes `onenote_auto_watch_status` and rewrites the inline status
- * text below the toggle. Called: (a) on Configure-pane open, (b) right
- * after a toggle change for instant feedback, (c) on a 30s interval
- * while the Configure pane is visible.
- *
- * Wire shape (camelCase per AutoWatchStatus serde rename):
- *   { enabled, sentToday, sentTotalSession, distinctPagesSent,
- *     debouncingPageId? }
- *
- * Failure-safe: if the IPC errors (e.g., tracker mutex poisoned), the
- * status line stays at whatever it was last; no toast spam.
- */
-async function refreshAutoWatchStatus() {
-  const statusEl = document.getElementById("config-onenote-auto-watch-status");
-  if (!statusEl) return;
-  try {
-    const status = await tauri.core.invoke("onenote_auto_watch_status");
-    if (!status || !status.enabled) {
-      statusEl.textContent = "Auto-watch off";
-      return;
-    }
-    const n = status.sentToday || 0;
-    statusEl.textContent = n === 1
-      ? "Sent today: 1 page"
-      : `Sent today: ${n} pages`;
-  } catch (err) {
-    console.warn("[main] onenote_auto_watch_status failed:", err);
-    // Leave the status line at its prior value; don't blank it on error.
-  }
-}
-
-/**
- * Begin the periodic status-refresh loop. Idempotent: clears any prior
- * interval before starting a new one. Called when the Configure view is
- * shown.
- */
-function startAutoWatchStatusRefresh() {
-  stopAutoWatchStatusRefresh();
-  // Immediate refresh so the user sees a current value on view-enter,
-  // not a 30s-stale one from the previous mount.
-  refreshAutoWatchStatus();
-  state.onenoteAutoWatchStatusInterval = setInterval(
-    refreshAutoWatchStatus,
-    ONENOTE_AUTO_WATCH_STATUS_REFRESH_MS,
-  );
-}
-
-/**
- * Stop the periodic status-refresh loop. Idempotent. Called when the
- * Configure view is hidden (any other view enter).
- */
-function stopAutoWatchStatusRefresh() {
-  if (state.onenoteAutoWatchStatusInterval) {
-    clearInterval(state.onenoteAutoWatchStatusInterval);
-    state.onenoteAutoWatchStatusInterval = null;
-  }
-}
-
-/**
- * Change-handler for the auto-watch toggle. Drives the Rust polling
- * loop immediately (don't wait for Save) for instant UX feedback.
- * Reverts the toggle state if the IPC fails so the UI doesn't drift
- * from disk.
- *
- * The IPC also persists `auto_watch` to AppConfig on disk, so the
- * Save button isn't required to keep the toggle state — it's
- * equivalent to clicking Save with only this field changed. The full
- * `handleSave` payload still includes `auto_watch` (so a Save click
- * after a toggle is byte-equal to the on-disk state and doesn't drift).
- */
-async function handleAutoWatchToggle(e) {
-  const checked = e.target.checked;
-  try {
-    await tauri.core.invoke("onenote_set_auto_watch", { enabled: checked });
-    // Refresh status display immediately so the line updates from
-    // "Auto-watch off" → "Sent today: 0 pages" (or vice versa).
-    refreshAutoWatchStatus();
-  } catch (err) {
-    console.error("[main] onenote_set_auto_watch failed:", err);
-    // Revert the toggle so the UI doesn't drift from on-disk state.
-    e.target.checked = !checked;
-    showToast({
-      kind: "failure",
-      title: "Could not toggle OneNote auto-watch",
-      body: String(err),
-    });
   }
 }
 
@@ -5368,11 +5237,10 @@ function dismissToast(id) {
  * Render the Plaud connection card from the cached local status (which is
  * a UX hint only; the droplet's tokens.json is authoritative).
  */
-async function enterConnectionsView() {
-  state.inWizard = false;
-  showView("view-connections");
-  setNav([{ label: "Sources" }], { back: () => goHome() });
-
+// Refresh the Plaud connect/disconnect card. The card now lives inside the
+// Settings → Integrations panel; called when standalone Settings opens.
+async function refreshPlaudConnectionCard() {
+  if (!document.getElementById("connection-plaud")) return;
   let cached = null;
   try {
     cached = await tauri.core.invoke("plaud_connect_status");
@@ -5573,18 +5441,28 @@ const AI_ICON_MIC = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none"
 const AI_ICON_NOTEBOOK = `<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4h11a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"></path><line x1="9" y1="4" x2="9" y2="20"></line><line x1="13" y1="9" x2="16" y2="9"></line></svg>`;
 const AI_ICON_PLUS = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`;
 
+// Selectable sweep cadences (minutes) for the Auto-import view dropdown.
+const AUTO_IMPORT_INTERVAL_CHOICES = [1, 5, 15, 30, 60];
+const AUTO_IMPORT_INTERVAL_DEFAULT = 15;
+
 function normalizeAutoImportConfig(cfg) {
+  const rawInterval = cfg && Number(cfg.intervalMinutes);
+  const intervalMinutes =
+    Number.isFinite(rawInterval) && rawInterval >= 1
+      ? Math.round(rawInterval)
+      : AUTO_IMPORT_INTERVAL_DEFAULT;
   return {
     enabled: !!(cfg && cfg.enabled),
     onenoteNotebooks: (cfg && cfg.onenoteNotebooks) || [],
     plaudDevices: (cfg && cfg.plaudDevices) || [],
+    intervalMinutes,
   };
 }
 
-async function enterAutoImportView() {
-  state.inWizard = false;
-  showView("view-auto-import");
-  setNav([{ label: "Auto-import" }], { back: () => goHome() });
+// Initialise the auto-import block that lives inside the Configure pane's
+// OneNote section. Called whenever the Configure pane is opened.
+async function initConfigAutoImport() {
+  if (!document.getElementById("config-auto-import-body")) return;
   state.autoImport.mode = "list";
 
   // Persisted config first (fast), render, then enrich with the available
@@ -5594,7 +5472,12 @@ async function enterAutoImportView() {
     state.autoImport.config = normalizeAutoImportConfig(cfg);
   } catch (err) {
     console.warn("[auto-import] get_auto_import_config failed:", err);
-    state.autoImport.config = { enabled: false, onenoteNotebooks: [], plaudDevices: [] };
+    state.autoImport.config = {
+      enabled: false,
+      onenoteNotebooks: [],
+      plaudDevices: [],
+      intervalMinutes: AUTO_IMPORT_INTERVAL_DEFAULT,
+    };
   }
   renderAutoImport();
   refreshAutoImportAvailable();
@@ -5608,9 +5491,11 @@ async function refreshAutoImportAvailable() {
     state.autoImport.available = null;
   }
   // Re-render so the Windows-only treatment / picker contents reflect the
-  // fresh data — but only if the user is still on this pane.
-  const view = document.getElementById("view-auto-import");
-  if (view && !view.hidden) renderAutoImport();
+  // fresh data — but only if the Configure pane (and its container) is present.
+  const view = document.getElementById("view-configure");
+  if (view && !view.hidden && document.getElementById("config-auto-import-body")) {
+    renderAutoImport();
+  }
 }
 
 async function persistAutoImport() {
@@ -5634,7 +5519,7 @@ async function persistAutoImport() {
 }
 
 function renderAutoImport() {
-  const body = document.getElementById("auto-import-body");
+  const body = document.getElementById("config-auto-import-body");
   if (!body) return;
   body.innerHTML = "";
 
@@ -5651,21 +5536,25 @@ function renderAutoImport() {
     (cfg.onenoteNotebooks || []).filter((s) => s.enabled).length +
     (cfg.plaudDevices || []).filter((s) => s.enabled).length;
 
-  // Master toggle row.
+  // Master toggle row — the sweep-interval selector sits inline on this row
+  // (between the label and the toggle) so there's no separate interval card.
   const master = buildAutoImportRow({
     kind: "master",
     iconSvg: AI_ICON_SYNC,
     name: "Auto-import",
     meta: cfg.enabled
       ? enabledCount === 1
-        ? "On · 1 source"
-        : `On · ${enabledCount} sources`
+        ? "On · 1 source · checks every " + autoImportIntervalLabel(cfg.intervalMinutes)
+        : `On · ${enabledCount} sources · checks every ` + autoImportIntervalLabel(cfg.intervalMinutes)
       : "Off — nothing imports automatically",
     checked: !!cfg.enabled,
   });
+  const intervalSelect = buildAutoImportIntervalSelect(cfg.intervalMinutes);
   master
     .querySelector(".auto-import-toggle")
     .addEventListener("click", handleAutoImportMasterToggle);
+  // Insert the interval selector just before the toggle switch.
+  master.insertBefore(intervalSelect, master.querySelector(".auto-import-toggle"));
   body.appendChild(master);
 
   const sources = [
@@ -5678,10 +5567,14 @@ function renderAutoImport() {
     })),
     ...(cfg.onenoteNotebooks || []).map((s) => ({
       kind: "onenote",
-      id: s.notebookId,
-      name: s.name,
+      id: onenoteSourceKey(s),
+      name: s.sectionId ? `${s.name} · ${s.sectionName || "section"}` : s.name,
       enabled: s.enabled,
-      meta: onenoteSupported ? "Notebook" : "Notebook · Windows-only, paused on this Mac",
+      meta: !onenoteSupported
+        ? (s.sectionId ? "Section" : "Notebook") + " · Windows-only, paused on this Mac"
+        : s.sectionId
+          ? "Section"
+          : "Whole notebook",
     })),
   ];
 
@@ -5773,17 +5666,64 @@ function buildAutoImportRow({
   return row;
 }
 
+function autoImportIntervalLabel(mins) {
+  if (mins === 60) return "1 hour";
+  if (mins === 1) return "1 minute";
+  return `${mins} minutes`;
+}
+
+// The sweep-interval <select>, rendered inline on the master Auto-import row
+// (no standalone card). Returns just the element so the caller can place it.
+function buildAutoImportIntervalSelect(current) {
+  const select = document.createElement("select");
+  select.className = "auto-import-interval-select";
+  select.setAttribute("aria-label", "Auto-import frequency");
+  // Include the persisted value even if it isn't one of the presets (e.g. a
+  // hand-edited config), so the dropdown always reflects reality.
+  const choices = AUTO_IMPORT_INTERVAL_CHOICES.includes(current)
+    ? AUTO_IMPORT_INTERVAL_CHOICES
+    : [...AUTO_IMPORT_INTERVAL_CHOICES, current].sort((a, b) => a - b);
+  for (const m of choices) {
+    const opt = document.createElement("option");
+    opt.value = String(m);
+    opt.textContent = `Every ${autoImportIntervalLabel(m)}`;
+    if (m === current) opt.selected = true;
+    select.appendChild(opt);
+  }
+  // Don't let a click on the select bubble to the row (avoids odd focus jumps).
+  select.addEventListener("click", (e) => e.stopPropagation());
+  select.addEventListener("change", handleAutoImportIntervalChange);
+  return select;
+}
+
+async function handleAutoImportIntervalChange(e) {
+  const mins = Number(e.target.value);
+  if (!Number.isFinite(mins) || mins < 1) return;
+  state.autoImport.config.intervalMinutes = mins;
+  await persistAutoImport();
+  // Re-render so the master row's "checks every …" summary reflects the change.
+  renderAutoImport();
+}
+
 async function handleAutoImportMasterToggle() {
   state.autoImport.config.enabled = !state.autoImport.config.enabled;
   await persistAutoImport();
   renderAutoImport();
 }
 
+// A OneNote auto-import source is identified by the (notebook, section) pair:
+// `notebookId::` is a whole-notebook watch; `notebookId::sectionId` scopes it
+// to one section. Plaud sources stay keyed by serialNumber.
+function onenoteSourceKey(s) {
+  return `${s.notebookId}::${s.sectionId || ""}`;
+}
+
 async function handleAutoImportToggleSource(kind, id) {
   const cfg = state.autoImport.config;
-  const list = kind === "plaud" ? cfg.plaudDevices : cfg.onenoteNotebooks;
-  const idField = kind === "plaud" ? "serialNumber" : "notebookId";
-  const src = (list || []).find((s) => s[idField] === id);
+  const src =
+    kind === "plaud"
+      ? (cfg.plaudDevices || []).find((s) => s.serialNumber === id)
+      : (cfg.onenoteNotebooks || []).find((s) => onenoteSourceKey(s) === id);
   if (!src) return;
   src.enabled = !src.enabled;
   await persistAutoImport();
@@ -5795,7 +5735,7 @@ async function handleAutoImportRemoveSource(kind, id) {
   if (kind === "plaud") {
     cfg.plaudDevices = (cfg.plaudDevices || []).filter((s) => s.serialNumber !== id);
   } else {
-    cfg.onenoteNotebooks = (cfg.onenoteNotebooks || []).filter((s) => s.notebookId !== id);
+    cfg.onenoteNotebooks = (cfg.onenoteNotebooks || []).filter((s) => onenoteSourceKey(s) !== id);
   }
   await persistAutoImport();
   renderAutoImport();
@@ -5829,7 +5769,6 @@ function renderAutoImportPicker(body) {
   }
 
   const havePlaud = new Set((cfg.plaudDevices || []).map((s) => s.serialNumber));
-  const haveOnenote = new Set((cfg.onenoteNotebooks || []).map((s) => s.notebookId));
 
   // Plaud group.
   const plaudLabel = document.createElement("p");
@@ -5857,10 +5796,12 @@ function renderAutoImportPicker(body) {
     }
   }
 
-  // OneNote group.
+  // OneNote group — a notebook → section tree. Each notebook offers a
+  // "Whole notebook" row plus one row per section; already-designated entries
+  // (matched on the composite key) are hidden.
   const onLabel = document.createElement("p");
   onLabel.className = "auto-import-section-label";
-  onLabel.textContent = "OneNote notebooks";
+  onLabel.textContent = "OneNote";
   body.appendChild(onLabel);
 
   if (!avail.onenoteSupported) {
@@ -5870,18 +5811,46 @@ function renderAutoImportPicker(body) {
       )
     );
   } else {
-    const onOptions = (avail.onenote || []).filter((o) => !haveOnenote.has(o.id));
-    if (onOptions.length === 0) {
-      body.appendChild(
-        autoImportPickerHint(
-          "No notebooks to add. Open OneNote (and Refresh) — already-designated ones are hidden."
-        )
-      );
-    } else {
+    const haveKeys = new Set((cfg.onenoteNotebooks || []).map(onenoteSourceKey));
+    let addedAny = false;
+    for (const nb of avail.onenote || []) {
+      // Rows available for this notebook (whole + each not-yet-added section).
+      const rows = [];
+      const wholeKey = `${nb.id}::`;
+      if (!haveKeys.has(wholeKey)) {
+        rows.push(
+          buildAutoImportPickerRow("onenote", { id: nb.id, name: nb.name }, "Whole notebook")
+        );
+      }
+      for (const sec of nb.sections || []) {
+        const secKey = `${nb.id}::${sec.id}`;
+        if (haveKeys.has(secKey)) continue;
+        rows.push(
+          buildAutoImportPickerRow(
+            "onenote",
+            { id: nb.id, name: nb.name, sectionId: sec.id, sectionName: sec.name },
+            sec.name,
+            { section: true }
+          )
+        );
+      }
+      if (rows.length === 0) continue;
+      addedAny = true;
+      const nbLabel = document.createElement("p");
+      nbLabel.className = "auto-import-picker-group";
+      nbLabel.textContent = nb.name;
+      body.appendChild(nbLabel);
       const wrap = document.createElement("div");
       wrap.className = "auto-import-picker";
-      for (const o of onOptions) wrap.appendChild(buildAutoImportPickerRow("onenote", o, "Notebook"));
+      for (const r of rows) wrap.appendChild(r);
       body.appendChild(wrap);
+    }
+    if (!addedAny) {
+      body.appendChild(
+        autoImportPickerHint(
+          "Nothing to add. Open OneNote (and Refresh) — already-designated notebooks and sections are hidden."
+        )
+      );
     }
   }
 
@@ -5895,13 +5864,15 @@ function autoImportPickerHint(text) {
   return p;
 }
 
-function buildAutoImportPickerRow(kind, option, metaLabel) {
+function buildAutoImportPickerRow(kind, option, metaLabel, { section = false } = {}) {
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.className = "auto-import-picker-row";
+  btn.className = section ? "auto-import-picker-row auto-import-picker-row--section" : "auto-import-picker-row";
   const name = document.createElement("span");
   name.className = "auto-import-picker-name";
-  name.textContent = option.name;
+  // For OneNote section rows the visible name is the section; the notebook is
+  // already shown as the group header above.
+  name.textContent = section ? option.sectionName : option.name;
   const meta = document.createElement("span");
   meta.className = "auto-import-picker-meta";
   meta.textContent = metaLabel;
@@ -5934,17 +5905,30 @@ async function handleAutoImportPick(kind, option) {
     }
   } else {
     cfg.onenoteNotebooks = cfg.onenoteNotebooks || [];
-    if (!cfg.onenoteNotebooks.some((s) => s.notebookId === option.id)) {
-      cfg.onenoteNotebooks.push({ notebookId: option.id, name: option.name, enabled: true });
+    const newSrc = {
+      notebookId: option.id,
+      name: option.name,
+      enabled: true,
+      ...(option.sectionId
+        ? { sectionId: option.sectionId, sectionName: option.sectionName }
+        : {}),
+    };
+    const key = onenoteSourceKey(newSrc);
+    if (!cfg.onenoteNotebooks.some((s) => onenoteSourceKey(s) === key)) {
+      cfg.onenoteNotebooks.push(newSrc);
     }
   }
   // Adding a source implies the user wants auto-import on.
   if (!cfg.enabled) cfg.enabled = true;
   await persistAutoImport();
+  const addedLabel =
+    kind === "onenote" && option.sectionId
+      ? `${option.name} · ${option.sectionName}`
+      : option.name;
   showToast({
     kind: "success",
     title: "Source added",
-    body: `${option.name} will auto-import new items.`,
+    body: `${addedLabel} will auto-import new items.`,
   });
   state.autoImport.mode = "list";
   renderAutoImport();
@@ -5976,18 +5960,14 @@ window.addEventListener("DOMContentLoaded", () => {
     .getElementById("btn-test-connection")
     .addEventListener("click", handleTestConnection);
   document.getElementById("configure-form").addEventListener("submit", handleSave);
+  // Settings master-detail — left-rail group switching.
+  for (const item of document.querySelectorAll(".settings-nav-item")) {
+    item.addEventListener("click", () => switchSettingsPanel(item.dataset.panel));
+  }
   document.getElementById("btn-open-configure").addEventListener("click", enterStandaloneConfigure);
   document
     .getElementById("btn-back-to-main")
     .addEventListener("click", () => enterMainView(state.lastConfig));
-
-  // WP-ONENOTE-EXPORT-05 — auto-watch toggle drives the Rust polling
-  // loop immediately on change (don't wait for Save). Defensive optional
-  // chaining for older index.html builds that lack the element.
-  const autoWatchEl = document.getElementById("config-onenote-auto-watch");
-  if (autoWatchEl) {
-    autoWatchEl.addEventListener("change", handleAutoWatchToggle);
-  }
 
   // Capture flows
   document.getElementById("btn-upload-file").addEventListener("click", handleUploadFile);
@@ -6049,33 +6029,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (plaudDisconnectBtn) {
     plaudDisconnectBtn.addEventListener("click", handlePlaudDisconnectClick);
   }
-  const connectionsBackBtn = document.getElementById("btn-connections-back");
-  if (connectionsBackBtn) {
-    connectionsBackBtn.addEventListener("click", async () => {
-      try {
-        await tauri.core.invoke("widget_collapse");
-      } catch (err) {
-        console.warn("[main] widget_collapse (connections-back) failed:", err);
-      }
-    });
-  }
-
-  // WP-AUTO-IMPORT — Auto-import pane back button (same widget_collapse path
-  // as the other list views). Defensive optional chaining for older builds.
-  const autoImportBackBtn = document.getElementById("btn-auto-import-back");
-  if (autoImportBackBtn) {
-    autoImportBackBtn.addEventListener("click", async () => {
-      try {
-        await tauri.core.invoke("widget_collapse");
-      } catch (err) {
-        console.warn("[main] widget_collapse (auto-import-back) failed:", err);
-      }
-    });
-  }
   // Phase-progress events fire from the Rust orchestrator; listener is
-  // process-wide (no view-bound teardown needed — the progress element is
-  // hidden by enterConnectionsView when status updates land while the
-  // user is on a different view).
+  // process-wide (no view-bound teardown needed — the Plaud card lives in
+  // Settings → Integrations and reads status on Settings open).
   wirePlaudConnectStatusListener().catch((err) => {
     console.warn("[main] wirePlaudConnectStatusListener failed:", err);
   });

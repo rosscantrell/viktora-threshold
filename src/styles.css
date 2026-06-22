@@ -295,6 +295,95 @@ code {
 .configure-form {
   max-width: 540px;
 }
+/* Standalone Settings uses the two-pane master-detail layout, which needs
+   more width than the linear wizard form. */
+.configure-form.is-settings {
+  max-width: 860px;
+}
+
+/* ───────── Settings master-detail ───────── */
+
+.settings-shell {
+  display: flex;
+  gap: 30px;
+  align-items: flex-start;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 172px;
+  flex-shrink: 0;
+}
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.settings-nav-item:hover {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.settings-nav-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+.settings-detail {
+  flex: 1;
+  min-width: 0;
+}
+.settings-panel {
+  display: none;
+}
+.settings-panel.is-active {
+  display: block;
+  animation: settings-panel-in var(--dur) var(--ease);
+}
+@keyframes settings-panel-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.settings-panel-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 18px 0;
+  letter-spacing: -0.1px;
+}
+/* Sub-section divider within a settings panel (e.g. OneNote / Plaud /
+   Auto-import inside the Integrations group). */
+.settings-subhead {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  margin: 26px 0 12px 0;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-panel > .settings-subhead:first-of-type {
+  margin-top: 4px;
+}
+/* Wizard reuses this view as a linear single-column form: hide the group
+   rail + per-panel titles so onboarding reads top-to-bottom. */
+.configure-form.is-wizard .settings-nav,
+.configure-form.is-wizard .settings-panel-title {
+  display: none;
+}
+.configure-form.is-wizard .settings-shell {
+  gap: 0;
+}
 .field {
   display: flex;
   flex-direction: column;
@@ -394,21 +483,6 @@ code {
   position: static;
 }
 
-/* OneNote configure subsection */
-.config-subsection {
-  margin-top: 8px;
-  margin-bottom: 22px;
-  padding: 14px 16px 6px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-}
-.config-subsection-legend {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  padding: 0 6px;
-}
 .hotkey-row {
   display: flex;
   gap: 8px;
@@ -1397,6 +1471,39 @@ code {
   word-break: break-word;
 }
 
+.auto-import-interval-select {
+  flex-shrink: 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  background-color: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 7px 30px 7px 12px;
+  cursor: pointer;
+  /* Strip the native macOS select chrome (the blue steppers) so the
+     control matches the dark/glassy token system; draw our own chevron. */
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b8fa3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.auto-import-interval-select:hover {
+  border-color: var(--accent-hover);
+}
+.auto-import-interval-select:focus-visible {
+  outline: none;
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+/* The dropdown popup list itself (native, but color it for dark mode). */
+.auto-import-interval-select option {
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+}
+
 /* Toggle switch */
 .auto-import-toggle {
   position: relative;
@@ -1478,6 +1585,14 @@ code {
   margin: 8px 0 2px;
 }
 
+/* Notebook header inside the OneNote picker tree (groups its section rows). */
+.auto-import-picker-group {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 10px 0 4px;
+}
+
 /* Source picker (add-a-source) rows */
 .auto-import-picker {
   display: flex;
@@ -1486,6 +1601,11 @@ code {
   max-height: 300px;
   overflow-y: auto;
   padding-right: 4px;
+}
+/* Section rows sit indented under their notebook header, with a connector. */
+.auto-import-picker-row--section {
+  margin-left: 16px;
+  border-left: 2px solid var(--accent-soft);
 }
 .auto-import-picker-row {
   display: flex;
