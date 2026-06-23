@@ -185,6 +185,97 @@ body {
   padding: 4px 0;
 }
 
+/* WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator). */
+.inform-rail {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--glass-border);
+}
+.inform-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--glass-text);
+}
+.inform-sub {
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  margin: 2px 0 12px;
+  line-height: 1.5;
+}
+.inform-card {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  padding: 11px 13px;
+  margin-bottom: 10px;
+}
+.inform-card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+.inform-who {
+  font-size: 12.5px;
+  color: var(--glass-text);
+}
+.inform-who strong {
+  font-weight: 600;
+}
+.inform-tag {
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--glass-accent);
+  white-space: nowrap;
+}
+.inform-decision {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--glass-text);
+  margin-bottom: 6px;
+}
+.inform-why {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--glass-text-dim);
+  margin-bottom: 10px;
+}
+.inform-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.inform-copy {
+  font-size: 11px;
+  padding: 4px 11px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.inform-copy:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.inform-copy:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+.inform-dismiss {
+  font-size: 11px;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.inform-dismiss:hover {
+  color: var(--glass-text);
+}
+
 /* TYPED-DIFF-CAPTURE Phase 1 — inline edit controls on the per-person digest. */
 .sop-edit-section {
   margin: 4px 0 14px;

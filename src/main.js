@@ -2575,6 +2575,131 @@ function renderCorpusPanel(panel, data) {
   attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
 }
 
+// WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
+// rendered on the PER-PERSON digest and scoped to the viewer (`viewerSlug`):
+//   owner-side  — decisions the viewer made that touch someone who wasn't there → "consider looping in X"
+//   target-side — decisions made without the viewer that touch their work → "worth knowing"
+// Backed by GET /api/decision-log/inform via fetch_inform_edges. Additive + silent.
+async function loadInformRail(el, viewerSlug) {
+  let res;
+  try {
+    res = await tauri.core.invoke("fetch_inform_edges");
+  } catch (err) {
+    console.warn("[main] fetch_inform_edges failed:", err);
+    return; // silent — the rail is additive, never an error surface
+  }
+  if (!res || res.available === false) return; // flag off / server too old
+  const edges = Array.isArray(res.edges) ? res.edges : [];
+  const asOwner = edges.filter((e) => e.decision && e.decision.owner === viewerSlug);
+  const asTarget = edges.filter((e) => e.person === viewerSlug);
+  if (asOwner.length === 0 && asTarget.length === 0) return;
+  renderInformRail(el, asOwner, asTarget);
+}
+
+function informName(slug) {
+  return String(slug || "")
+    .split("-")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+function renderInformRail(el, asOwner, asTarget) {
+  el.innerHTML = "";
+  // Two distinct actions get two distinct headers — never one shared umbrella,
+  // which reads backwards on the recipient side.
+  if (asOwner.length) {
+    const head = document.createElement("div");
+    head.className = "inform-head";
+    head.textContent = "Loop them in"; // YOU act — you decided it, they weren't there
+    el.appendChild(head);
+    const sub = document.createElement("div");
+    sub.className = "inform-sub";
+    sub.textContent = "Decisions you made that touch someone who wasn't in the room:";
+    el.appendChild(sub);
+    for (const edge of asOwner) el.appendChild(renderInformCard(edge, "owner"));
+  }
+  if (asTarget.length) {
+    const head = document.createElement("div");
+    head.className = "inform-head";
+    if (asOwner.length) head.style.marginTop = "20px";
+    head.textContent = "Catch up on"; // YOU receive — decided without you
+    el.appendChild(head);
+    const sub = document.createElement("div");
+    sub.className = "inform-sub";
+    sub.textContent = "Decided without you, but it touches your work — worth getting up to speed:";
+    el.appendChild(sub);
+    for (const edge of asTarget) el.appendChild(renderInformCard(edge, "target"));
+  }
+}
+
+function renderInformCard(edge, mode) {
+  const card = document.createElement("div");
+  card.className = "inform-card";
+  const targetName = informName(edge.person);
+  const ownerName = informName(edge.decision && edge.decision.owner);
+  const decision = (edge.decision && edge.decision.summary) || "(decision)";
+
+  const top = document.createElement("div");
+  top.className = "inform-card-top";
+  const who = document.createElement("div");
+  who.className = "inform-who";
+  if (mode === "owner") {
+    who.appendChild(document.createTextNode("Consider looping in "));
+    const strong = document.createElement("strong");
+    strong.textContent = targetName;
+    who.appendChild(strong);
+  } else {
+    who.appendChild(document.createTextNode("Worth knowing"));
+  }
+  top.appendChild(who);
+  const tag = document.createElement("span");
+  tag.className = "inform-tag";
+  tag.textContent = mode === "owner" ? "not in the room" : "decided by " + ownerName;
+  top.appendChild(tag);
+  card.appendChild(top);
+
+  const dec = document.createElement("div");
+  dec.className = "inform-decision";
+  dec.textContent = decision;
+  card.appendChild(dec);
+
+  if (edge.why) {
+    const why = document.createElement("div");
+    why.className = "inform-why";
+    why.textContent = edge.why;
+    card.appendChild(why);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "inform-actions";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "inform-copy";
+  copyBtn.textContent = "Copy";
+  const sendReady = mode === "owner"
+    ? "Looping you in on: " + decision + (edge.why ? "\n\nWhy: " + edge.why : "")
+    : "Catching up on: " + decision + (edge.why ? "\n\nWhy it touches my work: " + edge.why : "");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("copy_text", { text: sendReady });
+      copyBtn.textContent = "Copied";
+      copyBtn.disabled = true;
+      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
+    } catch (e) {
+      showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." });
+    }
+  });
+  actions.appendChild(copyBtn);
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "inform-dismiss";
+  dismiss.textContent = "Not relevant";
+  dismiss.addEventListener("click", () => card.remove());
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
 const logEdgesBtn = document.getElementById("btn-log-edges");
 if (logEdgesBtn) {
@@ -3660,6 +3785,12 @@ function renderSopPanel(panel, data, slug, label) {
   panel.appendChild(msg);
   // Phase B — inline digest edit (person altitude).
   attachDigestEditor({ panel, bar, msg, scope: "person", subject: slug, label, message: data.message || "", editsEnabled: data.editsEnabled });
+  // WP-Cohesion-Operators — "worth looping in" rail, scoped to this person
+  // (owner-side: loop others in; target-side: worth knowing).
+  const informRail = document.createElement("div");
+  informRail.className = "inform-rail";
+  panel.appendChild(informRail);
+  loadInformRail(informRail, slug);
 }
 
 /**
