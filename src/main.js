@@ -3927,7 +3927,9 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
   let res;
   try {
     res = await tauri.core.invoke("project_canon_merge", {
-      sources: [sourceGrp.key],
+      // Backend requires >=2 slugs in `sources` — ALL the projects being unified.
+      // targetCanonical is which name survives.
+      sources: [sourceGrp.key, targetGrp.key],
       targetCanonical: targetGrp.key,
       expectedSubstrateFingerprint: fp,
       actor,
