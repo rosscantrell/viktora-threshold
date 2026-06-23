@@ -883,6 +883,45 @@ async fn test_connection(base_url: String) -> ConnectionTestResult {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Sovereignty posture — where does the user's data go?
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Fetches the engine's GET /api/sovereignty and passes the JSON straight
+/// through to the frontend (the Privacy panel renders it). Returned as an
+/// opaque serde_json::Value so the engine's posture shape can evolve without a
+/// Rust change. Bearer is sent if present (the endpoint is read-only/no-auth on
+/// the engine today, but a deployment may sit behind the AUTH_ENABLED gate).
+#[tauri::command]
+async fn get_sovereignty(
+    base_url: String,
+    bearer_token: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/sovereignty", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let mut req = client.get(&url);
+    if let Some(token) = bearer_token {
+        if !token.trim().is_empty() {
+            req = req.bearer_auth(token.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", url, e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Server returned status {} from {}", status.as_u16(), url));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from {}: {}", url, e))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Ingestion pipeline (file picker + drag-drop)
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -6076,6 +6115,7 @@ pub fn run() {
             load_config,
             save_config,
             test_connection,
+            get_sovereignty,
             // WP-THRESHOLD-APP-AUTH (email-login) — per-user magic-link sign-in
             auth_request_link,
             auth_verify,

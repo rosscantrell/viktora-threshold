@@ -3706,3 +3706,75 @@ button.rec-source {
 .source-panel-action:hover { color: var(--text-primary); background: var(--glass-border); }
 .source-panel-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
 .source-panel-action svg { display: block; }
+
+/* ── Privacy / sovereignty panel ──────────────────────────────────────────
+   Read-only "where does my data go" indicator (Settings → Privacy), filled by
+   renderSovereignty() from GET /api/sovereignty. Matches the card idiom. */
+.privacy-body { display: flex; flex-direction: column; gap: 14px; }
+
+.privacy-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+}
+.privacy-banner-icon { display: flex; flex: none; }
+.privacy-banner.is-sovereign { border-color: var(--success-soft); }
+.privacy-banner.is-sovereign .privacy-banner-icon { color: var(--success-text); }
+.privacy-banner.is-hybrid { border-color: var(--warn-soft); }
+.privacy-banner.is-hybrid .privacy-banner-icon { color: var(--warn-text); }
+.privacy-banner.is-cloud .privacy-banner-icon { color: var(--text-secondary); }
+.privacy-banner-headline { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.privacy-banner-sub { margin: 2px 0 0; font-size: 12px; color: var(--text-tertiary); text-transform: capitalize; }
+
+.privacy-surfaces { display: flex; flex-direction: column; gap: 8px; }
+.privacy-surface {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  background: var(--surface-inset);
+}
+.privacy-surface-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.privacy-surface-label { font-size: 13px; color: var(--text-primary); }
+.privacy-surface-model {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.privacy-chip {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  letter-spacing: 0.01em;
+}
+.privacy-chip.is-sovereign { color: var(--success-text); background: var(--success-soft); }
+.privacy-chip.is-cloud { color: var(--text-secondary); background: var(--surface-2); }
+
+.privacy-caveat {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn-text);
+  background: var(--warn-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+.privacy-caveat.is-good { color: var(--success-text); background: var(--success-soft); }
+.privacy-caveat code {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.privacy-error { color: var(--danger-text); }
