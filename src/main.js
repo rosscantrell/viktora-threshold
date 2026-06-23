@@ -633,6 +633,90 @@ function switchSettingsPanel(name) {
   for (const panel of document.querySelectorAll(".settings-panel")) {
     panel.classList.toggle("is-active", panel.dataset.panel === name);
   }
+  // Privacy panel is lazy — fetch the live posture from the engine on open.
+  if (name === "privacy") renderSovereignty();
+}
+
+// Renders the read-only "where does my data go" posture into #privacy-body,
+// fetched live from the engine's GET /api/sovereignty (via the get_sovereignty
+// IPC command). Deployment-level today; the .privacy-future block is the home
+// for a future per-user selector.
+async function renderSovereignty() {
+  const body = document.getElementById("privacy-body");
+  if (!body) return;
+  const baseUrl = document.getElementById("config-base-url").value.trim();
+  const bearerToken = document.getElementById("config-bearer-token").value.trim();
+  if (!baseUrl) {
+    body.innerHTML =
+      '<p class="field-help">Enter your Apolla base URL on the Connection tab to see where your data is processed.</p>';
+    return;
+  }
+  body.innerHTML = '<p class="field-help">Checking where your data is processed…</p>';
+
+  let s;
+  try {
+    s = await tauri.core.invoke("get_sovereignty", { baseUrl, bearerToken: bearerToken || null });
+  } catch (err) {
+    body.innerHTML =
+      '<p class="field-help privacy-error">Couldn\'t read sovereignty status: ' +
+      escapeHtml(String(err)) +
+      "</p>";
+    return;
+  }
+
+  const POSTURE_CLASS = { "on-prem": "is-sovereign", hybrid: "is-hybrid", cloud: "is-cloud", mixed: "is-hybrid", unconfigured: "is-cloud" };
+  const cls = POSTURE_CLASS[s.posture] || "is-cloud";
+  const lockIcon = s.posture === "on-prem"
+    ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
+    : '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 10h-1V7a5 5 0 0 0-9.6-2"></path><rect x="3" y="10" width="18" height="11" rx="2"></rect></svg>';
+
+  const surfaceRow = (label, surf) => {
+    const where = surf.dataLeavesOrg
+      ? '<span class="privacy-chip is-cloud">Cloud</span>'
+      : '<span class="privacy-chip is-sovereign">Your infrastructure</span>';
+    return (
+      '<div class="privacy-surface">' +
+      '<div class="privacy-surface-main"><span class="privacy-surface-label">' +
+      escapeHtml(label) +
+      '</span><span class="privacy-surface-model">' +
+      escapeHtml(surf.model) +
+      "</span></div>" +
+      where +
+      "</div>"
+    );
+  };
+
+  let html =
+    '<div class="privacy-banner ' + cls + '">' +
+    '<span class="privacy-banner-icon">' + lockIcon + "</span>" +
+    '<div><p class="privacy-banner-headline">' + escapeHtml(s.headline) + "</p>" +
+    (s.tier ? '<p class="privacy-banner-sub">Tier: ' + escapeHtml(s.tier) + "</p>" : "") +
+    "</div></div>";
+
+  html +=
+    '<div class="privacy-surfaces">' +
+    surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation) +
+    surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction) +
+    surfaceRow("Query understanding", s.surfaces.query) +
+    "</div>";
+
+  if (s.localEndpoint) {
+    html +=
+      '<p class="field-help">On-prem server: <code>' + escapeHtml(s.localEndpoint) + "</code></p>";
+  }
+
+  if (Array.isArray(s.pinnedToCloud) && s.pinnedToCloud.length) {
+    html +=
+      '<p class="privacy-caveat">⚠ ' +
+      s.pinnedToCloud.length +
+      " advanced surface(s) still use the cloud (live-streaming features that can't run on-prem yet): <code>" +
+      s.pinnedToCloud.map((v) => escapeHtml(v)).join("</code>, <code>") +
+      "</code>.</p>";
+  } else if (s.fullySovereign) {
+    html += '<p class="privacy-caveat is-good">✓ Every surface runs on your own infrastructure.</p>';
+  }
+
+  body.innerHTML = html;
 }
 
 function enterWizardDone(cfg) {
