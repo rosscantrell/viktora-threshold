@@ -3790,6 +3790,25 @@ function pgToast(msg) {
   setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
 }
 
+// Per-view snapshot of which project groups are user-merged — drives the Split
+// affordance + supplies the unmerge restore set. Refreshed on each Decisions enter.
+let _pgCanonState = { mergedByKey: new Map() };
+async function refreshProjectCanonState() {
+  const m = new Map();
+  try {
+    const pc = await tauri.core.invoke("fetch_project_canon");
+    if (pc && pc.available !== false && Array.isArray(pc.canonicals)) {
+      for (const c of pc.canonicals) {
+        const restore = (c.aliases || []).filter((a) => a !== c.label);
+        if (restore.length) m.set(c.label, { canonicalId: c.canonicalId, restore });
+      }
+    }
+  } catch (err) {
+    console.warn("[main] fetch_project_canon (state) failed:", err);
+  }
+  _pgCanonState = { mergedByKey: m };
+}
+
 /** The stale-guard the mutations must echo. null when grouping is unavailable. */
 async function projectCanonFingerprint() {
   try {
@@ -3806,16 +3825,22 @@ async function projectCanonFingerprint() {
 function buildProjectGroupActions(grp, allGroups) {
   const wrap = document.createElement("div");
   wrap.className = "pg-actions";
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "pg-action-btn";
-  btn.textContent = "Combine with…";
-  btn.title = `Combine “${grp.label}” into another project`;
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    openCombinePane(grp, allGroups);
-  });
-  wrap.appendChild(btn);
+  const mkBtn = (label, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pg-action-btn";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+    return b;
+  };
+  wrap.appendChild(mkBtn("Combine with…", `Combine “${grp.label}” into another project`, () => openCombinePane(grp, allGroups)));
+  wrap.appendChild(mkBtn("Rename", `Rename “${grp.label}”`, () => openRenameDialog(grp)));
+  // Split-back appears only on groups the user previously combined.
+  const merged = _pgCanonState.mergedByKey.get(grp.key);
+  if (merged) {
+    wrap.appendChild(mkBtn("Split", `Separate “${grp.label}” back into its original projects`, () => confirmSplit(grp, merged)));
+  }
   return wrap;
 }
 
@@ -3952,6 +3977,146 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
   enterDecisionsView();
 }
 
+/** Rename a project group — relabels the canonical; documents & grouping unchanged. */
+function openRenameDialog(grp) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Rename project";
+  pane.appendChild(title);
+
+  const sub = document.createElement("div");
+  sub.className = "pg-pane-sub";
+  sub.textContent = "Just a label change — the documents and grouping don't move.";
+  pane.appendChild(sub);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "pg-input";
+  input.value = grp.label;
+  input.setAttribute("aria-label", "New project name");
+  pane.appendChild(input);
+
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "pg-btn pg-btn-primary";
+  save.textContent = "Rename";
+  save.addEventListener("click", async () => {
+    const newLabel = input.value.trim();
+    if (!newLabel || newLabel === grp.label) { pgClose(overlay); return; }
+    save.disabled = true;
+    save.textContent = "Renaming…";
+    await runRename(grp, newLabel, overlay);
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") save.click(); });
+  actions.appendChild(cancel);
+  actions.appendChild(save);
+  pane.appendChild(actions);
+
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+  setTimeout(() => input.focus(), 0);
+}
+
+async function runRename(grp, newLabel, overlay) {
+  const fp = await projectCanonFingerprint();
+  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  let actor = "threshold-user";
+  try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
+  try {
+    await tauri.core.invoke("project_canon_rename", {
+      canonicalId: grp.key, // backend resolves a raw slug → canonical (mints one if fresh)
+      newLabel,
+      expectedSubstrateFingerprint: fp,
+      actor,
+    });
+  } catch (err) {
+    console.warn("[main] project_canon_rename failed:", err);
+    pgClose(overlay);
+    pgToast("Groupings changed since you opened this — refreshing.");
+    enterDecisionsView();
+    return;
+  }
+  pgClose(overlay);
+  pgToast(`Renamed to “${newLabel}”.`);
+  enterDecisionsView();
+}
+
+/** Split-back — reverse a prior Combine, restoring the merged-in projects. */
+function confirmSplit(grp, merged) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Split this project apart?";
+  pane.appendChild(title);
+
+  const body = document.createElement("div");
+  body.className = "pg-confirm-body";
+  const names = merged.restore.map((s) => `“${prettySlug(s)}”`).join(", ");
+  body.textContent = `“${grp.label}” will separate back into ${names}. Those documents return to their original tags.`;
+  pane.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Split";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Splitting…";
+    await runSplit(grp, merged, overlay);
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+async function runSplit(grp, merged, overlay) {
+  const fp = await projectCanonFingerprint();
+  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  let actor = "threshold-user";
+  try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
+  try {
+    await tauri.core.invoke("project_canon_unmerge", {
+      canonicalId: merged.canonicalId,
+      restore: merged.restore,
+      expectedSubstrateFingerprint: fp,
+      actor,
+    });
+  } catch (err) {
+    console.warn("[main] project_canon_unmerge failed:", err);
+    pgClose(overlay);
+    pgToast("Groupings changed since you opened this — refreshing.");
+    enterDecisionsView();
+    return;
+  }
+  pgClose(overlay);
+  pgToast(`Split “${grp.label}” apart.`);
+  enterDecisionsView();
+}
+
 function groupRecords(items, lens, docProjects, aliases) {
   const g = new Map();
   // Resolve a slug to its canonical form so duplicate subjects collapse into one
@@ -4044,6 +4209,8 @@ async function enterDecisionsView(initialFilter, navCtx) {
   // Share the map so the conflicts-lens edge cards (renderEdgeEndpoint) can
   // trace each record to its project too.
   _edgesDocProjects = docProjects;
+  // Snapshot which groups are user-merged so the Split-back affordance can show.
+  await refreshProjectCanonState();
 
   const items = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
   // For the Conflicts lens: index records by id (to ground each edge) + base URL (source links).

@@ -3748,6 +3748,13 @@ button.rec-source {
 .pg-pane-row-name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pg-pane-row-count { font-size: 12px; color: var(--text-tertiary); flex: 0 0 auto; }
 .pg-confirm-body { font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 16px; }
+.pg-input {
+  width: 100%; box-sizing: border-box; margin-bottom: 16px;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm); padding: 9px 12px;
+  color: var(--text-primary); font: inherit; font-size: 14px;
+}
+.pg-input:focus-visible { outline: none; border-color: var(--accent-ring); box-shadow: 0 0 0 2px var(--accent-ring); }
 .pg-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .pg-pane-cancel { width: 100%; margin-top: 2px; }
 .pg-btn {
