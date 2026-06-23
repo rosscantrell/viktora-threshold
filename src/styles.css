@@ -1910,6 +1910,78 @@ code {
   margin-top: 16px;
 }
 
+/* Arrived receipts — a filled void with its evidence. Positive (green) accent. */
+.watching-arrived-section {
+  margin-bottom: 18px;
+}
+.watching-arrived-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.arrived-card {
+  border-left-color: rgba(93, 202, 165, 0.6);
+}
+.arrived-pill {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: #5dcaa5;
+}
+.arrived-quote {
+  margin: 2px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  color: var(--glass-text-dim);
+}
+.arrived-source {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+/* HITL controls on a void card — snooze / dismiss-with-reason. */
+.watching-actions,
+.watching-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--glass-border);
+}
+.watching-reasons::before {
+  content: "Dismiss as";
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.watching-action-btn {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.watching-action-btn:hover {
+  color: var(--glass-text);
+  background: var(--glass-surface);
+}
+.watching-action-cancel {
+  margin-left: auto;
+  border-color: transparent;
+}
+
 /* Edge callout — conflict (danger), resolution (success), else dim. */
 .record-edge {
   display: flex;

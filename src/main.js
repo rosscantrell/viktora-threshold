@@ -2188,6 +2188,26 @@ const VOID_TRIGGER_LABEL = {
 function vvIsNamedSlug(s) {
   return !!s && !/^speaker-\d+$/i.test(s) && !/^<?unknown>?$/i.test(s);
 }
+
+function vvActionBtn(label, onClick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "watching-action-btn";
+  b.textContent = label;
+  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+
+// Dismiss / snooze a void, then re-fetch so it drops off (or re-surfaces if a
+// re-surface condition holds). Reasons drive server-side calibration.
+async function vvVoidAction(cmd, args) {
+  try {
+    await tauri.core.invoke(cmd, args);
+  } catch (err) {
+    console.warn(`[main] ${cmd} failed:`, err);
+  }
+  enterWatchingView();
+}
 function vvHumanizeSlug(s) {
   return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
@@ -2252,6 +2272,75 @@ function renderVoidCard(v) {
     card.appendChild(t);
   }
 
+  // HITL controls: snooze, or dismiss with a reason. A dismiss re-surfaces later
+  // if the snooze elapses, it breaches its cadence, or it materially strengthens.
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  const reasons = document.createElement("div");
+  reasons.className = "watching-reasons";
+  reasons.hidden = true;
+
+  const snooze = vvActionBtn("Snooze 7d", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
+  const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
+  actions.append(snooze, dismiss);
+
+  for (const [reason, label] of [["handling-it", "Handling it"], ["not-watching", "Not watching"], ["not-real", "Not real"]]) {
+    reasons.appendChild(vvActionBtn(label, () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason })));
+  }
+  const cancel = vvActionBtn("Cancel", () => { reasons.hidden = true; actions.hidden = false; });
+  cancel.classList.add("watching-action-cancel");
+  reasons.appendChild(cancel);
+
+  card.append(actions, reasons);
+
+  return card;
+}
+
+// A receipt: a void the ingress magnet confirmed has arrived. Shows what we were
+// watching for + the citation-checked quote from the document that fulfilled it.
+function renderArrivedCard(v) {
+  const card = document.createElement("div");
+  card.className = "record-card watching-card arrived-card";
+  const ctx = v.context || { waitingOn: [] };
+  const fb = v.filledBy || {};
+
+  const meta = document.createElement("div");
+  meta.className = "watching-meta";
+  let when = "";
+  if (fb.filledAt) {
+    const d = new Date(fb.filledAt);
+    if (!Number.isNaN(d.getTime())) when = `<span class="watching-when">${d.toLocaleDateString()}</span>`;
+  }
+  meta.innerHTML = `<span class="watching-pill arrived-pill">ARRIVED</span>${when}`;
+  card.appendChild(meta);
+
+  // What we were watching for.
+  const headline = document.createElement("p");
+  headline.className = "watching-headline";
+  headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "An expected record arrived.");
+  card.appendChild(headline);
+
+  // The evidence — the citation-checked quote from the filling document.
+  if (fb.verbatim) {
+    const q = document.createElement("blockquote");
+    q.className = "arrived-quote";
+    q.textContent = `“${fb.verbatim}”`;
+    card.appendChild(q);
+  }
+  if (fb.documentId) {
+    const src = document.createElement("p");
+    src.className = "arrived-source";
+    src.textContent = `from ${fb.documentId}`;
+    card.appendChild(src);
+  }
+
+  // Clear the receipt once seen (acknowledge). A filled void can't re-surface, so
+  // a cleared receipt stays cleared for this viewer.
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  actions.appendChild(vvActionBtn("Clear", () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason: "acknowledged" })));
+  card.appendChild(actions);
+
   return card;
 }
 
@@ -2264,6 +2353,8 @@ async function enterWatchingView() {
   const listEl = document.getElementById("watching-list");
   const emptyEl = document.getElementById("watching-empty");
   const subEl = document.getElementById("watching-sub");
+  const arrivedSection = document.getElementById("watching-arrived-section");
+  const arrivedList = document.getElementById("watching-arrived-list");
 
   if (statusEl) {
     statusEl.hidden = false;
@@ -2271,6 +2362,8 @@ async function enterWatchingView() {
     statusEl.textContent = "Loading what you're watching for…";
   }
   if (listEl) listEl.innerHTML = "";
+  if (arrivedList) arrivedList.innerHTML = "";
+  if (arrivedSection) arrivedSection.hidden = true;
   if (emptyEl) emptyEl.hidden = true;
 
   let data;
@@ -2290,6 +2383,7 @@ async function enterWatchingView() {
   if (statusEl) statusEl.hidden = true;
 
   const voids = Array.isArray(data && data.voids) ? data.voids : [];
+  const arrived = Array.isArray(data && data.arrived) ? data.arrived : [];
   if (subEl) {
     subEl.textContent =
       voids.length > 0
@@ -2297,13 +2391,18 @@ async function enterWatchingView() {
         : "What you're expecting back";
   }
 
-  if (voids.length === 0) {
-    if (emptyEl) emptyEl.hidden = false;
-    return;
+  // Receipts first — what recently came back.
+  if (arrived.length && arrivedList && arrivedSection) {
+    for (const v of arrived) arrivedList.appendChild(renderArrivedCard(v));
+    arrivedSection.hidden = false;
   }
+
+  // Still-open voids.
   if (listEl) {
     for (const v of voids) listEl.appendChild(renderVoidCard(v));
   }
+  // Empty state only when there's nothing open AND nothing recently arrived.
+  if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
 }
 
 async function enterLogView() {

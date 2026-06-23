@@ -1919,6 +1919,74 @@ async fn fetch_vigilance_voids(
         .map_err(|e| format!("fetch_vigilance_voids: parse response failed: {e}"))
 }
 
+/// WP-VIGILANCE-VOID HITL — POST a dismiss/snooze/undo action for one void.
+/// Shared helper for the three thin commands below. Same auth + posture as the
+/// other vigilance calls; appends a per-(void, viewer) disposition server-side.
+async fn post_void_action(
+    state: &tauri::State<'_, AppState>,
+    void_id: &str,
+    action: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if void_id.trim().is_empty() {
+        return Err("post_void_action: empty void_id".into());
+    }
+    let cfg = current_config(state)?;
+    let encoded: String = url::form_urlencoded::byte_serialize(void_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/vigilance/voids/{}/{}",
+        cfg.base_url.trim_end_matches('/'),
+        encoded,
+        action
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("post_void_action: parse response failed: {e}"))
+}
+
+#[tauri::command]
+async fn dismiss_void(
+    state: tauri::State<'_, AppState>,
+    void_id: String,
+    reason: String,
+) -> Result<serde_json::Value, String> {
+    post_void_action(&state, &void_id, "dismiss", serde_json::json!({ "reason": reason })).await
+}
+
+#[tauri::command]
+async fn snooze_void(
+    state: tauri::State<'_, AppState>,
+    void_id: String,
+    days: f64,
+) -> Result<serde_json::Value, String> {
+    post_void_action(&state, &void_id, "snooze", serde_json::json!({ "days": days })).await
+}
+
+#[tauri::command]
+async fn undo_void(
+    state: tauri::State<'_, AppState>,
+    void_id: String,
+) -> Result<serde_json::Value, String> {
+    post_void_action(&state, &void_id, "undo", serde_json::json!({})).await
+}
+
 /// WP-THRESHOLD-LOG-UX (Connections / back-half) — the FULL decision-log
 /// payload. Identical to `fetch_decision_log` but appends `?full=1`, which the
 /// engine answers with the complete `records` (record + lifecycle + state) AND
@@ -6029,6 +6097,9 @@ pub fn run() {
             get_decision_log_summary,
             fetch_decision_log,
             fetch_vigilance_voids,
+            dismiss_void,
+            snooze_void,
+            undo_void,
             // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
             fetch_decision_log_full,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)

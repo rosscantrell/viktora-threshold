@@ -593,6 +593,13 @@
 
       <p class="log-status" id="watching-status" hidden></p>
 
+      <!-- Receipts: voids the ingress magnet confirmed have arrived (state
+           filled). Hidden when nothing has come back recently. -->
+      <section class="log-section watching-arrived-section" id="watching-arrived-section" hidden>
+        <h2 class="log-section-title watching-arrived-title">Arrived</h2>
+        <div class="log-attention-list" id="watching-arrived-list"></div>
+      </section>
+
       <section class="log-section" id="watching-section">
         <div class="log-attention-list" id="watching-list"></div>
         <p class="log-empty" id="watching-empty" hidden>
