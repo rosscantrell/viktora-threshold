@@ -2641,6 +2641,33 @@ async function enterLogView() {
       ownersSection.hidden = true;
     }
   }
+
+  // "Everything else" — reveal the grouped legacy sections + wire the collapsible
+  // (idempotent: the click handler binds once across re-renders).
+  const everySection = document.getElementById("log-everything-section");
+  const everyToggle = document.getElementById("log-everything-toggle");
+  const everyBody = document.getElementById("log-everything-body");
+  const everyCount = document.getElementById("log-everything-count");
+  if (everySection) everySection.hidden = false;
+  if (everyCount) {
+    const n = needsAttention.length + contradictions.length;
+    everyCount.textContent = n ? String(n) : "";
+  }
+  if (everyToggle && everyBody && !everyToggle.dataset.wired) {
+    everyToggle.dataset.wired = "1";
+    const caret = everyToggle.querySelector(".log-collapse-caret");
+    everyToggle.addEventListener("click", () => {
+      const open = everyBody.hidden; // about to open
+      everyBody.hidden = !open;
+      if (caret) caret.textContent = open ? "▾" : "▸";
+      everyToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (everySection) everySection.classList.toggle("log-collapsed", !open);
+    });
+  }
+
+  // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
+  // independently of the State-of-Play digest. Additive + silent if the flag's off.
+  loadTodayPriority();
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -2906,12 +2933,8 @@ function renderCorpusPanel(panel, data) {
   panel.appendChild(msg);
   // Phase B — inline digest edit (corpus altitude).
   attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
-  // WP-Priority-Operator — the "Focus" rail (importance × urgency), scoped to the
-  // viewer by the server. Additive + silent when the operator flag is off.
-  const priorityRail = document.createElement("div");
-  priorityRail.className = "priority-rail";
-  panel.appendChild(priorityRail);
-  loadPriorityRail(priorityRail);
+  // (WP-Priority-Operator — the Focus rail now lives on the Today surface, loaded
+  // independently of State-of-Play; see renderTodayPriority.)
 }
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
@@ -3039,28 +3062,70 @@ function renderInformCard(edge, mode) {
   return card;
 }
 
-// WP-Priority-Operator — the "Focus" rail (deterministic importance × urgency),
-// rendered on the corpus State-of-Play overview. Shows the viewer's ranked items
-// grouped by Eisenhower quadrant + a business-language `why` (packets, no slugs),
-// with pin/dismiss gestures that calibrate the per-user weight vector (passive —
-// never a rating task). Backed by GET /api/decision-log/priority via fetch_priority.
-// Additive + silent: the rail never becomes an error surface.
-async function loadPriorityRail(el) {
+// WP-Priority-Operator — the "Focus" surface (deterministic importance × urgency),
+// the top of the Today view. Splits the viewer's ranked items into collapsible
+// Focus (do-now / schedule / delegate — the act-on quadrants) and Watch (the
+// watch quadrant) sections, each card carrying a business-language `why` (packets,
+// no slugs) + pin/dismiss gestures that calibrate the per-user weight vector
+// (passive — never a rating task). Backed by GET /api/decision-log/priority via
+// fetch_priority. Additive + silent: never an error surface; loads on Today
+// independently of the State-of-Play digest.
+const QUADRANT_LABEL = { "do-now": "Do now", schedule: "Schedule", delegate: "Delegate", watch: "Watch" };
+const QUADRANT_ORDER = ["do-now", "schedule", "delegate", "watch"];
+const FOCUS_QUADRANTS = new Set(["do-now", "schedule", "delegate"]);
+const FOCUS_CAP = 15;
+const WATCH_CAP = 25;
+
+// Reusable collapsible section (header with caret + count, toggles its body).
+function makeCollapsible(title, count, defaultOpen) {
+  const section = document.createElement("section");
+  section.className = "log-collapse" + (defaultOpen ? "" : " log-collapsed");
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "log-collapse-head";
+  head.setAttribute("aria-expanded", defaultOpen ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = defaultOpen ? "▾" : "▸";
+  head.appendChild(caret);
+  const t = document.createElement("span");
+  t.className = "log-collapse-title";
+  t.textContent = title;
+  head.appendChild(t);
+  const c = document.createElement("span");
+  c.className = "log-collapse-count";
+  if (count != null) c.textContent = String(count);
+  head.appendChild(c);
+  const body = document.createElement("div");
+  body.className = "log-collapse-body";
+  if (!defaultOpen) body.hidden = true;
+  head.addEventListener("click", () => {
+    const open = body.hidden; // about to open
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    section.classList.toggle("log-collapsed", !open);
+  });
+  section.appendChild(head);
+  section.appendChild(body);
+  return { section, body };
+}
+
+async function loadTodayPriority() {
+  const container = document.getElementById("log-priority-sections");
+  if (container) container.innerHTML = "";
   let res;
   try {
     res = await tauri.core.invoke("fetch_priority");
   } catch (err) {
     console.warn("[main] fetch_priority failed:", err);
-    return; // silent — additive rail
+    return; // silent — additive
   }
   if (!res || res.available === false) return; // flag off / server too old
   const items = Array.isArray(res.items) ? res.items : [];
-  if (items.length === 0) return;
-  renderPriorityRail(el, res);
+  if (items.length === 0 || !container) return;
+  renderTodayPriority(container, res);
 }
-
-const QUADRANT_LABEL = { "do-now": "Do now", schedule: "Schedule", delegate: "Delegate", watch: "Watch" };
-const QUADRANT_ORDER = ["do-now", "schedule", "delegate", "watch"];
 
 async function sendPriorityGesture(item, gestureType) {
   try {
@@ -3078,23 +3143,25 @@ async function sendPriorityGesture(item, gestureType) {
   }
 }
 
-function renderPriorityRail(el, data) {
-  el.innerHTML = "";
+function renderTodayPriority(container, data) {
+  container.innerHTML = "";
   const items = data.items || [];
   const counts = data.quadrantCounts || {};
+  const tracked = items.filter((i) => i.tracked);
+  const trackedIds = new Set(tracked.map((i) => i.recordId));
 
-  const head = document.createElement("div");
-  head.className = "priority-head";
-  head.textContent = "Focus";
-  el.appendChild(head);
+  // ── Focus: the act-on quadrants (do-now / schedule / delegate), tracked first. ──
+  const focusAll = items.filter((i) => FOCUS_QUADRANTS.has(i.quadrant) && !trackedIds.has(i.recordId));
+  const focusCount = (counts["do-now"] || 0) + (counts["schedule"] || 0) + (counts["delegate"] || 0);
+  const focus = makeCollapsible("Focus", focusCount, true);
+
   const sub = document.createElement("div");
   sub.className = "priority-sub";
   sub.textContent = data.horizon
     ? `What matters most — for you, right now (as of ${data.horizon}).`
     : "What matters most — for you, right now.";
-  el.appendChild(sub);
+  focus.body.appendChild(sub);
 
-  // Quadrant summary chips.
   const chips = document.createElement("div");
   chips.className = "priority-quadrants";
   for (const q of QUADRANT_ORDER) {
@@ -3105,22 +3172,39 @@ function renderPriorityRail(el, data) {
     chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
     chips.appendChild(chip);
   }
-  el.appendChild(chips);
+  focus.body.appendChild(chips);
 
-  // Tracking section (pinned items) — Trisha's "track what matters" half.
-  const tracked = items.filter((i) => i.tracked);
   if (tracked.length) {
     const th = document.createElement("div");
     th.className = "priority-tracking-head";
     th.textContent = `Tracking · ${tracked.length}`;
-    el.appendChild(th);
-    for (const it of tracked) el.appendChild(renderPriorityCard(it, true));
+    focus.body.appendChild(th);
+    for (const it of tracked) focus.body.appendChild(renderPriorityCard(it, true));
   }
 
-  // The ranked list (top items first; cap to keep the rail scannable). Skip the
-  // already-tracked ones — they're shown above.
-  const ranked = items.filter((i) => !i.tracked).slice(0, 12);
-  for (const it of ranked) el.appendChild(renderPriorityCard(it, false));
+  const rankedFocus = focusAll.slice(0, FOCUS_CAP);
+  for (const it of rankedFocus) focus.body.appendChild(renderPriorityCard(it, false));
+  if (focusAll.length > rankedFocus.length) {
+    const more = document.createElement("div");
+    more.className = "priority-more";
+    more.textContent = `+ ${focusAll.length - rankedFocus.length} more in Focus`;
+    focus.body.appendChild(more);
+  }
+  container.appendChild(focus.section);
+
+  // ── Watch: the watch quadrant, collapsed by default (usually large). ──
+  const watchAll = items.filter((i) => i.quadrant === "watch" && !trackedIds.has(i.recordId));
+  if (watchAll.length) {
+    const watch = makeCollapsible("Watch", counts["watch"] || watchAll.length, false);
+    for (const it of watchAll.slice(0, WATCH_CAP)) watch.body.appendChild(renderPriorityCard(it, false));
+    if (watchAll.length > WATCH_CAP) {
+      const more = document.createElement("div");
+      more.className = "priority-more";
+      more.textContent = `+ ${watchAll.length - WATCH_CAP} more in Watch`;
+      watch.body.appendChild(more);
+    }
+    container.appendChild(watch.section);
+  }
 }
 
 function renderPriorityCard(item, isTracked) {

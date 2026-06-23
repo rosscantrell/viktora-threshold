@@ -564,22 +564,38 @@
         <!-- open / resolved / superseded count pills rendered by main.js -->
       </div>
 
-      <section class="log-section" id="log-attention-section">
-        <h2 class="log-section-title">Needs attention</h2>
-        <div class="log-attention-list" id="log-attention-list"></div>
-        <p class="log-empty" id="log-attention-empty" hidden>
-          Nothing overdue and silent. You're on top of it.
-        </p>
-      </section>
+      <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
+           from GET /api/decision-log/priority (loaded on Today, independent of
+           the State-of-Play button). main.js fills these via renderTodayPriority. -->
+      <div id="log-priority-sections"></div>
 
-      <section class="log-section" id="log-contradictions-section" hidden>
-        <h2 class="log-section-title">Conflicts</h2>
-        <div class="log-contradictions-list" id="log-contradictions-list"></div>
-      </section>
+      <!-- "Everything else" — the prior Today content (needs-attention, conflicts,
+           workload), grouped under one collapsible. -->
+      <section class="log-collapse" id="log-everything-section" hidden>
+        <button type="button" class="log-collapse-head" id="log-everything-toggle" aria-expanded="true">
+          <span class="log-collapse-caret">▾</span>
+          <span class="log-collapse-title">Everything else</span>
+          <span class="log-collapse-count" id="log-everything-count"></span>
+        </button>
+        <div class="log-collapse-body" id="log-everything-body">
+          <section class="log-section" id="log-attention-section">
+            <h2 class="log-section-title">Needs attention</h2>
+            <div class="log-attention-list" id="log-attention-list"></div>
+            <p class="log-empty" id="log-attention-empty" hidden>
+              Nothing overdue and silent. You're on top of it.
+            </p>
+          </section>
 
-      <section class="log-section" id="log-owners-section" hidden>
-        <h2 class="log-section-title">Workload</h2>
-        <div class="log-owners-strip" id="log-owners-strip"></div>
+          <section class="log-section" id="log-contradictions-section" hidden>
+            <h2 class="log-section-title">Conflicts</h2>
+            <div class="log-contradictions-list" id="log-contradictions-list"></div>
+          </section>
+
+          <section class="log-section" id="log-owners-section" hidden>
+            <h2 class="log-section-title">Workload</h2>
+            <div class="log-owners-strip" id="log-owners-strip"></div>
+          </section>
+        </div>
       </section>
 
       <p class="log-status" id="log-status" hidden></p>

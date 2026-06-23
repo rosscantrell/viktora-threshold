@@ -398,6 +398,48 @@ body {
 .priority-dismiss:hover {
   color: var(--glass-text);
 }
+.priority-more {
+  font-size: 11.5px;
+  color: var(--glass-text-faint);
+  padding: 4px 2px 2px;
+}
+
+/* WP-Priority-Operator — collapsible Today sections (Focus / Watch / Everything else). */
+.log-collapse {
+  margin: 0 0 18px;
+}
+.log-collapse-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 6px 0;
+  cursor: pointer;
+  text-align: left;
+}
+.log-collapse-caret {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  width: 12px;
+}
+.log-collapse-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--glass-text);
+}
+.log-collapse-count {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.log-collapse-body {
+  padding-top: 8px;
+}
 
 /* TYPED-DIFF-CAPTURE Phase 1 — inline edit controls on the per-person digest. */
 .sop-edit-section {
