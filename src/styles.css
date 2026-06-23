@@ -1793,6 +1793,195 @@ code {
   color: var(--glass-accent);
 }
 
+/* ── WP-VIGILANCE-VOID — "Watching for…" cards ── */
+.watching-card {
+  gap: 6px;
+  padding: 11px 14px;
+  border-left: 2px solid var(--glass-accent);
+}
+/* An honestly-unnamed void (no attributable sender) reads lower-emphasis. */
+.watching-card[data-license="INTERPRET"] {
+  border-left-color: var(--glass-border);
+}
+
+/* Compact meta row: pill + cadence, at the top. */
+.watching-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+.watching-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--glass-text);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.watching-when {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+/* Headline — what the void is about. */
+.watching-headline {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--glass-text);
+  word-break: break-word;
+}
+
+/* "Waiting on" block — the concrete enabling records. */
+.watching-waiting {
+  margin-top: 1px;
+}
+.watching-waiting-label {
+  margin: 0 0 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.watching-waiting-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.watching-waiting-item {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text-dim);
+  padding-left: 10px;
+  border-left: 1px solid var(--glass-border);
+}
+.watching-waiting-owner {
+  color: var(--glass-text);
+  font-weight: 500;
+}
+.watching-waiting-due {
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+}
+.watching-topical {
+  margin: 1px 0 0;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  font-style: italic;
+}
+
+/* Refresh / Main — the watching view needs the same compact glass buttons the
+   log view scopes (otherwise they fall back to the bulky generic .btn). */
+.view-watching #btn-watching-refresh,
+.view-watching #btn-watching-home {
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border-strong);
+  color: var(--glass-text);
+  border-radius: var(--glass-radius-sm);
+  white-space: nowrap;
+}
+.view-watching #btn-watching-refresh:hover,
+.view-watching #btn-watching-home:hover {
+  background: var(--glass-surface-hover);
+}
+
+/* Breathing room — header off the first card, a touch more between cards, and
+   the footer off the last card. Scoped so the Today view is untouched. */
+.view-watching .log-header {
+  margin-bottom: 16px;
+}
+.view-watching .log-attention-list {
+  gap: 10px;
+}
+.view-watching .log-footer {
+  margin-top: 16px;
+}
+
+/* Arrived receipts — a filled void with its evidence. Positive (green) accent. */
+.watching-arrived-section {
+  margin-bottom: 18px;
+}
+.watching-arrived-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.arrived-card {
+  border-left-color: rgba(93, 202, 165, 0.6);
+}
+.arrived-pill {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: #5dcaa5;
+}
+.arrived-quote {
+  margin: 2px 0 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  color: var(--glass-text-dim);
+}
+.arrived-source {
+  margin: 5px 0 0;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+/* HITL controls on a void card — snooze / dismiss-with-reason. */
+.watching-actions,
+.watching-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--glass-border);
+}
+.watching-reasons::before {
+  content: "Dismiss as";
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.watching-action-btn {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.watching-action-btn:hover {
+  color: var(--glass-text);
+  background: var(--glass-surface);
+}
+.watching-action-cancel {
+  margin-left: auto;
+  border-color: transparent;
+}
+
 /* Edge callout — conflict (danger), resolution (success), else dim. */
 .record-edge {
   display: flex;

@@ -95,6 +95,8 @@ const VIEWS = [
   "view-onenote-browse",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-VIGILANCE-VOID — "Watching for…" vigilance-void surface
+  "view-watching",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
   "view-receipts",
   // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
@@ -140,6 +142,7 @@ function showView(id) {
 const NAV_DEST_FNS = {
   main: () => goHome(),
   today: () => enterLogView(),
+  watching: () => enterWatchingView(),
   log: () => enterDecisionsView(undefined, { from: "home" }),
   edges: () => enterEdgesView(),
   settings: () => enterStandaloneConfigure(),
@@ -2164,6 +2167,244 @@ if (postcaptureLogBtn) {
  * contradictions, state counts, owner load. Handles the empty log and a
  * server-unreachable error without leaving a blank screen.
  */
+// ───────── WP-VIGILANCE-VOID — "Watching for…" surface ─────────
+//
+// Read-only list of OPEN voids (GET /api/vigilance/voids via fetch_vigilance_voids):
+// records we're expecting back — an enabling record for a blocked dependency, a
+// reconciliation of a conflict, closing evidence on an overdue commitment, or a
+// reply to something sent. Server-rendered `render` string is the source of truth
+// for the card line; we add a trigger pill, a ~Nd cadence, and (when known) the
+// named senders. A void with no attributable sender (license INTERPRET) is shown
+// honestly unnamed. Fills are detected server-side at ingestion; a filled void
+// simply drops off this list, so Refresh is the "did it arrive?" gesture in v1.
+
+const VOID_TRIGGER_LABEL = {
+  egress: "Awaiting reply",
+  "contradicts-unresolved": "Needs reconciliation",
+  "depends-on-incomplete": "Blocked dependency",
+  "overdue-silent": "Overdue · silent",
+};
+
+function vvIsNamedSlug(s) {
+  return !!s && !/^speaker-\d+$/i.test(s) && !/^<?unknown>?$/i.test(s);
+}
+
+function vvActionBtn(label, onClick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "watching-action-btn";
+  b.textContent = label;
+  b.addEventListener("click", (e) => { e.stopPropagation(); onClick(); });
+  return b;
+}
+
+// Dismiss / snooze a void, then re-fetch so it drops off (or re-surfaces if a
+// re-surface condition holds). Reasons drive server-side calibration.
+async function vvVoidAction(cmd, args) {
+  try {
+    await tauri.core.invoke(cmd, args);
+  } catch (err) {
+    console.warn(`[main] ${cmd} failed:`, err);
+  }
+  enterWatchingView();
+}
+function vvHumanizeSlug(s) {
+  return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
+function renderVoidCard(v) {
+  const card = document.createElement("div");
+  card.className = "record-card watching-card";
+  card.dataset.license = v.license || "";
+  const ctx = v.context || { waitingOn: [] };
+  const waitingOn = Array.isArray(ctx.waitingOn) ? ctx.waitingOn : [];
+
+  // Compact meta row at the TOP: trigger pill + cadence.
+  const meta = document.createElement("div");
+  meta.className = "watching-meta";
+  const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  let metaHtml = `<span class="watching-pill">${escapeHtml(label)}</span>`;
+  if (typeof v.whenDays === "number") {
+    metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
+  }
+  meta.innerHTML = metaHtml;
+  card.appendChild(meta);
+
+  // Headline: what this is actually about (the present/blocked record), or the
+  // server's one-line render when there's no record context (e.g. a sent digest).
+  const headline = document.createElement("p");
+  headline.className = "watching-headline";
+  headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "Watching for a record.");
+  card.appendChild(headline);
+
+  // Waiting on: the concrete enabling records (or the contradicting counterpart).
+  if (waitingOn.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "watching-waiting";
+    const lab = document.createElement("p");
+    lab.className = "watching-waiting-label";
+    lab.textContent = v.trigger === "contradicts-unresolved" ? "Conflicts with" : "Waiting on";
+    wrap.appendChild(lab);
+    const ul = document.createElement("ul");
+    ul.className = "watching-waiting-list";
+    for (const w of waitingOn) {
+      const li = document.createElement("li");
+      li.className = "watching-waiting-item";
+      // Name the owner only when attributable (not an unresolved speaker-N); the
+      // summary text itself usually names the person anyway.
+      const owner = vvIsNamedSlug(w.owner)
+        ? `<span class="watching-waiting-owner">${escapeHtml(vvHumanizeSlug(w.owner))}</span> — `
+        : "";
+      const due = w.due ? `<span class="watching-waiting-due"> · due ${escapeHtml(w.due)}</span>` : "";
+      li.innerHTML = `${owner}<span class="watching-waiting-text">${escapeHtml(w.summary)}</span>${due}`;
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+    card.appendChild(wrap);
+  }
+
+  // Unnamed void (no attributable sender): surface topical neighbours dimmed and
+  // clearly labelled — never as "from" (mirrors the server's structural/topical split).
+  if (Array.isArray(v.whoTopical) && v.whoTopical.length && (!v.who || !v.who.length)) {
+    const t = document.createElement("p");
+    t.className = "watching-topical";
+    t.textContent = `possibly related: ${v.whoTopical.join(", ")}`;
+    card.appendChild(t);
+  }
+
+  // HITL controls: snooze, or dismiss with a reason. A dismiss re-surfaces later
+  // if the snooze elapses, it breaches its cadence, or it materially strengthens.
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  const reasons = document.createElement("div");
+  reasons.className = "watching-reasons";
+  reasons.hidden = true;
+
+  const snooze = vvActionBtn("Snooze 7d", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
+  const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
+  actions.append(snooze, dismiss);
+
+  for (const [reason, label] of [["handling-it", "Handling it"], ["not-watching", "Not watching"], ["not-real", "Not real"]]) {
+    reasons.appendChild(vvActionBtn(label, () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason })));
+  }
+  const cancel = vvActionBtn("Cancel", () => { reasons.hidden = true; actions.hidden = false; });
+  cancel.classList.add("watching-action-cancel");
+  reasons.appendChild(cancel);
+
+  card.append(actions, reasons);
+
+  return card;
+}
+
+// A receipt: a void the ingress magnet confirmed has arrived. Shows what we were
+// watching for + the citation-checked quote from the document that fulfilled it.
+function renderArrivedCard(v) {
+  const card = document.createElement("div");
+  card.className = "record-card watching-card arrived-card";
+  const ctx = v.context || { waitingOn: [] };
+  const fb = v.filledBy || {};
+
+  const meta = document.createElement("div");
+  meta.className = "watching-meta";
+  let when = "";
+  if (fb.filledAt) {
+    const d = new Date(fb.filledAt);
+    if (!Number.isNaN(d.getTime())) when = `<span class="watching-when">${d.toLocaleDateString()}</span>`;
+  }
+  meta.innerHTML = `<span class="watching-pill arrived-pill">ARRIVED</span>${when}`;
+  card.appendChild(meta);
+
+  // What we were watching for.
+  const headline = document.createElement("p");
+  headline.className = "watching-headline";
+  headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "An expected record arrived.");
+  card.appendChild(headline);
+
+  // The evidence — the citation-checked quote from the filling document.
+  if (fb.verbatim) {
+    const q = document.createElement("blockquote");
+    q.className = "arrived-quote";
+    q.textContent = `“${fb.verbatim}”`;
+    card.appendChild(q);
+  }
+  if (fb.documentId) {
+    const src = document.createElement("p");
+    src.className = "arrived-source";
+    src.textContent = `from ${fb.documentId}`;
+    card.appendChild(src);
+  }
+
+  // Clear the receipt once seen (acknowledge). A filled void can't re-surface, so
+  // a cleared receipt stays cleared for this viewer.
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  actions.appendChild(vvActionBtn("Clear", () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason: "acknowledged" })));
+  card.appendChild(actions);
+
+  return card;
+}
+
+async function enterWatchingView() {
+  state.inWizard = false;
+  showView("view-watching");
+  setNav([{ label: "Watching" }], { active: "watching", back: () => goHome() });
+
+  const statusEl = document.getElementById("watching-status");
+  const listEl = document.getElementById("watching-list");
+  const emptyEl = document.getElementById("watching-empty");
+  const subEl = document.getElementById("watching-sub");
+  const arrivedSection = document.getElementById("watching-arrived-section");
+  const arrivedList = document.getElementById("watching-arrived-list");
+
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading what you're watching for…";
+  }
+  if (listEl) listEl.innerHTML = "";
+  if (arrivedList) arrivedList.innerHTML = "";
+  if (arrivedSection) arrivedSection.hidden = true;
+  if (emptyEl) emptyEl.hidden = true;
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_vigilance_voids");
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
+    }
+    return;
+  }
+
+  if (statusEl) statusEl.hidden = true;
+
+  const voids = Array.isArray(data && data.voids) ? data.voids : [];
+  const arrived = Array.isArray(data && data.arrived) ? data.arrived : [];
+  if (subEl) {
+    subEl.textContent =
+      voids.length > 0
+        ? `${voids.length} ${voids.length === 1 ? "thing" : "things"} you're expecting back`
+        : "What you're expecting back";
+  }
+
+  // Receipts first — what recently came back.
+  if (arrived.length && arrivedList && arrivedSection) {
+    for (const v of arrived) arrivedList.appendChild(renderArrivedCard(v));
+    arrivedSection.hidden = false;
+  }
+
+  // Still-open voids.
+  if (listEl) {
+    for (const v of voids) listEl.appendChild(renderVoidCard(v));
+  }
+  // Empty state only when there's nothing open AND nothing recently arrived.
+  if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
+}
+
 async function enterLogView() {
   state.inWizard = false;
   showView("view-log");
@@ -2502,6 +2743,14 @@ const logRefreshBtn = document.getElementById("btn-log-refresh");
 if (logRefreshBtn) {
   logRefreshBtn.addEventListener("click", () => {
     enterLogView();
+  });
+}
+
+// WP-VIGILANCE-VOID — Refresh on the Watching surface re-fetches open voids.
+const watchingRefreshBtn = document.getElementById("btn-watching-refresh");
+if (watchingRefreshBtn) {
+  watchingRefreshBtn.addEventListener("click", () => {
+    enterWatchingView();
   });
 }
 
@@ -4322,7 +4571,7 @@ const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
 if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
 
 // ⌂ Main — shared back-to-home on every sub-view footer (WP-DECISION-ORG nav).
-for (const id of ["btn-log-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
+for (const id of ["btn-log-home", "btn-watching-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
   const b = document.getElementById(id);
   if (b) b.addEventListener("click", () => goHome());
 }
