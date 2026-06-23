@@ -3127,7 +3127,7 @@ async function loadTodayPriority() {
   renderTodayPriority(container, res);
 }
 
-async function sendPriorityGesture(item, gestureType, reason) {
+async function sendPriorityGesture(item, gestureType, reason, snoozeUntil) {
   try {
     await tauri.core.invoke("post_priority_gesture", {
       gestureType,
@@ -3135,6 +3135,7 @@ async function sendPriorityGesture(item, gestureType, reason) {
       relationship: item.relationship || null,
       owner: item.owner || null,
       reason: reason || null,
+      snoozeUntil: snoozeUntil || null,
       // Denormalized context SNAPSHOT — the at-the-moment values, so the offline
       // training join needs no re-derive against an aging corpus.
       context: {
@@ -3163,6 +3164,30 @@ const PRIORITY_DISMISS_REASONS = [
   { reason: "already-known", label: "Already knew" },
   { reason: "closing-out", label: "Handled" },
 ];
+
+// Snooze presets (wall-clock; the item resurfaces in Focus on that date).
+function isoDatePlusDays(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+const SNOOZE_PRESETS = [
+  { label: "Tomorrow", days: 1 },
+  { label: "Next week", days: 7 },
+  { label: "In a month", days: 30 },
+];
+
+// A copy-ready hand-off note for the Delegate action — drafts the ask; you send it.
+function buildHandoffNote(item) {
+  const bits = [];
+  if (item.relationship === "client") bits.push("client-facing");
+  else if (item.relationship === "partner") bits.push("external-facing");
+  const why = (item.why || "").replace(/^This needs attention now — /i, "").replace(/\.$/, "");
+  if (why) bits.push(why);
+  const tail = bits.length ? ` (${bits.join("; ")})` : "";
+  const owner = item.owner ? ` — currently with ${prettySlug(item.owner)}` : "";
+  return `Can you take point on this: "${item.summary || "this item"}"${tail}.${owner}`;
+}
 
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
@@ -3294,7 +3319,8 @@ function renderPriorityCard(item, isTracked) {
   const actions = document.createElement("div");
   actions.className = "priority-actions";
 
-  // Default actions: Track (pin) + Not now (opens the reason chooser).
+  // Default actions: Track (pin) · Snooze (schedule for later) · Hand off
+  // (delegate) · Not now (dismiss, opens the reason chooser).
   const buildDefaultActions = () => {
     actions.innerHTML = "";
     const track = document.createElement("button");
@@ -3309,12 +3335,72 @@ function renderPriorityCard(item, isTracked) {
       else track.disabled = false;
     });
     actions.appendChild(track);
+
+    // Snooze — "Schedule for later": opens the date chooser.
+    const snooze = document.createElement("button");
+    snooze.type = "button";
+    snooze.className = "priority-reason";
+    snooze.textContent = "Snooze";
+    snooze.addEventListener("click", buildSnoozeChooser);
+    actions.appendChild(snooze);
+
+    // Hand off — "Delegate": copy a ready-to-send note, then it leaves Focus.
+    const handoff = document.createElement("button");
+    handoff.type = "button";
+    handoff.className = "priority-reason";
+    handoff.textContent = "Hand off";
+    handoff.addEventListener("click", async () => {
+      handoff.disabled = true;
+      try { await tauri.core.invoke("copy_text", { text: buildHandoffNote(item) }); }
+      catch (e) { /* clipboard best-effort */ }
+      const ok = await sendPriorityGesture(item, "handoff");
+      if (ok) { showToast({ kind: "success", title: "Copied to hand off", body: "Paste into email or chat." }); card.remove(); }
+      else handoff.disabled = false;
+    });
+    actions.appendChild(handoff);
+
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "priority-dismiss";
     dismiss.textContent = "Not now";
     dismiss.addEventListener("click", buildReasonChooser);
     actions.appendChild(dismiss);
+  };
+
+  // Snooze chooser — presets + a custom date input. Sends a snooze gesture with
+  // the resurface date; the card leaves Focus until then.
+  const buildSnoozeChooser = () => {
+    actions.innerHTML = "";
+    const q = document.createElement("span");
+    q.className = "priority-dismiss-q";
+    q.textContent = "Until?";
+    actions.appendChild(q);
+    const doSnooze = async (iso) => {
+      for (const c of actions.querySelectorAll("button, input")) c.disabled = true;
+      const ok = await sendPriorityGesture(item, "snooze", null, iso);
+      if (ok) { showToast({ kind: "success", title: "Snoozed", body: `Back in Focus on ${iso}.` }); card.remove(); }
+      else buildDefaultActions();
+    };
+    for (const p of SNOOZE_PRESETS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "priority-reason";
+      b.textContent = p.label;
+      b.addEventListener("click", () => doSnooze(isoDatePlusDays(p.days)));
+      actions.appendChild(b);
+    }
+    const picker = document.createElement("input");
+    picker.type = "date";
+    picker.className = "priority-date";
+    picker.min = isoDatePlusDays(1);
+    picker.addEventListener("change", () => { if (picker.value) doSnooze(picker.value); });
+    actions.appendChild(picker);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    actions.appendChild(cancel);
   };
 
   // "Why?" — one extra tap that captures the dismiss REASON (the class decides
