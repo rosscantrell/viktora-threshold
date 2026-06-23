@@ -3769,6 +3769,187 @@ function deadlineBucket(due) {
  * — catch-all groups (Other / Unassigned / No due date) sort last and render
  * muted so the real organization leads.
  */
+/* ───── WP-Threshold-Grouping-Canonicalization — Combine UI ─────
+ * Hangs off the project-lens group headers in the Decisions view. Calls the
+ * project_canon_* Tauri commands; on success re-enters enterDecisionsView so
+ * the backend-canonicalized /api/data re-renders the merged groups. Product
+ * language only (no "canonical/alias/substrate" leakage). */
+
+function pgOverlay() {
+  const o = document.createElement("div");
+  o.className = "pg-overlay";
+  o.addEventListener("click", (e) => { if (e.target === o) pgClose(o); });
+  return o;
+}
+function pgClose(o) { if (o && o.parentNode) o.parentNode.removeChild(o); }
+function pgToast(msg) {
+  const t = document.createElement("div");
+  t.className = "pg-toast";
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
+}
+
+/** The stale-guard the mutations must echo. null when grouping is unavailable. */
+async function projectCanonFingerprint() {
+  try {
+    const res = await tauri.core.invoke("fetch_project_canon");
+    if (!res || res.available === false) return null;
+    return typeof res.substrateFingerprint === "string" ? res.substrateFingerprint : null;
+  } catch (err) {
+    console.warn("[main] fetch_project_canon failed:", err);
+    return null;
+  }
+}
+
+/** "Combine with…" affordance for a project-lens group header. */
+function buildProjectGroupActions(grp, allGroups) {
+  const wrap = document.createElement("div");
+  wrap.className = "pg-actions";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "pg-action-btn";
+  btn.textContent = "Combine with…";
+  btn.title = `Combine “${grp.label}” into another project`;
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openCombinePane(grp, allGroups);
+  });
+  wrap.appendChild(btn);
+  return wrap;
+}
+
+function projectGroupOthers(grp, allGroups) {
+  return allGroups.filter((g) => g.key !== grp.key && !g.muted && g.key !== PROJECT_OTHER);
+}
+
+/** Pane listing the other projects to combine the source group into. */
+function openCombinePane(grp, allGroups) {
+  const others = projectGroupOthers(grp, allGroups);
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane";
+
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = `Combine “${grp.label}” with…`;
+  pane.appendChild(title);
+
+  const sub = document.createElement("div");
+  sub.className = "pg-pane-sub";
+  sub.textContent = "Pick the project it should join. They'll show as one group everywhere.";
+  pane.appendChild(sub);
+
+  const list = document.createElement("div");
+  list.className = "pg-pane-list";
+  if (!others.length) {
+    const empty = document.createElement("div");
+    empty.className = "pg-pane-empty";
+    empty.textContent = "No other projects to combine with yet.";
+    list.appendChild(empty);
+  }
+  for (const o of others) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "pg-pane-row";
+    const nm = document.createElement("span");
+    nm.className = "pg-pane-row-name";
+    nm.textContent = o.label;
+    const ct = document.createElement("span");
+    ct.className = "pg-pane-row-count";
+    ct.textContent = `${o.items.length}`;
+    row.appendChild(nm);
+    row.appendChild(ct);
+    row.addEventListener("click", () => { pgClose(overlay); confirmCombine(grp, o, {}); });
+    list.appendChild(row);
+  }
+  pane.appendChild(list);
+
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost pg-pane-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  pane.appendChild(cancel);
+
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+/** §7a confirm-with-explainer. opts.contested → "combine anyway?" + override. */
+function confirmCombine(sourceGrp, targetGrp, opts) {
+  const contested = !!(opts && opts.contested);
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = contested ? "These look like separate efforts" : "Combine these projects?";
+  pane.appendChild(title);
+
+  const body = document.createElement("div");
+  body.className = "pg-confirm-body";
+  body.textContent = contested
+    ? `“${sourceGrp.label}” and “${targetGrp.label}” come up together a lot, which usually means related but separate efforts. Combine anyway?`
+    : `Documents in “${sourceGrp.label}” and “${targetGrp.label}” will show as one project — “${targetGrp.label}” — everywhere. Nothing is deleted; you can split them back anytime.`;
+  pane.appendChild(body);
+
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = contested ? "Keep separate" : "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = contested ? "Combine anyway" : "Combine";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Combining…";
+    await runCombine(sourceGrp, targetGrp, contested, overlay);
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+async function runCombine(sourceGrp, targetGrp, override, overlay) {
+  const fp = await projectCanonFingerprint();
+  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  let actor = "threshold-user";
+  try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
+  let res;
+  try {
+    res = await tauri.core.invoke("project_canon_merge", {
+      sources: [sourceGrp.key],
+      targetCanonical: targetGrp.key,
+      expectedSubstrateFingerprint: fp,
+      actor,
+      overrideVeto: override,
+    });
+  } catch (err) {
+    console.warn("[main] project_canon_merge failed:", err);
+    pgClose(overlay);
+    pgToast("Groupings changed since you opened this — refreshing.");
+    enterDecisionsView();
+    return;
+  }
+  if (res && res.disposition === "contested" && !override) {
+    pgClose(overlay);
+    confirmCombine(sourceGrp, targetGrp, { contested: true });
+    return;
+  }
+  pgClose(overlay);
+  pgToast(`Combined into “${targetGrp.label}”.`);
+  enterDecisionsView();
+}
+
 function groupRecords(items, lens, docProjects, aliases) {
   const g = new Map();
   // Resolve a slug to its canonical form so duplicate subjects collapse into one
@@ -4463,7 +4644,16 @@ function renderDecisions() {
       else _decisionsExpanded.delete(grp.key);
     });
 
-    groupEl.appendChild(head);
+    // WP-Threshold-Grouping-Canonicalization — project-lens groups get a
+    // "Combine with…" affordance beside the header (sibling, never nested in the
+    // header <button>). Tap-to-filter on chips is untouched.
+    const headRow = document.createElement("div");
+    headRow.className = "decisions-group-head-row";
+    headRow.appendChild(head);
+    if (_decisionsLens === "project" && !grp.muted) {
+      headRow.appendChild(buildProjectGroupActions(grp, ordered));
+    }
+    groupEl.appendChild(headRow);
     groupEl.appendChild(body);
     listEl.appendChild(groupEl);
   }

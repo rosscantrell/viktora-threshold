@@ -2575,6 +2575,154 @@ async fn fetch_inform_edges(
         .map_err(|e| format!("fetch_inform_edges: parse response failed: {e}"))
 }
 
+// ── WP-Threshold-Grouping-Canonicalization — project-grouping canon client ──
+// Combine / Split / Rename of project groupings as SHARED identity resolution
+// (propose → deterministic dispose). Proxies the schema-browser
+// /api/project-canon/* endpoints. Mirrors fetch_inform_edges: base_url + bearer
+// from current_config; 404/503 → {available:false}. The schema-browser owns the
+// store + sibling-veto dispose + read-time canon (applied to /api/data already).
+
+/// GET /api/project-canon → `{ canonicals, toCanonical, substrateFingerprint }`.
+/// The client echoes `substrateFingerprint` on every mutation (stale-guard).
+#[tauri::command]
+async fn fetch_project_canon(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/project-canon", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_project_canon: parse response failed: {e}"))
+}
+
+/// Shared POST helper for the three mutations. Returns the parsed 2xx JSON body
+/// (carrying `disposition: applied|contested|override-applied` + optional
+/// `vetoSignal`). Non-2xx (400 missing-fingerprint, 409 stale-fingerprint, 503
+/// flag-off) → Err via plaud_status_error so the caller can prompt a refresh.
+async fn project_canon_post(
+    cfg: &AppConfig,
+    path: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "{}/api/project-canon/{}",
+        cfg.base_url.trim_end_matches('/'),
+        path
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("project_canon_post({path}): parse response failed: {e}"))
+}
+
+/// POST /api/project-canon/merge. `override_veto=false` first; if the response
+/// `disposition` is `contested`, the UI re-invokes with `override_veto=true`.
+#[tauri::command]
+async fn project_canon_merge(
+    state: tauri::State<'_, AppState>,
+    sources: Vec<String>,
+    target_canonical: String,
+    expected_substrate_fingerprint: String,
+    actor: String,
+    override_veto: bool,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    project_canon_post(
+        &cfg,
+        "merge",
+        serde_json::json!({
+            "sources": sources,
+            "targetCanonical": target_canonical,
+            "expectedSubstrateFingerprint": expected_substrate_fingerprint,
+            "actor": actor,
+            "overrideVeto": override_veto,
+        }),
+    )
+    .await
+}
+
+/// POST /api/project-canon/rename — relabel a canonical (no veto; display only).
+#[tauri::command]
+async fn project_canon_rename(
+    state: tauri::State<'_, AppState>,
+    canonical_id: String,
+    new_label: String,
+    expected_substrate_fingerprint: String,
+    actor: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    project_canon_post(
+        &cfg,
+        "rename",
+        serde_json::json!({
+            "canonicalId": canonical_id,
+            "newLabel": new_label,
+            "expectedSubstrateFingerprint": expected_substrate_fingerprint,
+            "actor": actor,
+        }),
+    )
+    .await
+}
+
+/// POST /api/project-canon/unmerge — Split-back: reverse a prior Combine.
+#[tauri::command]
+async fn project_canon_unmerge(
+    state: tauri::State<'_, AppState>,
+    canonical_id: String,
+    restore: Vec<String>,
+    expected_substrate_fingerprint: String,
+    actor: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    project_canon_post(
+        &cfg,
+        "unmerge",
+        serde_json::json!({
+            "canonicalId": canonical_id,
+            "restore": restore,
+            "expectedSubstrateFingerprint": expected_substrate_fingerprint,
+            "actor": actor,
+        }),
+    )
+    .await
+}
+
 /// WP-THRESHOLD-STATE-OF-PLAY — project altitude: returns the team-addressed
 /// digest AND the per-teammate digests scoped to one project. `polish=false`
 /// (`?team=text`) yields the instant deterministic team email; default polishes
@@ -6124,6 +6272,11 @@ pub fn run() {
             fetch_project_state_of_play,
             // WP-Cohesion-Operators — INFORM ("worth looping in")
             fetch_inform_edges,
+            // WP-Threshold-Grouping-Canonicalization — project-grouping canon (Combine/Split/Rename)
+            fetch_project_canon,
+            project_canon_merge,
+            project_canon_rename,
+            project_canon_unmerge,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,

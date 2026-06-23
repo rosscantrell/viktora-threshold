@@ -3706,3 +3706,64 @@ button.rec-source {
 .source-panel-action:hover { color: var(--text-primary); background: var(--glass-border); }
 .source-panel-action:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
 .source-panel-action svg { display: block; }
+
+/* ───────── WP-Threshold-Grouping-Canonicalization — Combine UI ───────── */
+.decisions-group-head-row { display: flex; align-items: center; gap: 8px; }
+.decisions-group-head-row .decisions-group-title { flex: 1 1 auto; min-width: 0; }
+.pg-actions { flex: 0 0 auto; padding-right: 6px; }
+.pg-action-btn {
+  appearance: none; border: 1px solid var(--border-subtle); background: transparent;
+  color: var(--text-secondary); font: inherit; font-size: 12px; padding: 4px 10px;
+  border-radius: var(--radius-pill); cursor: pointer; white-space: nowrap;
+  opacity: 0; transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.decisions-group:hover .pg-action-btn, .pg-action-btn:focus-visible { opacity: 1; }
+.pg-action-btn:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.pg-action-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); opacity: 1; }
+
+.pg-overlay {
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center;
+  justify-content: center; background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); padding: 24px;
+}
+.pg-pane {
+  width: 100%; max-width: 380px; max-height: 80vh; overflow-y: auto;
+  background: var(--bg-base); background-image: var(--bg-gradient);
+  backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5); padding: 18px;
+}
+.pg-pane-title { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.pg-pane-sub { font-size: 12.5px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.4; }
+.pg-pane-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.pg-pane-empty { font-size: 13px; color: var(--text-tertiary); padding: 10px 4px; }
+.pg-pane-row {
+  appearance: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; text-align: left; font: inherit; background: transparent;
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+  padding: 9px 12px; cursor: pointer; color: var(--text-primary);
+}
+.pg-pane-row:hover { background: var(--accent-soft); border-color: var(--accent-ring); }
+.pg-pane-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.pg-pane-row-name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-pane-row-count { font-size: 12px; color: var(--text-tertiary); flex: 0 0 auto; }
+.pg-confirm-body { font-size: 13.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 16px; }
+.pg-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.pg-pane-cancel { width: 100%; margin-top: 2px; }
+.pg-btn {
+  appearance: none; font: inherit; font-size: 13px; font-weight: 500; padding: 8px 16px;
+  border-radius: var(--radius-sm); cursor: pointer; border: 1px solid transparent;
+}
+.pg-btn-ghost { background: transparent; border-color: var(--border-subtle); color: var(--text-secondary); }
+.pg-btn-ghost:hover { color: var(--text-primary); border-color: var(--border-strong); }
+.pg-btn-primary { background: var(--accent); color: var(--accent-text); }
+.pg-btn-primary:hover { background: var(--accent-hover); }
+.pg-btn-primary:disabled { opacity: 0.6; cursor: default; }
+.pg-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.pg-toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 1100;
+  background: var(--bg-base); background-image: var(--bg-gradient);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
+  padding: 9px 16px; font-size: 13px; color: var(--text-primary);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
