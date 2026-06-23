@@ -95,6 +95,8 @@ const VIEWS = [
   "view-onenote-browse",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-VIGILANCE-VOID — "Watching for…" vigilance-void surface
+  "view-watching",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
   "view-receipts",
   // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
@@ -140,6 +142,7 @@ function showView(id) {
 const NAV_DEST_FNS = {
   main: () => goHome(),
   today: () => enterLogView(),
+  watching: () => enterWatchingView(),
   log: () => enterDecisionsView(undefined, { from: "home" }),
   edges: () => enterEdgesView(),
   settings: () => enterStandaloneConfigure(),
@@ -2164,6 +2167,105 @@ if (postcaptureLogBtn) {
  * contradictions, state counts, owner load. Handles the empty log and a
  * server-unreachable error without leaving a blank screen.
  */
+// ───────── WP-VIGILANCE-VOID — "Watching for…" surface ─────────
+//
+// Read-only list of OPEN voids (GET /api/vigilance/voids via fetch_vigilance_voids):
+// records we're expecting back — an enabling record for a blocked dependency, a
+// reconciliation of a conflict, closing evidence on an overdue commitment, or a
+// reply to something sent. Server-rendered `render` string is the source of truth
+// for the card line; we add a trigger pill, a ~Nd cadence, and (when known) the
+// named senders. A void with no attributable sender (license INTERPRET) is shown
+// honestly unnamed. Fills are detected server-side at ingestion; a filled void
+// simply drops off this list, so Refresh is the "did it arrive?" gesture in v1.
+
+const VOID_TRIGGER_LABEL = {
+  egress: "Awaiting reply",
+  "contradicts-unresolved": "Needs reconciliation",
+  "depends-on-incomplete": "Blocked dependency",
+  "overdue-silent": "Overdue · silent",
+};
+
+function renderVoidCard(v) {
+  const card = document.createElement("div");
+  card.className = "record-card watching-card";
+  card.dataset.license = v.license || "";
+
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = v.render || "Watching for a record.";
+  card.appendChild(summary);
+
+  const meta = document.createElement("p");
+  meta.className = "record-meta watching-meta";
+  const bits = [];
+  const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  bits.push(`<span class="watching-pill">${escapeHtml(label)}</span>`);
+  if (typeof v.whenDays === "number") {
+    bits.push(`<span class="watching-when">expected within ~${v.whenDays}d</span>`);
+  }
+  // Topical neighbours are NOT the accountable party — surface them dimmed and
+  // clearly labelled, never as "from" (mirrors the server's structural/topical
+  // split: unnamed voids must not imply a wrong owner).
+  if (Array.isArray(v.whoTopical) && v.whoTopical.length && (!v.who || !v.who.length)) {
+    bits.push(`<span class="watching-topical">possibly related: ${escapeHtml(v.whoTopical.join(", "))}</span>`);
+  }
+  meta.innerHTML = bits.join(' <span class="watching-sep">·</span> ');
+  card.appendChild(meta);
+
+  return card;
+}
+
+async function enterWatchingView() {
+  state.inWizard = false;
+  showView("view-watching");
+  setNav([{ label: "Watching" }], { active: "watching", back: () => goHome() });
+
+  const statusEl = document.getElementById("watching-status");
+  const listEl = document.getElementById("watching-list");
+  const emptyEl = document.getElementById("watching-empty");
+  const subEl = document.getElementById("watching-sub");
+
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading what you're watching for…";
+  }
+  if (listEl) listEl.innerHTML = "";
+  if (emptyEl) emptyEl.hidden = true;
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_vigilance_voids");
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
+    }
+    return;
+  }
+
+  if (statusEl) statusEl.hidden = true;
+
+  const voids = Array.isArray(data && data.voids) ? data.voids : [];
+  if (subEl) {
+    subEl.textContent =
+      voids.length > 0
+        ? `${voids.length} ${voids.length === 1 ? "thing" : "things"} you're expecting back`
+        : "What you're expecting back";
+  }
+
+  if (voids.length === 0) {
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+  if (listEl) {
+    for (const v of voids) listEl.appendChild(renderVoidCard(v));
+  }
+}
+
 async function enterLogView() {
   state.inWizard = false;
   showView("view-log");
@@ -2502,6 +2604,14 @@ const logRefreshBtn = document.getElementById("btn-log-refresh");
 if (logRefreshBtn) {
   logRefreshBtn.addEventListener("click", () => {
     enterLogView();
+  });
+}
+
+// WP-VIGILANCE-VOID — Refresh on the Watching surface re-fetches open voids.
+const watchingRefreshBtn = document.getElementById("btn-watching-refresh");
+if (watchingRefreshBtn) {
+  watchingRefreshBtn.addEventListener("click", () => {
+    enterWatchingView();
   });
 }
 
@@ -4322,7 +4432,7 @@ const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
 if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
 
 // ⌂ Main — shared back-to-home on every sub-view footer (WP-DECISION-ORG nav).
-for (const id of ["btn-log-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
+for (const id of ["btn-log-home", "btn-watching-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
   const b = document.getElementById(id);
   if (b) b.addEventListener("click", () => goHome());
 }

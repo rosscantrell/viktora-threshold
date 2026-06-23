@@ -1887,6 +1887,38 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+/// WP-VIGILANCE-VOID — the "Watching for…" surface. GET /api/vigilance/voids
+/// returns the OPEN voids (records we're expecting back: who/what/when), already
+/// rendered server-side. Same auth + posture as fetch_decision_log. The engine
+/// returns an empty list (not an error) when the feature is off, so the view
+/// degrades to an empty state rather than an error.
+#[tauri::command]
+async fn fetch_vigilance_voids(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/vigilance/voids", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_vigilance_voids: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-LOG-UX (Connections / back-half) — the FULL decision-log
 /// payload. Identical to `fetch_decision_log` but appends `?full=1`, which the
 /// engine answers with the complete `records` (record + lifecycle + state) AND
@@ -5996,6 +6028,7 @@ pub fn run() {
             clear_pending_records,
             get_decision_log_summary,
             fetch_decision_log,
+            fetch_vigilance_voids,
             // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
             fetch_decision_log_full,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)

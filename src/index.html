@@ -95,6 +95,7 @@
       <div class="app-nav-dests" id="app-nav-dests" role="group" aria-label="Go to">
         <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="main" title="Home" aria-label="Home">⌂</button>
         <button type="button" class="app-nav-dest" data-dest="today">Today</button>
+        <button type="button" class="app-nav-dest" data-dest="watching">Watching</button>
         <button type="button" class="app-nav-dest" data-dest="log">Log</button>
         <button type="button" class="app-nav-dest" data-dest="edges">Relationships</button>
         <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="settings" title="Settings" aria-label="Settings">⚙</button>
@@ -567,6 +568,41 @@
         <button type="button" id="btn-log-back" class="btn btn-secondary">
           ← Back to widget
         </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-VIGILANCE-VOID — "Watching for…" (the vigilance-void surface).
+         What the user is expecting back: an open dependency's enabling record,
+         a reconciliation of a contradiction, closing evidence on an overdue
+         commitment, or a reply to something sent. Each card is server-rendered
+         (GET /api/vigilance/voids); a void with no attributable sender is shown
+         honestly unnamed. Read-only in v1 — fills are detected server-side at
+         ingestion and the void simply drops off this list when it arrives.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-watching" class="view view-watching" hidden>
+      <header class="log-header">
+        <div class="log-header-text">
+          <h1 class="log-title">Watching</h1>
+          <p class="log-sub" id="watching-sub">What you're expecting back</p>
+        </div>
+        <div class="log-header-actions">
+          <button type="button" id="btn-watching-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <p class="log-status" id="watching-status" hidden></p>
+
+      <section class="log-section" id="watching-section">
+        <div class="log-attention-list" id="watching-list"></div>
+        <p class="log-empty" id="watching-empty" hidden>
+          Nothing on watch yet. Open dependencies, unresolved conflicts, overdue
+          commitments, and things you've sent will appear here.
+        </p>
+      </section>
+
+      <div class="log-footer">
+        <button type="button" id="btn-watching-home" class="btn btn-secondary">⌂ Main</button>
       </div>
     </section>
 

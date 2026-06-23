@@ -1793,6 +1793,43 @@ code {
   color: var(--glass-accent);
 }
 
+/* ── WP-VIGILANCE-VOID — "Watching for…" cards ── */
+.watching-card {
+  border-left: 2px solid var(--glass-accent);
+}
+/* An honestly-unnamed void (no attributable sender) reads lower-emphasis. */
+.watching-card[data-license="INTERPRET"] {
+  border-left-color: var(--glass-border);
+}
+.watching-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.watching-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--glass-text);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+}
+.watching-when {
+  color: var(--glass-text-dim);
+}
+.watching-topical {
+  color: var(--glass-text-dim);
+  font-style: italic;
+}
+.watching-sep {
+  color: var(--glass-text-dim);
+  opacity: 0.5;
+}
+
 /* Edge callout — conflict (danger), resolution (success), else dim. */
 .record-edge {
   display: flex;
