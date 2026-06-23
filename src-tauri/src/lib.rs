@@ -2438,6 +2438,43 @@ async fn fetch_corpus_state_of_play(
         .map_err(|e| format!("fetch_corpus_state_of_play: parse response failed: {e}"))
 }
 
+/// WP-Cohesion-Operators — INFORM edges ("worth looping in"): decisions whose
+/// substance touches someone's work who wasn't in the room. Proxies GET
+/// /api/decision-log/inform. 503 (flag off) or 404 → {available:false} so the
+/// rail stays silent on servers without the operator enabled.
+#[tauri::command]
+async fn fetch_inform_edges(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/inform",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_inform_edges: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-STATE-OF-PLAY — project altitude: returns the team-addressed
 /// digest AND the per-teammate digests scoped to one project. `polish=false`
 /// (`?team=text`) yields the instant deterministic team email; default polishes
@@ -5981,6 +6018,8 @@ pub fn run() {
             fetch_team_state_of_play,
             fetch_corpus_state_of_play,
             fetch_project_state_of_play,
+            // WP-Cohesion-Operators — INFORM ("worth looping in")
+            fetch_inform_edges,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,
