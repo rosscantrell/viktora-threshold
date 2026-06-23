@@ -306,10 +306,21 @@ body {
   background: var(--glass-surface);
   border: 1px solid var(--glass-border);
   color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.priority-chip:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
 }
 .priority-chip-now {
   background: rgba(255, 196, 64, 0.14);
   border-color: rgba(255, 196, 64, 0.30);
+  color: var(--glass-accent);
+}
+.priority-chip-active {
+  background: rgba(255, 196, 64, 0.22);
+  border-color: var(--glass-accent);
   color: var(--glass-accent);
 }
 .priority-tracking-head {

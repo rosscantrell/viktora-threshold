@@ -3150,49 +3150,80 @@ function renderTodayPriority(container, data) {
   const tracked = items.filter((i) => i.tracked);
   const trackedIds = new Set(tracked.map((i) => i.recordId));
 
-  // ── Focus: the act-on quadrants (do-now / schedule / delegate), tracked first. ──
-  const focusAll = items.filter((i) => FOCUS_QUADRANTS.has(i.quadrant) && !trackedIds.has(i.recordId));
+  // ── Focus: the act-on quadrants (do-now / schedule / delegate). The quadrant
+  //    chips are toggle FILTERS over this list (click "Schedule" → only schedule
+  //    items; click again → all focus quadrants). ──
   const focusCount = (counts["do-now"] || 0) + (counts["schedule"] || 0) + (counts["delegate"] || 0);
   const focus = makeCollapsible("Focus", focusCount, true);
 
   const sub = document.createElement("div");
   sub.className = "priority-sub";
   sub.textContent = data.horizon
-    ? `What matters most — for you, right now (as of ${data.horizon}).`
-    : "What matters most — for you, right now.";
+    ? `What matters most — for you, right now (as of ${data.horizon}). Tap a chip to filter.`
+    : "What matters most — for you, right now. Tap a chip to filter.";
   focus.body.appendChild(sub);
 
   const chips = document.createElement("div");
   chips.className = "priority-quadrants";
-  for (const q of QUADRANT_ORDER) {
-    const n = counts[q] || 0;
-    if (!n) continue;
-    const chip = document.createElement("span");
-    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
-    chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
-    chips.appendChild(chip);
-  }
   focus.body.appendChild(chips);
 
-  if (tracked.length) {
-    const th = document.createElement("div");
-    th.className = "priority-tracking-head";
-    th.textContent = `Tracking · ${tracked.length}`;
-    focus.body.appendChild(th);
-    for (const it of tracked) focus.body.appendChild(renderPriorityCard(it, true));
+  const cardArea = document.createElement("div");
+  focus.body.appendChild(cardArea);
+
+  let activeFilter = null; // null = all focus quadrants; else a single quadrant key
+
+  const renderCards = () => {
+    cardArea.innerHTML = "";
+    const inScope = (i) => (activeFilter ? i.quadrant === activeFilter : FOCUS_QUADRANTS.has(i.quadrant));
+    const trk = tracked.filter(inScope);
+    if (trk.length) {
+      const th = document.createElement("div");
+      th.className = "priority-tracking-head";
+      th.textContent = `Tracking · ${trk.length}`;
+      cardArea.appendChild(th);
+      for (const it of trk) cardArea.appendChild(renderPriorityCard(it, true));
+    }
+    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId));
+    const shown = pool.slice(0, FOCUS_CAP);
+    for (const it of shown) cardArea.appendChild(renderPriorityCard(it, false));
+    if (pool.length > shown.length) {
+      const more = document.createElement("div");
+      more.className = "priority-more";
+      more.textContent = `+ ${pool.length - shown.length} more`;
+      cardArea.appendChild(more);
+    }
+    if (!trk.length && !shown.length) {
+      const empty = document.createElement("div");
+      empty.className = "priority-more";
+      empty.textContent = "Nothing here right now.";
+      cardArea.appendChild(empty);
+    }
+  };
+
+  // Chips are filter buttons (do-now / schedule / delegate). Watch lives in its
+  // own section below — it isn't a Focus filter.
+  for (const q of ["do-now", "schedule", "delegate"]) {
+    const n = counts[q] || 0;
+    if (!n) continue;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.dataset.q = q;
+    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
+    chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
+    chip.addEventListener("click", () => {
+      activeFilter = activeFilter === q ? null : q;
+      for (const c of chips.children) {
+        c.classList.toggle("priority-chip-active", c.dataset.q === activeFilter);
+      }
+      renderCards();
+    });
+    chips.appendChild(chip);
   }
 
-  const rankedFocus = focusAll.slice(0, FOCUS_CAP);
-  for (const it of rankedFocus) focus.body.appendChild(renderPriorityCard(it, false));
-  if (focusAll.length > rankedFocus.length) {
-    const more = document.createElement("div");
-    more.className = "priority-more";
-    more.textContent = `+ ${focusAll.length - rankedFocus.length} more in Focus`;
-    focus.body.appendChild(more);
-  }
+  renderCards();
   container.appendChild(focus.section);
 
-  // ── Watch: the watch quadrant, collapsed by default (usually large). ──
+  // ── Watch: the watch quadrant, its own collapsed section (usually large). ──
   const watchAll = items.filter((i) => i.quadrant === "watch" && !trackedIds.has(i.recordId));
   if (watchAll.length) {
     const watch = makeCollapsible("Watch", counts["watch"] || watchAll.length, false);
