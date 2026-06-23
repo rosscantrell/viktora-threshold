@@ -2185,32 +2185,72 @@ const VOID_TRIGGER_LABEL = {
   "overdue-silent": "Overdue · silent",
 };
 
+function vvIsNamedSlug(s) {
+  return !!s && !/^speaker-\d+$/i.test(s) && !/^<?unknown>?$/i.test(s);
+}
+function vvHumanizeSlug(s) {
+  return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
+}
+
 function renderVoidCard(v) {
   const card = document.createElement("div");
   card.className = "record-card watching-card";
   card.dataset.license = v.license || "";
+  const ctx = v.context || { waitingOn: [] };
+  const waitingOn = Array.isArray(ctx.waitingOn) ? ctx.waitingOn : [];
 
-  const summary = document.createElement("p");
-  summary.className = "record-summary";
-  summary.textContent = v.render || "Watching for a record.";
-  card.appendChild(summary);
-
-  const meta = document.createElement("p");
-  meta.className = "record-meta watching-meta";
-  const bits = [];
+  // Compact meta row at the TOP: trigger pill + cadence.
+  const meta = document.createElement("div");
+  meta.className = "watching-meta";
   const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
-  bits.push(`<span class="watching-pill">${escapeHtml(label)}</span>`);
+  let metaHtml = `<span class="watching-pill">${escapeHtml(label)}</span>`;
   if (typeof v.whenDays === "number") {
-    bits.push(`<span class="watching-when">expected within ~${v.whenDays}d</span>`);
+    metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
   }
-  // Topical neighbours are NOT the accountable party — surface them dimmed and
-  // clearly labelled, never as "from" (mirrors the server's structural/topical
-  // split: unnamed voids must not imply a wrong owner).
-  if (Array.isArray(v.whoTopical) && v.whoTopical.length && (!v.who || !v.who.length)) {
-    bits.push(`<span class="watching-topical">possibly related: ${escapeHtml(v.whoTopical.join(", "))}</span>`);
-  }
-  meta.innerHTML = bits.join(' <span class="watching-sep">·</span> ');
+  meta.innerHTML = metaHtml;
   card.appendChild(meta);
+
+  // Headline: what this is actually about (the present/blocked record), or the
+  // server's one-line render when there's no record context (e.g. a sent digest).
+  const headline = document.createElement("p");
+  headline.className = "watching-headline";
+  headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "Watching for a record.");
+  card.appendChild(headline);
+
+  // Waiting on: the concrete enabling records (or the contradicting counterpart).
+  if (waitingOn.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "watching-waiting";
+    const lab = document.createElement("p");
+    lab.className = "watching-waiting-label";
+    lab.textContent = v.trigger === "contradicts-unresolved" ? "Conflicts with" : "Waiting on";
+    wrap.appendChild(lab);
+    const ul = document.createElement("ul");
+    ul.className = "watching-waiting-list";
+    for (const w of waitingOn) {
+      const li = document.createElement("li");
+      li.className = "watching-waiting-item";
+      // Name the owner only when attributable (not an unresolved speaker-N); the
+      // summary text itself usually names the person anyway.
+      const owner = vvIsNamedSlug(w.owner)
+        ? `<span class="watching-waiting-owner">${escapeHtml(vvHumanizeSlug(w.owner))}</span> — `
+        : "";
+      const due = w.due ? `<span class="watching-waiting-due"> · due ${escapeHtml(w.due)}</span>` : "";
+      li.innerHTML = `${owner}<span class="watching-waiting-text">${escapeHtml(w.summary)}</span>${due}`;
+      ul.appendChild(li);
+    }
+    wrap.appendChild(ul);
+    card.appendChild(wrap);
+  }
+
+  // Unnamed void (no attributable sender): surface topical neighbours dimmed and
+  // clearly labelled — never as "from" (mirrors the server's structural/topical split).
+  if (Array.isArray(v.whoTopical) && v.whoTopical.length && (!v.who || !v.who.length)) {
+    const t = document.createElement("p");
+    t.className = "watching-topical";
+    t.textContent = `possibly related: ${v.whoTopical.join(", ")}`;
+    card.appendChild(t);
+  }
 
   return card;
 }
