@@ -2906,6 +2906,12 @@ function renderCorpusPanel(panel, data) {
   panel.appendChild(msg);
   // Phase B — inline digest edit (corpus altitude).
   attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
+  // WP-Priority-Operator — the "Focus" rail (importance × urgency), scoped to the
+  // viewer by the server. Additive + silent when the operator flag is off.
+  const priorityRail = document.createElement("div");
+  priorityRail.className = "priority-rail";
+  panel.appendChild(priorityRail);
+  loadPriorityRail(priorityRail);
 }
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
@@ -3028,6 +3034,149 @@ function renderInformCard(edge, mode) {
   dismiss.className = "inform-dismiss";
   dismiss.textContent = "Not relevant";
   dismiss.addEventListener("click", () => card.remove());
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
+// WP-Priority-Operator — the "Focus" rail (deterministic importance × urgency),
+// rendered on the corpus State-of-Play overview. Shows the viewer's ranked items
+// grouped by Eisenhower quadrant + a business-language `why` (packets, no slugs),
+// with pin/dismiss gestures that calibrate the per-user weight vector (passive —
+// never a rating task). Backed by GET /api/decision-log/priority via fetch_priority.
+// Additive + silent: the rail never becomes an error surface.
+async function loadPriorityRail(el) {
+  let res;
+  try {
+    res = await tauri.core.invoke("fetch_priority");
+  } catch (err) {
+    console.warn("[main] fetch_priority failed:", err);
+    return; // silent — additive rail
+  }
+  if (!res || res.available === false) return; // flag off / server too old
+  const items = Array.isArray(res.items) ? res.items : [];
+  if (items.length === 0) return;
+  renderPriorityRail(el, res);
+}
+
+const QUADRANT_LABEL = { "do-now": "Do now", schedule: "Schedule", delegate: "Delegate", watch: "Watch" };
+const QUADRANT_ORDER = ["do-now", "schedule", "delegate", "watch"];
+
+async function sendPriorityGesture(item, gestureType) {
+  try {
+    await tauri.core.invoke("post_priority_gesture", {
+      gestureType,
+      recordId: item.recordId,
+      relationship: item.relationship || null,
+      owner: item.owner || null,
+    });
+    return true;
+  } catch (err) {
+    console.warn("[main] post_priority_gesture failed:", err);
+    showToast({ kind: "failure", title: "Couldn't save", body: "Try again." });
+    return false;
+  }
+}
+
+function renderPriorityRail(el, data) {
+  el.innerHTML = "";
+  const items = data.items || [];
+  const counts = data.quadrantCounts || {};
+
+  const head = document.createElement("div");
+  head.className = "priority-head";
+  head.textContent = "Focus";
+  el.appendChild(head);
+  const sub = document.createElement("div");
+  sub.className = "priority-sub";
+  sub.textContent = data.horizon
+    ? `What matters most — for you, right now (as of ${data.horizon}).`
+    : "What matters most — for you, right now.";
+  el.appendChild(sub);
+
+  // Quadrant summary chips.
+  const chips = document.createElement("div");
+  chips.className = "priority-quadrants";
+  for (const q of QUADRANT_ORDER) {
+    const n = counts[q] || 0;
+    if (!n) continue;
+    const chip = document.createElement("span");
+    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
+    chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
+    chips.appendChild(chip);
+  }
+  el.appendChild(chips);
+
+  // Tracking section (pinned items) — Trisha's "track what matters" half.
+  const tracked = items.filter((i) => i.tracked);
+  if (tracked.length) {
+    const th = document.createElement("div");
+    th.className = "priority-tracking-head";
+    th.textContent = `Tracking · ${tracked.length}`;
+    el.appendChild(th);
+    for (const it of tracked) el.appendChild(renderPriorityCard(it, true));
+  }
+
+  // The ranked list (top items first; cap to keep the rail scannable). Skip the
+  // already-tracked ones — they're shown above.
+  const ranked = items.filter((i) => !i.tracked).slice(0, 12);
+  for (const it of ranked) el.appendChild(renderPriorityCard(it, false));
+}
+
+function renderPriorityCard(item, isTracked) {
+  const card = document.createElement("div");
+  card.className = "priority-card" + (isTracked ? " priority-card-tracked" : "");
+
+  const top = document.createElement("div");
+  top.className = "priority-card-top";
+  const quad = document.createElement("span");
+  quad.className = "priority-quad-tag" + (item.quadrant === "do-now" ? " priority-quad-now" : "");
+  quad.textContent = QUADRANT_LABEL[item.quadrant] || item.quadrant;
+  top.appendChild(quad);
+  const rel = document.createElement("span");
+  rel.className = "priority-rel";
+  const relWord = item.relationship === "client" ? "Client"
+    : item.relationship === "partner" ? "Partner" : "Internal";
+  rel.textContent = item.seniorityTier ? `${relWord} · ${item.seniorityTier}` : relWord;
+  top.appendChild(rel);
+  card.appendChild(top);
+
+  const summary = document.createElement("div");
+  summary.className = "priority-item";
+  summary.textContent = item.summary || "(item)";
+  card.appendChild(summary);
+
+  // Business-language why — the packet interpretation, never raw slugs/scores.
+  const whyText = [item.why, item.relationshipWhy].filter(Boolean).join(" ");
+  if (whyText) {
+    const why = document.createElement("div");
+    why.className = "priority-why";
+    why.textContent = whyText;
+    card.appendChild(why);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "priority-actions";
+  const track = document.createElement("button");
+  track.type = "button";
+  track.className = "priority-track";
+  track.textContent = isTracked ? "Tracking" : "Track";
+  track.disabled = isTracked;
+  track.addEventListener("click", async () => {
+    track.disabled = true;
+    const ok = await sendPriorityGesture(item, "pin");
+    if (ok) { track.textContent = "Tracking"; }
+    else { track.disabled = false; }
+  });
+  actions.appendChild(track);
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "priority-dismiss";
+  dismiss.textContent = "Not now";
+  dismiss.addEventListener("click", async () => {
+    const ok = await sendPriorityGesture(item, "dismiss");
+    if (ok) card.remove();
+  });
   actions.appendChild(dismiss);
   card.appendChild(actions);
   return card;
