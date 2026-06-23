@@ -3127,13 +3127,25 @@ async function loadTodayPriority() {
   renderTodayPriority(container, res);
 }
 
-async function sendPriorityGesture(item, gestureType) {
+async function sendPriorityGesture(item, gestureType, reason) {
   try {
     await tauri.core.invoke("post_priority_gesture", {
       gestureType,
       recordId: item.recordId,
       relationship: item.relationship || null,
       owner: item.owner || null,
+      reason: reason || null,
+      // Denormalized context SNAPSHOT — the at-the-moment values, so the offline
+      // training join needs no re-derive against an aging corpus.
+      context: {
+        quadrant: item.quadrant || null,
+        seniorityTier: item.seniorityTier || null,
+        importanceSource: item.importanceSource || null,
+        counterparty: item.counterparty || null,
+        priority: typeof item.priority === "number" ? item.priority : null,
+        importance: typeof item.importance === "number" ? item.importance : null,
+        urgency: typeof item.urgency === "number" ? item.urgency : null,
+      },
     });
     return true;
   } catch (err) {
@@ -3142,6 +3154,15 @@ async function sendPriorityGesture(item, gestureType) {
     return false;
   }
 }
+
+// Priority dismiss reasons — the class decides calibration direction (false-positive
+// vs correct-but-cleared). Mirrors the decision-log RecordHitlReason set. (Named
+// distinctly from the decision-log's own DISMISS_REASONS.)
+const PRIORITY_DISMISS_REASONS = [
+  { reason: "not-relevant", label: "Not relevant" },
+  { reason: "already-known", label: "Already knew" },
+  { reason: "closing-out", label: "Handled" },
+];
 
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
@@ -3272,27 +3293,60 @@ function renderPriorityCard(item, isTracked) {
 
   const actions = document.createElement("div");
   actions.className = "priority-actions";
-  const track = document.createElement("button");
-  track.type = "button";
-  track.className = "priority-track";
-  track.textContent = isTracked ? "Tracking" : "Track";
-  track.disabled = isTracked;
-  track.addEventListener("click", async () => {
-    track.disabled = true;
-    const ok = await sendPriorityGesture(item, "pin");
-    if (ok) { track.textContent = "Tracking"; }
-    else { track.disabled = false; }
-  });
-  actions.appendChild(track);
-  const dismiss = document.createElement("button");
-  dismiss.type = "button";
-  dismiss.className = "priority-dismiss";
-  dismiss.textContent = "Not now";
-  dismiss.addEventListener("click", async () => {
-    const ok = await sendPriorityGesture(item, "dismiss");
-    if (ok) card.remove();
-  });
-  actions.appendChild(dismiss);
+
+  // Default actions: Track (pin) + Not now (opens the reason chooser).
+  const buildDefaultActions = () => {
+    actions.innerHTML = "";
+    const track = document.createElement("button");
+    track.type = "button";
+    track.className = "priority-track";
+    track.textContent = isTracked ? "Tracking" : "Track";
+    track.disabled = isTracked;
+    track.addEventListener("click", async () => {
+      track.disabled = true;
+      const ok = await sendPriorityGesture(item, "pin");
+      if (ok) track.textContent = "Tracking";
+      else track.disabled = false;
+    });
+    actions.appendChild(track);
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "priority-dismiss";
+    dismiss.textContent = "Not now";
+    dismiss.addEventListener("click", buildReasonChooser);
+    actions.appendChild(dismiss);
+  };
+
+  // "Why?" — one extra tap that captures the dismiss REASON (the class decides
+  // calibration direction). Without it a dismiss is ambiguous and can't be routed.
+  const buildReasonChooser = () => {
+    actions.innerHTML = "";
+    const q = document.createElement("span");
+    q.className = "priority-dismiss-q";
+    q.textContent = "Why?";
+    actions.appendChild(q);
+    for (const r of PRIORITY_DISMISS_REASONS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "priority-reason";
+      b.textContent = r.label;
+      b.addEventListener("click", async () => {
+        for (const c of actions.querySelectorAll("button")) c.disabled = true;
+        const ok = await sendPriorityGesture(item, "dismiss", r.reason);
+        if (ok) card.remove();
+        else buildDefaultActions();
+      });
+      actions.appendChild(b);
+    }
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    actions.appendChild(cancel);
+  };
+
+  buildDefaultActions();
   card.appendChild(actions);
   return card;
 }

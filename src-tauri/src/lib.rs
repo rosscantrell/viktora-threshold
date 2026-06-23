@@ -2663,6 +2663,8 @@ async fn post_priority_gesture(
     record_id: String,
     relationship: Option<String>,
     owner: Option<String>,
+    reason: Option<String>,
+    context: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     if record_id.trim().is_empty() {
         return Err("post_priority_gesture: empty record_id".into());
@@ -2678,6 +2680,14 @@ async fn post_priority_gesture(
     }
     if let Some(o) = owner {
         body["owner"] = serde_json::Value::String(o);
+    }
+    // Dismiss reason (calibration direction) + denormalized context snapshot
+    // (at-the-moment values, persisted so the future training join needs no re-derive).
+    if let Some(r) = reason {
+        body["reason"] = serde_json::Value::String(r);
+    }
+    if let Some(c) = context {
+        body["context"] = c;
     }
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)

@@ -409,6 +409,29 @@ body {
 .priority-dismiss:hover {
   color: var(--glass-text);
 }
+.priority-dismiss-q {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  margin-right: 2px;
+}
+.priority-reason {
+  font-size: 11px;
+  padding: 4px 9px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.priority-reason:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.priority-reason:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .priority-more {
   font-size: 11.5px;
   color: var(--glass-text-faint);
