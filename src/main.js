@@ -2166,7 +2166,12 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
@@ -2780,7 +2785,12 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     footer.appendChild(btn);
   }
   appendSourceBadge(footer, rec.documentId, rec.verbatim);
@@ -5721,7 +5731,12 @@ function renderDecisionCard(rec, recState, projects) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
