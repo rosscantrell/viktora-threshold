@@ -3338,19 +3338,19 @@ function renderPriorityCard(item, isTracked) {
     });
     actions.appendChild(track);
 
-    // Snooze — "Schedule for later": opens the date chooser.
+    // Schedule (snooze gesture) — schedule the item for later: opens the date chooser.
     const snooze = document.createElement("button");
     snooze.type = "button";
     snooze.className = "priority-reason";
-    snooze.textContent = "Snooze";
+    snooze.textContent = "Schedule";
     snooze.addEventListener("click", buildSnoozeChooser);
     actions.appendChild(snooze);
 
-    // Hand off — "Delegate": opens the inline editor (draft the note, edit it, then copy).
+    // Delegate (handoff gesture) — opens the inline editor (draft the note, edit it, then copy).
     const handoff = document.createElement("button");
     handoff.type = "button";
     handoff.className = "priority-reason";
-    handoff.textContent = "Hand off";
+    handoff.textContent = "Delegate";
     handoff.addEventListener("click", buildHandoffEditor);
     actions.appendChild(handoff);
 
@@ -3373,7 +3373,7 @@ function renderPriorityCard(item, isTracked) {
     const doSnooze = async (iso) => {
       for (const c of actions.querySelectorAll("button, input")) c.disabled = true;
       const ok = await sendPriorityGesture(item, "snooze", null, iso);
-      if (ok) { showToast({ kind: "success", title: "Snoozed", body: `Back in Focus on ${iso}.` }); card.remove(); }
+      if (ok) { showToast({ kind: "success", title: "Scheduled", body: `Back in Focus on ${iso}.` }); card.remove(); }
       else buildDefaultActions();
     };
     for (const p of SNOOZE_PRESETS) {
@@ -3443,14 +3443,14 @@ function renderPriorityCard(item, isTracked) {
     const copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "priority-track";
-    copyBtn.textContent = "Copy & hand off";
+    copyBtn.textContent = "Copy & delegate";
     copyBtn.addEventListener("click", async () => {
       copyBtn.disabled = true;
       try { await tauri.core.invoke("copy_text", { text: ta.value }); }
       catch (e) { /* clipboard best-effort */ }
       // Capture the EDITED text (incl. any delegatee name the user typed in) verbatim.
       const ok = await sendPriorityGesture(item, "handoff", null, null, ta.value);
-      if (ok) { showToast({ kind: "success", title: "Copied to hand off", body: "Paste into email or chat." }); card.remove(); }
+      if (ok) { showToast({ kind: "success", title: "Copied to delegate", body: "Paste into email or chat." }); card.remove(); }
       else copyBtn.disabled = false;
     });
     row.appendChild(copyBtn);
