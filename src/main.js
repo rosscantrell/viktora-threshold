@@ -3320,6 +3320,12 @@ function makeGroupRow(label, count, doNow, opts) {
     tag.textContent = opts.tag;
     head.appendChild(tag);
   }
+  if (opts.quadrant) {                       // job-grain quadrant (do-now/schedule/…)
+    const qb = document.createElement("span");
+    qb.className = "priority-qbadge priority-qbadge-" + opts.quadrant;
+    qb.textContent = QUADRANT_LABEL[opts.quadrant] || opts.quadrant;
+    head.appendChild(qb);
+  }
   if (doNow) {
     const b = document.createElement("span");
     b.className = "priority-group-urgent";
@@ -3371,12 +3377,15 @@ function cleanSection(s) {
 
 // A job row (collapsed) → its action cards on expand.
 function renderJobGroup(parentJob, jobHeader, items) {
-  return makeGroupRow(jobName(parentJob, jobHeader), items.length, doNowOf(items), {
+  return makeGroupRow(jobName(parentJob, jobHeader), items.length, 0, {
     extraClass: "priority-job",
     tag: veevaTag(parentJob),
+    quadrant: items[0] && items[0].jobQuadrant,     // job-grain quadrant badge
     fill: (body) => { for (const it of items) body.appendChild(renderPriorityCard(it, false)); },
   });
 }
+
+const jobRank = { "do-now": 0, schedule: 1, delegate: 2, watch: 3 };
 
 // A section band (open by default) → its job rows, hottest job first.
 function renderSectionGroup(section, items) {
@@ -3387,10 +3396,11 @@ function renderSectionGroup(section, items) {
     if (!jobs.has(jk)) jobs.set(jk, { header: it.jobHeader, items: [] });
     jobs.get(jk).items.push(it);
   }
+  // Sort jobs by job-grain quadrant (do-now first), then job priority, then size.
   const ordered = [...jobs.entries()].sort((a, b) => {
-    const ra = Math.min(...a[1].items.map((i) => quadrantRank(i.quadrant)));
-    const rb = Math.min(...b[1].items.map((i) => quadrantRank(i.quadrant)));
-    return ra - rb || b[1].items.length - a[1].items.length;
+    const qa = jobRank[a[1].items[0]?.jobQuadrant] ?? 2, qb = jobRank[b[1].items[0]?.jobQuadrant] ?? 2;
+    const pa = a[1].items[0]?.jobPriority ?? 0, pb = b[1].items[0]?.jobPriority ?? 0;
+    return qa - qb || pb - pa || b[1].items.length - a[1].items.length;
   });
   return makeGroupRow(cleanSection(section), items.length, doNowOf(items), {
     defaultOpen: true,
@@ -3428,11 +3438,11 @@ function renderTodayPriority(container, data) {
   const cardArea = document.createElement("div");
   focus.body.appendChild(cardArea);
 
-  let activeFilter = null; // null = all focus quadrants; else a single quadrant key
+  let activeFilter = null; // null = all; else a JOB quadrant (do-now/schedule/delegate/watch)
 
   const renderCards = () => {
     cardArea.innerHTML = "";
-    const inScope = (i) => (activeFilter ? i.quadrant === activeFilter : FOCUS_QUADRANTS.has(i.quadrant));
+    const inScope = (i) => FOCUS_QUADRANTS.has(i.quadrant);   // base pool = focus actions
     const trk = tracked.filter(inScope);
     if (trk.length) {
       const th = document.createElement("div");
@@ -3441,18 +3451,21 @@ function renderTodayPriority(container, data) {
       cardArea.appendChild(th);
       for (const it of trk) cardArea.appendChild(renderPriorityCard(it, true));
     }
-    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId));
+    // Hot-list items are shown by their JOB quadrant (not the action quadrant),
+    // so Schedule/Watch jobs aren't hidden just because their actions read as
+    // low-urgency. Non-hot-list items keep the action-quadrant focus scope.
+    const hotlistAll = items.filter((i) => i.parentJob && !trackedIds.has(i.recordId));
+    const restPool = items.filter((i) => !i.parentJob && inScope(i) && !trackedIds.has(i.recordId));
+    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId)); // flat fallback only
 
-    // WP-Rollup P1 — roll the untracked pool up by entity/job, collapsed by
-    // default. Falls back to the flat list when rollup is off OR the server
-    // isn't sending primaryEntity yet (P1a not deployed) — never an empty wall.
-    const canGroup = ROLLUP_ENABLED && pool.some((i) => i.primaryEntity || i.parentJob);
+    // WP-Rollup P1/P2 — roll up by section → job → action (hot-list) + entity
+    // groups (rest). Falls back to a flat list when rollup is off / no keys.
+    const canGroup = ROLLUP_ENABLED && (hotlistAll.length > 0 || restPool.some((i) => i.primaryEntity));
     if (canGroup) {
-      // WP-Rollup P2 — hot-list records (those carrying a job-grain `parentJob`)
-      // nest section → job → action. Everything else falls back to P1's
-      // single-level grouping by primaryEntity.
-      const hotlist = pool.filter((i) => i.parentJob);
-      const rest = pool.filter((i) => !i.parentJob);
+      // A job-quadrant filter narrows to jobs of that quadrant (and hides the
+      // non-hot-list entity groups, which aren't job-classified).
+      const hotlist = activeFilter ? hotlistAll.filter((i) => i.jobQuadrant === activeFilter) : hotlistAll;
+      const rest = activeFilter ? [] : restPool;
       let rendered = 0;
 
       if (hotlist.length) {
@@ -3518,15 +3531,30 @@ function renderTodayPriority(container, data) {
     }
   };
 
-  // Chips are filter buttons (do-now / schedule / delegate). Watch lives in its
-  // own section below — it isn't a Focus filter.
-  for (const q of ["do-now", "schedule", "delegate"]) {
-    const n = counts[q] || 0;
+  // WP-Rollup job-priority — chips are JOB quadrants (one tally per job, not per
+  // action), so Do-now / Schedule / Delegate / Watch populate at the job altitude
+  // the user thinks in. Computed from the visible hot-list jobs; falls back to
+  // the action counts when no job-grain data is present.
+  const jobQC = {};
+  {
+    const seen = new Set();
+    for (const i of items) {
+      if (!i.parentJob || trackedIds.has(i.recordId)) continue;
+      if (seen.has(i.parentJob)) continue;
+      seen.add(i.parentJob);
+      const q = i.jobQuadrant || "delegate";
+      jobQC[q] = (jobQC[q] || 0) + 1;
+    }
+  }
+  const haveJobChips = Object.keys(jobQC).length > 0;
+  const chipQuadrants = haveJobChips ? ["do-now", "schedule", "delegate", "watch"] : ["do-now", "schedule", "delegate"];
+  for (const q of chipQuadrants) {
+    const n = haveJobChips ? (jobQC[q] || 0) : (counts[q] || 0);
     if (!n) continue;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.dataset.q = q;
-    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
+    chip.className = "priority-chip priority-chip-" + q + (q === "do-now" ? " priority-chip-now" : "");
     chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
     chip.addEventListener("click", () => {
       activeFilter = activeFilter === q ? null : q;
