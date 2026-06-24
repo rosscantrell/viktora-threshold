@@ -2665,6 +2665,7 @@ async fn post_priority_gesture(
     owner: Option<String>,
     reason: Option<String>,
     snooze_until: Option<String>,
+    handoff_note: Option<String>,
     context: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     if record_id.trim().is_empty() {
@@ -2689,6 +2690,9 @@ async fn post_priority_gesture(
     }
     if let Some(s) = snooze_until {
         body["snoozeUntil"] = serde_json::Value::String(s);
+    }
+    if let Some(n) = handoff_note {
+        body["handoffNote"] = serde_json::Value::String(n);
     }
     if let Some(c) = context {
         body["context"] = c;

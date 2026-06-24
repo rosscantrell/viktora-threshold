@@ -3127,7 +3127,7 @@ async function loadTodayPriority() {
   renderTodayPriority(container, res);
 }
 
-async function sendPriorityGesture(item, gestureType, reason, snoozeUntil) {
+async function sendPriorityGesture(item, gestureType, reason, snoozeUntil, handoffNote) {
   try {
     await tauri.core.invoke("post_priority_gesture", {
       gestureType,
@@ -3136,6 +3136,7 @@ async function sendPriorityGesture(item, gestureType, reason, snoozeUntil) {
       owner: item.owner || null,
       reason: reason || null,
       snoozeUntil: snoozeUntil || null,
+      handoffNote: handoffNote || null,
       // Denormalized context SNAPSHOT — the at-the-moment values, so the offline
       // training join needs no re-derive against an aging corpus.
       context: {
@@ -3447,7 +3448,8 @@ function renderPriorityCard(item, isTracked) {
       copyBtn.disabled = true;
       try { await tauri.core.invoke("copy_text", { text: ta.value }); }
       catch (e) { /* clipboard best-effort */ }
-      const ok = await sendPriorityGesture(item, "handoff");
+      // Capture the EDITED text (incl. any delegatee name the user typed in) verbatim.
+      const ok = await sendPriorityGesture(item, "handoff", null, null, ta.value);
       if (ok) { showToast({ kind: "success", title: "Copied to hand off", body: "Paste into email or chat." }); card.remove(); }
       else copyBtn.disabled = false;
     });
