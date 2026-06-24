@@ -1926,6 +1926,113 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+// ── WP-Outlook-Writeback — staged-outbox IPCs ──
+//
+// The desktop SURFACES the staged outbox (drafts Threshold composed) for
+// review + management. The actual SEND happens in Outlook via the add-in (the
+// desktop has no Graph send path), so these three are list / status / propose
+// only. `outbox_propose` feeds the producer from a decision-log commitment so a
+// "Draft follow-up" on a commitment stages an outbound draft.
+
+/// GET /api/outbox → { items: [...] }. Mirrors fetch_decision_log.
+#[tauri::command]
+async fn fetch_outbox(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/outbox", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_outbox: parse response failed: {e}"))
+}
+
+/// POST /api/outbox/:id/{sent|dismiss}. itemId is a server UUID (URL-safe).
+#[tauri::command]
+async fn outbox_decide(
+    state: tauri::State<'_, AppState>,
+    item_id: String,
+    action: String,
+) -> Result<serde_json::Value, String> {
+    if action != "sent" && action != "dismiss" {
+        return Err(format!(
+            "outbox_decide: action must be 'sent' or 'dismiss', got '{action}'"
+        ));
+    }
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/outbox/{}/{}",
+        cfg.base_url.trim_end_matches('/'),
+        item_id,
+        action
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("outbox_decide: parse response failed: {e}"))
+}
+
+/// POST /api/outbox/propose with { items }. `items` is the producer input
+/// array (ProducerActionItem[]) built frontend-side from a decision-log record.
+#[tauri::command]
+async fn outbox_propose(
+    state: tauri::State<'_, AppState>,
+    items: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/outbox/propose", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({ "items": items }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("outbox_propose: parse response failed: {e}"))
+}
+
 /// WP-VIGILANCE-VOID — the "Watching for…" surface. GET /api/vigilance/voids
 /// returns the OPEN voids (records we're expecting back: who/what/when), already
 /// rendered server-side. Same auth + posture as fetch_decision_log. The engine
@@ -6387,6 +6494,9 @@ pub fn run() {
             clear_pending_records,
             get_decision_log_summary,
             fetch_decision_log,
+            fetch_outbox,
+            outbox_decide,
+            outbox_propose,
             fetch_vigilance_voids,
             dismiss_void,
             snooze_void,
