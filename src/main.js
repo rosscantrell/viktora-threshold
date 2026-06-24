@@ -5839,6 +5839,22 @@ async function enterReceiptsView(entity) {
   const items = Array.isArray(data && data.records) ? data.records : [];
   const edges = Array.isArray(data && data.edges) ? data.edges : [];
 
+  // WP-Grouping-Operator P4 — when this entity resolves to a single canonical
+  // job, title the view with the job's NAME ("Merck Vaccines Landing Page
+  // Updates") instead of the raw entity slug. A section (spans many jobs) →
+  // resolvedJob is null → keep the entity slug. Consistent: the header always
+  // names exactly what the set is.
+  const resolvedJob = data && data.resolvedJob;
+  const headerName = resolvedJob && resolvedJob.name ? resolvedJob.name : prettySlug(entity);
+  if (titleEl) titleEl.textContent = headerName;
+  setNav(
+    [
+      { label: "Today", go: () => enterLogView() },
+      { label: "Receipts · " + headerName },
+    ],
+    { back: () => enterLogView() },
+  );
+
   if (statusEl) {
     if (items.length === 0) {
       statusEl.hidden = false;
