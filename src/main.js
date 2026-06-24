@@ -105,6 +105,8 @@ const VIEWS = [
   "view-entity-card",
   // WP-THRESHOLD-DECISION-ORG — Decisions browser (by project, filterable)
   "view-decisions",
+  // WP-Outlook-Writeback — staged outbox surface
+  "view-outbox",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
