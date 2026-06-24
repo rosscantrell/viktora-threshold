@@ -3367,8 +3367,15 @@ function makeGroupRow(label, count, doNow, opts) {
 
 const doNowOf = (items) => items.filter((i) => i.quadrant === "do-now").length;
 
+// WP-Grouping-Operator P4 — the canonical P2 job names from the priority
+// response (parentJob → subject-anchored name). Set per render in
+// renderTodayPriority; jobName() prefers it over the raw segmenter header.
+let currentJobNames = {};
+
 // Display name for a job row (the Veeva ID rides in a separate chip, not here).
 function jobName(parentJob, jobHeader) {
+  const canonical = currentJobNames[parentJob];
+  if (canonical) return canonical;
   const name = (jobHeader || "").replace(/\s+/g, " ").trim();
   if (name) return name;
   const veeva = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
@@ -3434,6 +3441,7 @@ function renderSectionGroup(section, items) {
 
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
+  currentJobNames = data.jobNames || {};   // P4 — canonical names for job rows
   const items = data.items || [];
   const counts = data.quadrantCounts || {};
   const tracked = items.filter((i) => i.tracked);
