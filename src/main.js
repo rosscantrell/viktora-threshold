@@ -7011,8 +7011,8 @@ async function handleOutlookAddinInstallClick() {
   if (steps) steps.hidden = false;
   showToast({
     kind: "success",
-    title: "Manifest link ready",
-    body: "Copied to your clipboard — paste it into Outlook's Add custom add-in dialog.",
+    title: "Add-in manifest downloaded",
+    body: "In Outlook: Add a custom add-in → Add from File → pick it from your Downloads.",
   });
 }
 
