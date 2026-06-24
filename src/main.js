@@ -3312,7 +3312,14 @@ function makeGroupRow(label, count, doNow, opts) {
   const title = document.createElement("span");
   title.className = "log-collapse-title priority-group-title";
   title.textContent = label;
+  title.title = label;                       // full text on hover (it truncates)
   head.appendChild(title);
+  if (opts.tag) {                            // e.g. the Veeva job ID — never truncated
+    const tag = document.createElement("span");
+    tag.className = "priority-job-tag";
+    tag.textContent = opts.tag;
+    head.appendChild(tag);
+  }
   if (doNow) {
     const b = document.createElement("span");
     b.className = "priority-group-urgent";
@@ -3344,15 +3351,17 @@ function makeGroupRow(label, count, doNow, opts) {
 
 const doNowOf = (items) => items.filter((i) => i.quadrant === "do-now").length;
 
-// Display label for a job key — Veeva keys surface the ID (the project key).
-function jobLabel(parentJob, jobHeader) {
-  const veeva = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+// Display name for a job row (the Veeva ID rides in a separate chip, not here).
+function jobName(parentJob, jobHeader) {
   const name = (jobHeader || "").replace(/\s+/g, " ").trim();
-  if (veeva) {
-    const id = veeva[1].toUpperCase();
-    return name ? `${name} · ${id}` : id;
-  }
-  return name || prettySlug((parentJob || "").replace(/^job:/, ""));
+  if (name) return name;
+  const veeva = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+  return veeva ? veeva[1].toUpperCase() : prettySlug((parentJob || "").replace(/^job:/, ""));
+}
+// The Veeva job ID (the project key), or null — rendered as a non-truncated chip.
+function veevaTag(parentJob) {
+  const m = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+  return m ? m[1].toUpperCase() : null;
 }
 
 function cleanSection(s) {
@@ -3362,8 +3371,9 @@ function cleanSection(s) {
 
 // A job row (collapsed) → its action cards on expand.
 function renderJobGroup(parentJob, jobHeader, items) {
-  return makeGroupRow(jobLabel(parentJob, jobHeader), items.length, doNowOf(items), {
+  return makeGroupRow(jobName(parentJob, jobHeader), items.length, doNowOf(items), {
     extraClass: "priority-job",
+    tag: veevaTag(parentJob),
     fill: (body) => { for (const it of items) body.appendChild(renderPriorityCard(it, false)); },
   });
 }

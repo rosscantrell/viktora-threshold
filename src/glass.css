@@ -781,7 +781,25 @@ body {
   background: var(--glass-surface-hover);
   border-radius: var(--glass-radius-md);
 }
-.priority-group-title { flex: 1; }
+.priority-group-title {
+  flex: 1;
+  min-width: 0;                  /* allow the flex item to shrink so ellipsis works */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Veeva job ID chip — the project key. Fixed, never truncated. */
+.priority-job-tag {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--glass-link);
+  background: rgba(127, 179, 232, 0.12);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
 .priority-group-urgent {
   font-size: 10.5px;
   font-weight: 500;
