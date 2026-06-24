@@ -3381,7 +3381,18 @@ function renderJobGroup(parentJob, jobHeader, items) {
     extraClass: "priority-job",
     tag: veevaTag(parentJob),
     quadrant: items[0] && items[0].jobQuadrant,     // job-grain quadrant badge
-    fill: (body) => { for (const it of items) body.appendChild(renderPriorityCard(it, false)); },
+    fill: (body) => {
+      for (const it of items) {
+        const card = renderPriorityCard(it, false);
+        if (it.section) {                            // provenance: which hot-list this came from
+          const prov = document.createElement("div");
+          prov.className = "priority-prov";
+          prov.textContent = cleanSection(it.section);
+          card.insertBefore(prov, card.firstChild);
+        }
+        body.appendChild(card);
+      }
+    },
   });
 }
 
@@ -3469,18 +3480,23 @@ function renderTodayPriority(container, data) {
       let rendered = 0;
 
       if (hotlist.length) {
-        const sections = new Map();
+        // WP-Rollup job-first — group by JOB across the whole corpus so a job
+        // mentioned in two emails is ONE row with all its actions (the chip
+        // count then equals the row count). Section travels as a per-action
+        // provenance tag, not a splitting band.
+        const jobs = new Map();
         for (const it of hotlist) {
-          const sk = it.section || "Other";
-          if (!sections.has(sk)) sections.set(sk, []);
-          sections.get(sk).push(it);
+          if (!jobs.has(it.parentJob)) jobs.set(it.parentJob, { header: it.jobHeader, items: [] });
+          const j = jobs.get(it.parentJob);
+          j.items.push(it);
+          if (!j.header && it.jobHeader) j.header = it.jobHeader;
         }
-        const secOrdered = [...sections.entries()].sort((a, b) => {
-          const ra = Math.min(...a[1].map((i) => quadrantRank(i.quadrant)));
-          const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
-          return ra - rb || b[1].length - a[1].length;
+        const jobOrdered = [...jobs.entries()].sort((a, b) => {
+          const qa = jobRank[a[1].items[0]?.jobQuadrant] ?? 2, qb = jobRank[b[1].items[0]?.jobQuadrant] ?? 2;
+          const pa = a[1].items[0]?.jobPriority ?? 0, pb = b[1].items[0]?.jobPriority ?? 0;
+          return qa - qb || pb - pa || b[1].items.length - a[1].items.length;
         });
-        for (const [sec, sItems] of secOrdered) { cardArea.appendChild(renderSectionGroup(sec, sItems)); rendered++; }
+        for (const [pj, j] of jobOrdered) { cardArea.appendChild(renderJobGroup(pj, j.header, j.items)); rendered++; }
       }
 
       // Non-hot-list remainder → P1 entity groups, capped.
@@ -3497,7 +3513,7 @@ function renderTodayPriority(container, data) {
         const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
         return ra - rb || b[1].length - a[1].length || a[0].localeCompare(b[0]);
       });
-      const cap = Math.max(0, FOCUS_GROUP_CAP - rendered);
+      const cap = FOCUS_GROUP_CAP;          // entity groups capped independently of job rows
       const shownGroups = ordered.slice(0, cap);
       for (const [entity, gItems] of shownGroups) cardArea.appendChild(renderEntityGroup(entity, gItems));
       if (ordered.length > shownGroups.length) {

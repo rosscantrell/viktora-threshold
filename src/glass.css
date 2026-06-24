@@ -864,6 +864,14 @@ body {
   padding: 1px 7px;
   white-space: nowrap;
 }
+/* Section provenance tag on an action card (which hot-list it came from). */
+.priority-prov {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-faint);
+  margin-bottom: 4px;
+}
 .priority-qbadge-do-now { color: var(--glass-accent); background: rgba(255, 196, 64, 0.16); }
 .priority-qbadge-schedule { color: var(--glass-link); background: rgba(127, 179, 232, 0.14); }
 .priority-qbadge-delegate { color: var(--glass-text-dim); background: var(--glass-surface); }
