@@ -2641,6 +2641,33 @@ async function enterLogView() {
       ownersSection.hidden = true;
     }
   }
+
+  // "Everything else" — reveal the grouped legacy sections + wire the collapsible
+  // (idempotent: the click handler binds once across re-renders).
+  const everySection = document.getElementById("log-everything-section");
+  const everyToggle = document.getElementById("log-everything-toggle");
+  const everyBody = document.getElementById("log-everything-body");
+  const everyCount = document.getElementById("log-everything-count");
+  if (everySection) everySection.hidden = false;
+  if (everyCount) {
+    const n = needsAttention.length + contradictions.length;
+    everyCount.textContent = n ? String(n) : "";
+  }
+  if (everyToggle && everyBody && !everyToggle.dataset.wired) {
+    everyToggle.dataset.wired = "1";
+    const caret = everyToggle.querySelector(".log-collapse-caret");
+    everyToggle.addEventListener("click", () => {
+      const open = everyBody.hidden; // about to open
+      everyBody.hidden = !open;
+      if (caret) caret.textContent = open ? "▾" : "▸";
+      everyToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      if (everySection) everySection.classList.toggle("log-collapsed", !open);
+    });
+  }
+
+  // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
+  // independently of the State-of-Play digest. Additive + silent if the flag's off.
+  loadTodayPriority();
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -2906,6 +2933,8 @@ function renderCorpusPanel(panel, data) {
   panel.appendChild(msg);
   // Phase B — inline digest edit (corpus altitude).
   attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
+  // (WP-Priority-Operator — the Focus rail now lives on the Today surface, loaded
+  // independently of State-of-Play; see renderTodayPriority.)
 }
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
@@ -3029,6 +3058,415 @@ function renderInformCard(edge, mode) {
   dismiss.textContent = "Not relevant";
   dismiss.addEventListener("click", () => card.remove());
   actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
+// WP-Priority-Operator — the "Focus" surface (deterministic importance × urgency),
+// the top of the Today view. Splits the viewer's ranked items into collapsible
+// Focus (do-now / schedule / delegate — the act-on quadrants) and Watch (the
+// watch quadrant) sections, each card carrying a business-language `why` (packets,
+// no slugs) + pin/dismiss gestures that calibrate the per-user weight vector
+// (passive — never a rating task). Backed by GET /api/decision-log/priority via
+// fetch_priority. Additive + silent: never an error surface; loads on Today
+// independently of the State-of-Play digest.
+const QUADRANT_LABEL = { "do-now": "Do now", schedule: "Schedule", delegate: "Delegate", watch: "Watch" };
+const QUADRANT_ORDER = ["do-now", "schedule", "delegate", "watch"];
+const FOCUS_QUADRANTS = new Set(["do-now", "schedule", "delegate"]);
+const FOCUS_CAP = 15;
+const WATCH_CAP = 25;
+
+// Reusable collapsible section (header with caret + count, toggles its body).
+function makeCollapsible(title, count, defaultOpen) {
+  const section = document.createElement("section");
+  section.className = "log-collapse" + (defaultOpen ? "" : " log-collapsed");
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "log-collapse-head";
+  head.setAttribute("aria-expanded", defaultOpen ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = defaultOpen ? "▾" : "▸";
+  head.appendChild(caret);
+  const t = document.createElement("span");
+  t.className = "log-collapse-title";
+  t.textContent = title;
+  head.appendChild(t);
+  const c = document.createElement("span");
+  c.className = "log-collapse-count";
+  if (count != null) c.textContent = String(count);
+  head.appendChild(c);
+  const body = document.createElement("div");
+  body.className = "log-collapse-body";
+  if (!defaultOpen) body.hidden = true;
+  head.addEventListener("click", () => {
+    const open = body.hidden; // about to open
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    section.classList.toggle("log-collapsed", !open);
+  });
+  section.appendChild(head);
+  section.appendChild(body);
+  return { section, body };
+}
+
+async function loadTodayPriority() {
+  const container = document.getElementById("log-priority-sections");
+  if (container) container.innerHTML = "";
+  let res;
+  try {
+    res = await tauri.core.invoke("fetch_priority");
+  } catch (err) {
+    console.warn("[main] fetch_priority failed:", err);
+    return; // silent — additive
+  }
+  if (!res || res.available === false) return; // flag off / server too old
+  const items = Array.isArray(res.items) ? res.items : [];
+  if (items.length === 0 || !container) return;
+  renderTodayPriority(container, res);
+}
+
+async function sendPriorityGesture(item, gestureType, reason, snoozeUntil, handoffNote) {
+  try {
+    await tauri.core.invoke("post_priority_gesture", {
+      gestureType,
+      recordId: item.recordId,
+      relationship: item.relationship || null,
+      owner: item.owner || null,
+      reason: reason || null,
+      snoozeUntil: snoozeUntil || null,
+      handoffNote: handoffNote || null,
+      // Denormalized context SNAPSHOT — the at-the-moment values, so the offline
+      // training join needs no re-derive against an aging corpus.
+      context: {
+        quadrant: item.quadrant || null,
+        seniorityTier: item.seniorityTier || null,
+        importanceSource: item.importanceSource || null,
+        counterparty: item.counterparty || null,
+        priority: typeof item.priority === "number" ? item.priority : null,
+        importance: typeof item.importance === "number" ? item.importance : null,
+        urgency: typeof item.urgency === "number" ? item.urgency : null,
+      },
+    });
+    return true;
+  } catch (err) {
+    console.warn("[main] post_priority_gesture failed:", err);
+    showToast({ kind: "failure", title: "Couldn't save", body: "Try again." });
+    return false;
+  }
+}
+
+// Priority dismiss reasons — the class decides calibration direction (false-positive
+// vs correct-but-cleared). Mirrors the decision-log RecordHitlReason set. (Named
+// distinctly from the decision-log's own DISMISS_REASONS.)
+const PRIORITY_DISMISS_REASONS = [
+  { reason: "not-relevant", label: "Not relevant" },
+  { reason: "already-known", label: "Already knew" },
+  { reason: "closing-out", label: "Handled" },
+];
+
+// Snooze presets (wall-clock; the item resurfaces in Focus on that date).
+function isoDatePlusDays(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+const SNOOZE_PRESETS = [
+  { label: "Tomorrow", days: 1 },
+  { label: "Next week", days: 7 },
+  { label: "In a month", days: 30 },
+];
+
+// A copy-ready hand-off note for the Delegate action — drafts the ask; you send it.
+function buildHandoffNote(item) {
+  const bits = [];
+  if (item.relationship === "client") bits.push("client-facing");
+  else if (item.relationship === "partner") bits.push("external-facing");
+  const why = (item.why || "").replace(/^This needs attention now — /i, "").replace(/\.$/, "");
+  if (why) bits.push(why);
+  const tail = bits.length ? ` (${bits.join("; ")})` : "";
+  const owner = item.owner ? ` — currently with ${prettySlug(item.owner)}` : "";
+  return `Can you take point on this: "${item.summary || "this item"}"${tail}.${owner}`;
+}
+
+function renderTodayPriority(container, data) {
+  container.innerHTML = "";
+  const items = data.items || [];
+  const counts = data.quadrantCounts || {};
+  const tracked = items.filter((i) => i.tracked);
+  const trackedIds = new Set(tracked.map((i) => i.recordId));
+
+  // ── Focus: the act-on quadrants (do-now / schedule / delegate). The quadrant
+  //    chips are toggle FILTERS over this list (click "Schedule" → only schedule
+  //    items; click again → all focus quadrants). ──
+  const focusCount = (counts["do-now"] || 0) + (counts["schedule"] || 0) + (counts["delegate"] || 0);
+  const focus = makeCollapsible("Focus", focusCount, true);
+
+  const sub = document.createElement("div");
+  sub.className = "priority-sub";
+  sub.textContent = data.horizon
+    ? `What matters most — for you, right now (as of ${data.horizon}). Tap a chip to filter.`
+    : "What matters most — for you, right now. Tap a chip to filter.";
+  focus.body.appendChild(sub);
+
+  const chips = document.createElement("div");
+  chips.className = "priority-quadrants";
+  focus.body.appendChild(chips);
+
+  const cardArea = document.createElement("div");
+  focus.body.appendChild(cardArea);
+
+  let activeFilter = null; // null = all focus quadrants; else a single quadrant key
+
+  const renderCards = () => {
+    cardArea.innerHTML = "";
+    const inScope = (i) => (activeFilter ? i.quadrant === activeFilter : FOCUS_QUADRANTS.has(i.quadrant));
+    const trk = tracked.filter(inScope);
+    if (trk.length) {
+      const th = document.createElement("div");
+      th.className = "priority-tracking-head";
+      th.textContent = `Tracking · ${trk.length}`;
+      cardArea.appendChild(th);
+      for (const it of trk) cardArea.appendChild(renderPriorityCard(it, true));
+    }
+    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId));
+    const shown = pool.slice(0, FOCUS_CAP);
+    for (const it of shown) cardArea.appendChild(renderPriorityCard(it, false));
+    if (pool.length > shown.length) {
+      const more = document.createElement("div");
+      more.className = "priority-more";
+      more.textContent = `+ ${pool.length - shown.length} more`;
+      cardArea.appendChild(more);
+    }
+    if (!trk.length && !shown.length) {
+      const empty = document.createElement("div");
+      empty.className = "priority-more";
+      empty.textContent = "Nothing here right now.";
+      cardArea.appendChild(empty);
+    }
+  };
+
+  // Chips are filter buttons (do-now / schedule / delegate). Watch lives in its
+  // own section below — it isn't a Focus filter.
+  for (const q of ["do-now", "schedule", "delegate"]) {
+    const n = counts[q] || 0;
+    if (!n) continue;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.dataset.q = q;
+    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
+    chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
+    chip.addEventListener("click", () => {
+      activeFilter = activeFilter === q ? null : q;
+      for (const c of chips.children) {
+        c.classList.toggle("priority-chip-active", c.dataset.q === activeFilter);
+      }
+      renderCards();
+    });
+    chips.appendChild(chip);
+  }
+
+  renderCards();
+  container.appendChild(focus.section);
+
+  // ── Watch: the watch quadrant, its own collapsed section (usually large). ──
+  const watchAll = items.filter((i) => i.quadrant === "watch" && !trackedIds.has(i.recordId));
+  if (watchAll.length) {
+    const watch = makeCollapsible("Watch", counts["watch"] || watchAll.length, false);
+    for (const it of watchAll.slice(0, WATCH_CAP)) watch.body.appendChild(renderPriorityCard(it, false));
+    if (watchAll.length > WATCH_CAP) {
+      const more = document.createElement("div");
+      more.className = "priority-more";
+      more.textContent = `+ ${watchAll.length - WATCH_CAP} more in Watch`;
+      watch.body.appendChild(more);
+    }
+    container.appendChild(watch.section);
+  }
+}
+
+function renderPriorityCard(item, isTracked) {
+  const card = document.createElement("div");
+  card.className = "priority-card" + (isTracked ? " priority-card-tracked" : "");
+
+  const top = document.createElement("div");
+  top.className = "priority-card-top";
+  const quad = document.createElement("span");
+  quad.className = "priority-quad-tag" + (item.quadrant === "do-now" ? " priority-quad-now" : "");
+  quad.textContent = QUADRANT_LABEL[item.quadrant] || item.quadrant;
+  top.appendChild(quad);
+  const rel = document.createElement("span");
+  rel.className = "priority-rel";
+  const relWord = item.relationship === "client" ? "Client"
+    : item.relationship === "partner" ? "Partner" : "Internal";
+  rel.textContent = item.seniorityTier ? `${relWord} · ${item.seniorityTier}` : relWord;
+  top.appendChild(rel);
+  card.appendChild(top);
+
+  const summary = document.createElement("div");
+  summary.className = "priority-item";
+  summary.textContent = item.summary || "(item)";
+  card.appendChild(summary);
+
+  // Business-language why — the packet interpretation, never raw slugs/scores.
+  const whyText = [item.why, item.relationshipWhy].filter(Boolean).join(" ");
+  if (whyText) {
+    const why = document.createElement("div");
+    why.className = "priority-why";
+    why.textContent = whyText;
+    card.appendChild(why);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "priority-actions";
+
+  // Default actions: Track (pin) · Snooze (schedule for later) · Hand off
+  // (delegate) · Not now (dismiss, opens the reason chooser).
+  const buildDefaultActions = () => {
+    actions.innerHTML = "";
+    actions.classList.remove("priority-actions-col");
+    const track = document.createElement("button");
+    track.type = "button";
+    track.className = "priority-track";
+    track.textContent = isTracked ? "Tracking" : "Track";
+    track.disabled = isTracked;
+    track.addEventListener("click", async () => {
+      track.disabled = true;
+      const ok = await sendPriorityGesture(item, "pin");
+      if (ok) track.textContent = "Tracking";
+      else track.disabled = false;
+    });
+    actions.appendChild(track);
+
+    // Schedule (snooze gesture) — schedule the item for later: opens the date chooser.
+    const snooze = document.createElement("button");
+    snooze.type = "button";
+    snooze.className = "priority-reason";
+    snooze.textContent = "Schedule";
+    snooze.addEventListener("click", buildSnoozeChooser);
+    actions.appendChild(snooze);
+
+    // Delegate (handoff gesture) — opens the inline editor (draft the note, edit it, then copy).
+    const handoff = document.createElement("button");
+    handoff.type = "button";
+    handoff.className = "priority-reason";
+    handoff.textContent = "Delegate";
+    handoff.addEventListener("click", buildHandoffEditor);
+    actions.appendChild(handoff);
+
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "priority-dismiss";
+    dismiss.textContent = "Not now";
+    dismiss.addEventListener("click", buildReasonChooser);
+    actions.appendChild(dismiss);
+  };
+
+  // Snooze chooser — presets + a custom date input. Sends a snooze gesture with
+  // the resurface date; the card leaves Focus until then.
+  const buildSnoozeChooser = () => {
+    actions.innerHTML = "";
+    const q = document.createElement("span");
+    q.className = "priority-dismiss-q";
+    q.textContent = "Until?";
+    actions.appendChild(q);
+    const doSnooze = async (iso) => {
+      for (const c of actions.querySelectorAll("button, input")) c.disabled = true;
+      const ok = await sendPriorityGesture(item, "snooze", null, iso);
+      if (ok) { showToast({ kind: "success", title: "Scheduled", body: `Back in Focus on ${iso}.` }); card.remove(); }
+      else buildDefaultActions();
+    };
+    for (const p of SNOOZE_PRESETS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "priority-reason";
+      b.textContent = p.label;
+      b.addEventListener("click", () => doSnooze(isoDatePlusDays(p.days)));
+      actions.appendChild(b);
+    }
+    const picker = document.createElement("input");
+    picker.type = "date";
+    picker.className = "priority-date";
+    picker.min = isoDatePlusDays(1);
+    picker.addEventListener("change", () => { if (picker.value) doSnooze(picker.value); });
+    actions.appendChild(picker);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    actions.appendChild(cancel);
+  };
+
+  // "Why?" — one extra tap that captures the dismiss REASON (the class decides
+  // calibration direction). Without it a dismiss is ambiguous and can't be routed.
+  const buildReasonChooser = () => {
+    actions.innerHTML = "";
+    const q = document.createElement("span");
+    q.className = "priority-dismiss-q";
+    q.textContent = "Why?";
+    actions.appendChild(q);
+    for (const r of PRIORITY_DISMISS_REASONS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "priority-reason";
+      b.textContent = r.label;
+      b.addEventListener("click", async () => {
+        for (const c of actions.querySelectorAll("button")) c.disabled = true;
+        const ok = await sendPriorityGesture(item, "dismiss", r.reason);
+        if (ok) card.remove();
+        else buildDefaultActions();
+      });
+      actions.appendChild(b);
+    }
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    actions.appendChild(cancel);
+  };
+
+  // Hand-off editor — pre-fills the drafted note, lets the user edit it inline,
+  // THEN copies the edited text + records the handoff (the card leaves Focus).
+  const buildHandoffEditor = () => {
+    actions.innerHTML = "";
+    actions.classList.add("priority-actions-col");
+    const ta = document.createElement("textarea");
+    ta.className = "priority-handoff-edit";
+    ta.rows = 3;
+    ta.value = buildHandoffNote(item);
+    actions.appendChild(ta);
+
+    const row = document.createElement("div");
+    row.className = "priority-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "priority-track";
+    copyBtn.textContent = "Copy & delegate";
+    copyBtn.addEventListener("click", async () => {
+      copyBtn.disabled = true;
+      try { await tauri.core.invoke("copy_text", { text: ta.value }); }
+      catch (e) { /* clipboard best-effort */ }
+      // Capture the EDITED text (incl. any delegatee name the user typed in) verbatim.
+      const ok = await sendPriorityGesture(item, "handoff", null, null, ta.value);
+      if (ok) { showToast({ kind: "success", title: "Copied to delegate", body: "Paste into email or chat." }); card.remove(); }
+      else copyBtn.disabled = false;
+    });
+    row.appendChild(copyBtn);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    row.appendChild(cancel);
+    actions.appendChild(row);
+
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  };
+
+  buildDefaultActions();
   card.appendChild(actions);
   return card;
 }

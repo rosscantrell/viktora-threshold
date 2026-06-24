@@ -2614,6 +2614,111 @@ async fn fetch_inform_edges(
         .map_err(|e| format!("fetch_inform_edges: parse response failed: {e}"))
 }
 
+/// WP-Priority-Operator — the viewer's ranked "Focus" surface (importance ×
+/// urgency). Proxies GET /api/decision-log/priority. 503 (flag off) or 404 →
+/// {available:false} so the rail stays silent on servers without the operator
+/// enabled. The server scopes to the viewer via the per-user bearer.
+#[tauri::command]
+async fn fetch_priority(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/priority",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_priority: parse response failed: {e}"))
+}
+
+/// WP-Priority-Operator HITL — record a natural calibration gesture (pin / unpin /
+/// dismiss / reorder) for one priority item. POSTs /api/decision-log/priority/gesture;
+/// the per-user weight vector is derived server-side from the gesture stream — never
+/// a labeling task. `relationship` / `owner` denormalize the signal dimensions so the
+/// server can re-weight without a re-lookup. Additive; failure-safe at the call site.
+#[tauri::command]
+async fn post_priority_gesture(
+    state: tauri::State<'_, AppState>,
+    gesture_type: String,
+    record_id: String,
+    relationship: Option<String>,
+    owner: Option<String>,
+    reason: Option<String>,
+    snooze_until: Option<String>,
+    handoff_note: Option<String>,
+    context: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    if record_id.trim().is_empty() {
+        return Err("post_priority_gesture: empty record_id".into());
+    }
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/priority/gesture",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::json!({ "type": gesture_type, "recordId": record_id });
+    if let Some(r) = relationship {
+        body["relationship"] = serde_json::Value::String(r);
+    }
+    if let Some(o) = owner {
+        body["owner"] = serde_json::Value::String(o);
+    }
+    // Dismiss reason (calibration direction) + denormalized context snapshot
+    // (at-the-moment values, persisted so the future training join needs no re-derive).
+    if let Some(r) = reason {
+        body["reason"] = serde_json::Value::String(r);
+    }
+    if let Some(s) = snooze_until {
+        body["snoozeUntil"] = serde_json::Value::String(s);
+    }
+    if let Some(n) = handoff_note {
+        body["handoffNote"] = serde_json::Value::String(n);
+    }
+    if let Some(c) = context {
+        body["context"] = c;
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("post_priority_gesture: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-STATE-OF-PLAY — project altitude: returns the team-addressed
 /// digest AND the per-teammate digests scoped to one project. `polish=false`
 /// (`?team=text`) yields the instant deterministic team email; default polishes
@@ -6164,6 +6269,9 @@ pub fn run() {
             fetch_project_state_of_play,
             // WP-Cohesion-Operators — INFORM ("worth looping in")
             fetch_inform_edges,
+            // WP-Priority-Operator — "Focus" rail + HITL calibration gestures
+            fetch_priority,
+            post_priority_gesture,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,
