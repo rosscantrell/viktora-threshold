@@ -766,3 +766,40 @@ body {
   background: var(--glass-surface-hover);
   color: var(--glass-text);
 }
+
+/* WP-Rollup P1 — Focus entity/job groups (collapsed-by-default rows). */
+.priority-group {
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  margin-bottom: 6px;
+}
+.priority-group-head {
+  padding: 9px 11px;
+}
+.priority-group-head:hover {
+  background: var(--glass-surface-hover);
+  border-radius: var(--glass-radius-md);
+}
+.priority-group-title { flex: 1; }
+.priority-group-urgent {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--glass-accent);
+  background: rgba(255, 196, 64, 0.16);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.priority-group-body {
+  padding: 0 11px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.priority-group-def {
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  padding: 2px 0 4px;
+}

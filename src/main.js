@@ -3076,6 +3076,41 @@ const FOCUS_QUADRANTS = new Set(["do-now", "schedule", "delegate"]);
 const FOCUS_CAP = 15;
 const WATCH_CAP = 25;
 
+// WP-Rollup P1 — roll the flat Focus list up by entity/job. Flippable: set to
+// false to fall back to the pre-rollup flat card list (A/B against the pilot).
+// Degrades automatically when the server doesn't send primaryEntity yet (P1a).
+const ROLLUP_ENABLED = true;
+const FOCUS_GROUP_CAP = 12;
+// Lazy entity-definition cache (entity slug → Promise<string|null>). One
+// fetch_entity_card per entity, ever; reused across expands + reloads.
+const _entityDefCache = new Map();
+
+function quadrantRank(q) {
+  const i = QUADRANT_ORDER.indexOf(q);
+  return i < 0 ? QUADRANT_ORDER.length : i;
+}
+
+// Lazily fetch the LLM "Definition" prose for an entity (the receipts/entity
+// card). Returns a short one-paragraph string, or null when unavailable (flag
+// off / no card / unreachable) — the group still renders, just without a blurb.
+function lazyEntityDefinition(entity) {
+  if (_entityDefCache.has(entity)) return _entityDefCache.get(entity);
+  const p = (async () => {
+    try {
+      const data = await tauri.core.invoke("fetch_entity_card", { entity });
+      if (!data || data.available === false) return null;
+      const prose = typeof data.prose === "string" ? data.prose.trim() : "";
+      if (!prose) return null;
+      const first = prose.split(/\n{2,}/)[0].trim();
+      return first.length > 180 ? first.slice(0, 177).trimEnd() + "…" : first;
+    } catch (_e) {
+      return null;
+    }
+  })();
+  _entityDefCache.set(entity, p);
+  return p;
+}
+
 // Reusable collapsible section (header with caret + count, toggles its body).
 function makeCollapsible(title, count, defaultOpen) {
   const section = document.createElement("section");
@@ -3190,6 +3225,76 @@ function buildHandoffNote(item) {
   return `Can you take point on this: "${item.summary || "this item"}"${tail}.${owner}`;
 }
 
+// WP-Rollup P1 — one collapsible job/entity group inside Focus. Collapsed by
+// default (the density win: a scannable list of jobs, not a wall of cards). The
+// do-now count is badged on the header so urgency is visible without expanding;
+// the LLM definition + the nested action cards load lazily on first expand.
+function renderEntityGroup(entity, groupItems) {
+  const section = document.createElement("section");
+  section.className = "priority-group log-collapse log-collapsed";
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "priority-group-head log-collapse-head";
+  head.setAttribute("aria-expanded", "false");
+
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = "▸";
+  head.appendChild(caret);
+
+  const title = document.createElement("span");
+  title.className = "log-collapse-title priority-group-title";
+  title.textContent = entity === "__ungrouped__" ? "Other" : prettySlug(entity);
+  head.appendChild(title);
+
+  const doNow = groupItems.filter((i) => i.quadrant === "do-now").length;
+  if (doNow) {
+    const badge = document.createElement("span");
+    badge.className = "priority-group-urgent";
+    badge.textContent = `Do now ${doNow}`;
+    head.appendChild(badge);
+  }
+
+  const count = document.createElement("span");
+  count.className = "log-collapse-count";
+  count.textContent = String(groupItems.length);
+  head.appendChild(count);
+
+  const body = document.createElement("div");
+  body.className = "log-collapse-body priority-group-body";
+  body.hidden = true;
+
+  let filled = false;
+  const fill = () => {
+    if (filled) return;
+    filled = true;
+    if (entity !== "__ungrouped__") {
+      const def = document.createElement("div");
+      def.className = "priority-group-def";
+      def.hidden = true;
+      body.appendChild(def);
+      lazyEntityDefinition(entity).then((text) => {
+        if (text) { def.textContent = text; def.hidden = false; }
+      });
+    }
+    for (const it of groupItems) body.appendChild(renderPriorityCard(it, false));
+  };
+
+  head.addEventListener("click", () => {
+    const open = body.hidden;
+    if (open) fill();
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    section.classList.toggle("log-collapsed", !open);
+  });
+
+  section.appendChild(head);
+  section.appendChild(body);
+  return section;
+}
+
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
   const items = data.items || [];
@@ -3231,6 +3336,44 @@ function renderTodayPriority(container, data) {
       for (const it of trk) cardArea.appendChild(renderPriorityCard(it, true));
     }
     const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId));
+
+    // WP-Rollup P1 — roll the untracked pool up by entity/job, collapsed by
+    // default. Falls back to the flat list when rollup is off OR the server
+    // isn't sending primaryEntity yet (P1a not deployed) — never an empty wall.
+    const canGroup = ROLLUP_ENABLED && pool.some((i) => i.primaryEntity);
+    if (canGroup) {
+      const groups = new Map();
+      for (const it of pool) {
+        const key = it.primaryEntity || "__ungrouped__";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      }
+      const ordered = [...groups.entries()].sort((a, b) => {
+        const aUng = a[0] === "__ungrouped__", bUng = b[0] === "__ungrouped__";
+        if (aUng !== bUng) return aUng ? 1 : -1;                 // ungrouped last
+        const ra = Math.min(...a[1].map((i) => quadrantRank(i.quadrant)));
+        const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
+        return ra - rb || b[1].length - a[1].length || a[0].localeCompare(b[0]);
+      });
+      const shownGroups = ordered.slice(0, FOCUS_GROUP_CAP);
+      for (const [entity, gItems] of shownGroups) {
+        cardArea.appendChild(renderEntityGroup(entity, gItems));
+      }
+      if (ordered.length > shownGroups.length) {
+        const more = document.createElement("div");
+        more.className = "priority-more";
+        more.textContent = `+ ${ordered.length - shownGroups.length} more jobs`;
+        cardArea.appendChild(more);
+      }
+      if (!trk.length && !ordered.length) {
+        const empty = document.createElement("div");
+        empty.className = "priority-more";
+        empty.textContent = "Nothing here right now.";
+        cardArea.appendChild(empty);
+      }
+      return;
+    }
+
     const shown = pool.slice(0, FOCUS_CAP);
     for (const it of shown) cardArea.appendChild(renderPriorityCard(it, false));
     if (pool.length > shown.length) {
