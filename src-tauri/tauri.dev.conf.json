@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Viktora Threshold Dev",
+  "identifier": "ai.viktora.threshold.dev",
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["apolla-threshold-dev"]
+      }
+    }
+  }
+}

@@ -388,6 +388,19 @@ pub struct ConfigurePrefill {
     pub token: String,
 }
 
+/// Custom URL scheme this build answers to. DEV builds use a distinct
+/// scheme (`apolla-threshold-dev`) so an at-launch deep-link routes to the
+/// running `tauri dev` binary instead of the installed release (macOS
+/// routes a shared scheme to whichever app is registered — usually the
+/// installed one). Compile-time `debug_assertions` is true for `tauri dev`
+/// and false in `--release` bundles, so the release binary is unchanged.
+/// Paired with the dev-only `tauri.dev.conf.json` override that registers
+/// this scheme at the OS level for the dev build (see `npm run tauri:dev`).
+#[cfg(debug_assertions)]
+pub const DEEP_LINK_SCHEME: &str = "apolla-threshold-dev";
+#[cfg(not(debug_assertions))]
+pub const DEEP_LINK_SCHEME: &str = "apolla-threshold";
+
 /// Parse an `apolla-threshold://configure?tenant=...&token=...` URL into
 /// a `ConfigurePrefill` event payload. Returns `None` for malformed URLs
 /// (wrong scheme, missing token, etc.) so the deep-link handler can log
@@ -400,7 +413,7 @@ pub struct ConfigurePrefill {
 /// either `configure` as host OR path to be tolerant of future schema
 /// drift.
 pub fn parse_configure_deep_link(url: &url::Url) -> Option<ConfigurePrefill> {
-    if url.scheme() != "apolla-threshold" {
+    if url.scheme() != DEEP_LINK_SCHEME {
         return None;
     }
     // Accept "configure" as either host or path's first segment.
@@ -465,7 +478,7 @@ pub struct AuthCallback {
 /// `parse_configure_deep_link`: accepts `auth` as either host or first path
 /// segment to tolerate custom-scheme URL-parser inconsistencies.
 pub fn parse_auth_deep_link(url: &url::Url) -> Option<AuthCallback> {
-    if url.scheme() != "apolla-threshold" {
+    if url.scheme() != DEEP_LINK_SCHEME {
         return None;
     }
     let host_ok = url.host_str() == Some("auth");
@@ -487,8 +500,19 @@ pub fn parse_auth_deep_link(url: &url::Url) -> Option<AuthCallback> {
     Some(AuthCallback { token })
 }
 
+/// Per-user config directory. DEV builds use a distinct "Viktora Threshold
+/// Dev" directory so `tauri dev` never reads/writes the installed release's
+/// `config.json` (and vice-versa). Compile-time `debug_assertions` is true
+/// for `tauri dev` and false in `--release` bundles, so the installed
+/// release's path is unchanged. This literal is the canonical config-dir
+/// name (NOT derived from Tauri's productName), so it must be gated here
+/// rather than via the dev `tauri.dev.conf.json` override.
 fn config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("Viktora Threshold"))
+    #[cfg(debug_assertions)]
+    let dir_name = "Viktora Threshold Dev";
+    #[cfg(not(debug_assertions))]
+    let dir_name = "Viktora Threshold";
+    dirs::config_dir().map(|p| p.join(dir_name))
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -7403,6 +7427,14 @@ mod tests {
 
     // ───── WP-OCR-09 Phase D — deep-link Configure pre-fill ─────
 
+    // Build a deep-link URL using THIS build's expected scheme
+    // (`DEEP_LINK_SCHEME` — `apolla-threshold-dev` under debug_assertions,
+    // `apolla-threshold` in release). `rest` is everything after `://`.
+    // Scheme-positive tests use this so they pass under both build profiles.
+    fn scheme_url(rest: &str) -> String {
+        format!("{}://{}", DEEP_LINK_SCHEME, rest)
+    }
+
     fn parse(s: &str) -> Option<ConfigurePrefill> {
         let url = url::Url::parse(s).expect("test URL parses");
         parse_configure_deep_link(&url)
@@ -7410,9 +7442,8 @@ mod tests {
 
     #[test]
     fn deep_link_happy_path() {
-        let prefill =
-            parse("apolla-threshold://configure?tenant=threshold-eval&token=apolla_abc123")
-                .expect("happy path parses");
+        let prefill = parse(&scheme_url("configure?tenant=threshold-eval&token=apolla_abc123"))
+            .expect("happy path parses");
         assert_eq!(prefill.tenant.as_deref(), Some("threshold-eval"));
         assert_eq!(prefill.base_url, "https://threshold-eval.viktora.ai");
         assert_eq!(prefill.token, "apolla_abc123");
@@ -7427,22 +7458,22 @@ mod tests {
     #[test]
     fn deep_link_rejects_wrong_host() {
         // host="setup" instead of "configure" — reject
-        assert!(parse("apolla-threshold://setup?tenant=x&token=apolla_abc").is_none());
+        assert!(parse(&scheme_url("setup?tenant=x&token=apolla_abc")).is_none());
     }
 
     #[test]
     fn deep_link_rejects_missing_token() {
-        assert!(parse("apolla-threshold://configure?tenant=acme").is_none());
+        assert!(parse(&scheme_url("configure?tenant=acme")).is_none());
         // Empty-string token also rejected (canonical canary)
-        assert!(parse("apolla-threshold://configure?tenant=acme&token=").is_none());
+        assert!(parse(&scheme_url("configure?tenant=acme&token=")).is_none());
     }
 
     #[test]
     fn deep_link_rejects_missing_tenant() {
         // No tenant slug → can't reconstruct base_url → reject. Brief
         // (WP-OCR-09 D-09-08) requires `?tenant=...`.
-        assert!(parse("apolla-threshold://configure?token=apolla_abc").is_none());
-        assert!(parse("apolla-threshold://configure?tenant=&token=apolla_abc").is_none());
+        assert!(parse(&scheme_url("configure?token=apolla_abc")).is_none());
+        assert!(parse(&scheme_url("configure?tenant=&token=apolla_abc")).is_none());
     }
 
     #[test]
@@ -7450,9 +7481,9 @@ mod tests {
         // url::Url performs percent-decoding on query_pairs(), so a token
         // containing % escapes round-trips. Validates we use query_pairs()
         // rather than raw .query().
-        let prefill = parse(
-            "apolla-threshold://configure?tenant=acme&token=apolla_%2B%2Ftoken%3Dvalue",
-        )
+        let prefill = parse(&scheme_url(
+            "configure?tenant=acme&token=apolla_%2B%2Ftoken%3Dvalue",
+        ))
         .expect("encoded token parses");
         assert_eq!(prefill.token, "apolla_+/token=value");
     }
@@ -7461,9 +7492,8 @@ mod tests {
     fn deep_link_ignores_extra_query_params() {
         // Brief reserves `?tenant=` and `?token=`; future params should
         // be silently ignored, not reject the URL.
-        let prefill =
-            parse("apolla-threshold://configure?tenant=acme&token=apolla_abc&future=xyz")
-                .expect("extra params tolerated");
+        let prefill = parse(&scheme_url("configure?tenant=acme&token=apolla_abc&future=xyz"))
+            .expect("extra params tolerated");
         assert_eq!(prefill.tenant.as_deref(), Some("acme"));
         assert_eq!(prefill.token, "apolla_abc");
     }
@@ -7473,10 +7503,8 @@ mod tests {
         // Multi-hyphen tenant slug (matches the wife-pilot
         // threshold-eval.viktora.ai pattern). Slug is opaque — no slug
         // validation in v1.
-        let prefill = parse(
-            "apolla-threshold://configure?tenant=acme-corp-staging&token=apolla_xyz",
-        )
-        .expect("hyphenated tenant parses");
+        let prefill = parse(&scheme_url("configure?tenant=acme-corp-staging&token=apolla_xyz"))
+            .expect("hyphenated tenant parses");
         assert_eq!(prefill.tenant.as_deref(), Some("acme-corp-staging"));
         assert_eq!(prefill.base_url, "https://acme-corp-staging.viktora.ai");
     }
@@ -7490,41 +7518,43 @@ mod tests {
 
     #[test]
     fn auth_deep_link_happy_path() {
-        let cb = parse_auth("apolla-threshold://auth?token=VnL2UnrwPyN6EXlZ").expect("parses");
+        let cb = parse_auth(&scheme_url("auth?token=VnL2UnrwPyN6EXlZ")).expect("parses");
         assert_eq!(cb.token, "VnL2UnrwPyN6EXlZ");
     }
 
     #[test]
     fn auth_deep_link_rejects_wrong_scheme() {
         assert!(parse_auth("https://auth?token=abc").is_none());
-        assert!(parse_auth("apolla-threshold-x://auth?token=abc").is_none());
+        // A scheme that merely shares a prefix with the expected one must
+        // still be rejected (exact-match on scheme).
+        assert!(parse_auth(&format!("{}-x://auth?token=abc", DEEP_LINK_SCHEME)).is_none());
     }
 
     #[test]
     fn auth_deep_link_rejects_wrong_host() {
         // The configure carrier must not be mistaken for an auth callback.
-        assert!(parse_auth("apolla-threshold://configure?token=abc").is_none());
+        assert!(parse_auth(&scheme_url("configure?token=abc")).is_none());
     }
 
     #[test]
     fn auth_deep_link_rejects_missing_or_empty_token() {
-        assert!(parse_auth("apolla-threshold://auth").is_none());
-        assert!(parse_auth("apolla-threshold://auth?token=").is_none());
-        assert!(parse_auth("apolla-threshold://auth?other=x").is_none());
+        assert!(parse_auth(&scheme_url("auth")).is_none());
+        assert!(parse_auth(&scheme_url("auth?token=")).is_none());
+        assert!(parse_auth(&scheme_url("auth?other=x")).is_none());
     }
 
     #[test]
     fn auth_deep_link_url_encoded_token_decodes() {
         // Magic tokens are base64url; if a `+` or `/` ever slips in it arrives
         // percent-encoded and query_pairs() must decode it.
-        let cb = parse_auth("apolla-threshold://auth?token=ab%2Bcd%2Fef%3D")
+        let cb = parse_auth(&scheme_url("auth?token=ab%2Bcd%2Fef%3D"))
             .expect("encoded token parses");
         assert_eq!(cb.token, "ab+cd/ef=");
     }
 
     #[test]
     fn auth_deep_link_ignores_extra_query_params() {
-        let cb = parse_auth("apolla-threshold://auth?token=abc123&future=xyz")
+        let cb = parse_auth(&scheme_url("auth?token=abc123&future=xyz"))
             .expect("extra params tolerated");
         assert_eq!(cb.token, "abc123");
     }
