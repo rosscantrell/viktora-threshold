@@ -4489,6 +4489,11 @@ async function enterEntityCardView(entity) {
     return;
   }
 
+  // WP-Grouping-Operator P4 — a job's Definition reuses the operator's name as
+  // the title (one naming path) instead of the raw entity slug ("us-non-16619"
+  // → "Merck Vaccines Landing Page Updates"). Non-job entities keep their slug.
+  if (titleEl && data && data.jobName) titleEl.textContent = data.jobName;
+
   const prose = data && typeof data.prose === "string" ? data.prose.trim() : "";
   if (!prose) {
     if (statusEl) {
