@@ -144,6 +144,7 @@ const NAV_DEST_FNS = {
   today: () => enterLogView(),
   watching: () => enterWatchingView(),
   log: () => enterDecisionsView(undefined, { from: "home" }),
+  outbox: () => enterOutboxView(),
   edges: () => enterEdgesView(),
   settings: () => enterStandaloneConfigure(),
 };
@@ -1004,6 +1005,23 @@ const DISMISS_REASONS = [
  *  small inline reason menu (the closed 4-reason set the server accepts); picking
  *  a reason suppresses the record optimistically AND records the disposition
  *  server-side, then offers Undo. `summary` is used for the toast. */
+// WP-Outlook-Writeback — "Draft follow-up" affordance on a commitment/decision
+// card. Stages an outbound draft (owner → recipient) into the outbox, surfaced
+// in the desktop Outbox + the Outlook add-in. Shown only for records that have
+// an owner (no recipient → nothing to draft).
+function appendDraftFollowUpControl(actionsEl, rec) {
+  if (!rec || !rec.owner) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn btn-link";
+  btn.textContent = "Draft follow-up →";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    draftFollowUpFromRecord(rec);
+  });
+  actionsEl.appendChild(btn);
+}
+
 function appendDismissControl(actionsEl, recordId, cardEl, summary) {
   if (!recordId) return;
   const btn = document.createElement("button");
@@ -2171,6 +2189,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendResolveSnoozeControls(actions, rec.recordId, card, rec.summary);
+  appendDraftFollowUpControl(actions, rec);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -2785,6 +2804,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   }
   appendSourceBadge(footer, rec.documentId, rec.verbatim);
   appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
+  appendDraftFollowUpControl(footer, rec);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
 
@@ -5411,6 +5431,7 @@ function renderDecisionCard(rec, recState, projects) {
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
   appendResolveSnoozeControls(actions, rec.recordId, card, rec.summary);
+  appendDraftFollowUpControl(actions, rec);
   appendDismissControl(actions, rec.recordId, card, rec.summary);
   card.appendChild(actions);
 
@@ -6948,6 +6969,228 @@ function renderPlaudConnectionCard(status, { busy = false } = {}) {
   }
 }
 
+// WP-Outlook-Writeback — Install Outlook Add-in.
+//
+// Builds a manifest URL pre-baked with this app's saved connection (base URL +
+// bearer token). The engine's GET /outlook-manifest.xml validates the token
+// (per-user apolla_ addinToken OR shared INGESTION_API_KEY — both are what this
+// app already stores as bearer_token) and rewrites the configure-pane URL with
+// tenant + token, so the add-in installs already configured. No new Rust IPC:
+// reuses the existing copy_text command + the tauri-plugin-opener channel.
+async function handleOutlookAddinInstallClick() {
+  const baseUrl = (document.getElementById("config-base-url")?.value || "").trim().replace(/\/+$/, "");
+  const token = (document.getElementById("config-bearer-token")?.value || "").trim();
+  if (!baseUrl || !token) {
+    showToast({
+      kind: "error",
+      title: "Connect first",
+      body: "Set your Apolla URL and token (and Save) before installing the add-in.",
+    });
+    return;
+  }
+  const manifestUrl =
+    `${baseUrl}/outlook-manifest.xml?token=${encodeURIComponent(token)}&download=1`;
+
+  // Copy the manifest link so the user can paste it into Outlook's "Add custom
+  // add-in → Add from URL" dialog. Clipboard is the load-bearing path.
+  try {
+    await tauri.core.invoke("copy_text", { text: manifestUrl });
+  } catch (err) {
+    console.warn("[main] copy manifest URL failed:", err);
+  }
+  // Best-effort: also open the URL so the browser downloads the manifest XML
+  // (the &download=1 param sets Content-Disposition: attachment). Optional —
+  // failure here is non-fatal; the clipboard copy above is what matters.
+  try {
+    await tauri.core.invoke("plugin:opener|open_url", { url: manifestUrl });
+  } catch (err) {
+    console.warn("[main] open manifest URL failed (non-fatal):", err);
+  }
+
+  const steps = document.getElementById("outlook-addin-steps");
+  if (steps) steps.hidden = false;
+  showToast({
+    kind: "success",
+    title: "Manifest link ready",
+    body: "Copied to your clipboard — paste it into Outlook's Add custom add-in dialog.",
+  });
+}
+
+// ── WP-Outlook-Writeback — staged outbox surface ──
+//
+// Lists the drafts Threshold composed (GET /api/outbox via the fetch_outbox
+// IPC). The desktop can't SEND (no Graph path) — sending happens in Outlook via
+// the add-in — so this surface is review + dismiss only.
+
+function outboxTypeLabel(t) {
+  return t === "new-email" ? "New email" : t === "meeting-invite" ? "Meeting invite" : "Reply";
+}
+
+function renderOutboxCard(item) {
+  const card = document.createElement("div");
+  card.className = "record-card";
+  card.dataset.type = item.type || "";
+
+  const header = document.createElement("div");
+  header.className = "record-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = item.type || "";
+  chip.textContent = outboxTypeLabel(item.type);
+  header.appendChild(chip);
+  card.appendChild(header);
+
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = item.subject || "(no subject)";
+  card.appendChild(summary);
+
+  const who =
+    item.type === "meeting-invite"
+      ? [].concat(item.requiredAttendees || [], item.optionalAttendees || [])
+      : [].concat(item.toRecipients || [], item.ccRecipients || []);
+  const metaBits = [];
+  if (who.length) metaBits.push("To: " + who.join(", "));
+  if (item.start) metaBits.push(item.start);
+  if (metaBits.length) {
+    const meta = document.createElement("p");
+    meta.className = "record-meta";
+    meta.textContent = metaBits.join(" · ");
+    card.appendChild(meta);
+  }
+
+  if (item.source && item.source.label) {
+    const src = document.createElement("p");
+    src.className = "record-meta";
+    src.textContent = "From: " + item.source.label;
+    card.appendChild(src);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.className = "btn btn-link";
+  dismissBtn.textContent = "Dismiss";
+  dismissBtn.addEventListener("click", () => outboxDecide(item.id, "dismiss", card));
+  actions.appendChild(dismissBtn);
+  card.appendChild(actions);
+
+  return card;
+}
+
+async function outboxDecide(itemId, action, card) {
+  try {
+    await tauri.core.invoke("outbox_decide", { itemId, action });
+    if (card && card.parentNode) card.parentNode.removeChild(card);
+    const remaining = document.querySelectorAll("#outbox-list .record-card").length;
+    const statusEl = document.getElementById("outbox-status");
+    if (remaining === 0 && statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = "No staged items.";
+    }
+  } catch (err) {
+    showToast({ kind: "error", title: "Couldn't update", body: String(err) });
+  }
+}
+
+async function enterOutboxView() {
+  state.inWizard = false;
+  showView("view-outbox");
+  setNav([{ label: "Outbox" }], { active: "outbox", back: () => goHome() });
+
+  const listEl = document.getElementById("outbox-list");
+  const statusEl = document.getElementById("outbox-status");
+  if (listEl) listEl.innerHTML = "";
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.dataset.kind = "loading";
+    statusEl.textContent = "Loading staged outbox…";
+  }
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_outbox");
+  } catch (err) {
+    console.warn("[main] fetch_outbox failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent =
+        "Couldn't reach Apolla. Check your connection in Settings, then Refresh.";
+    }
+    return;
+  }
+
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  if (listEl) {
+    for (const item of items) listEl.appendChild(renderOutboxCard(item));
+  }
+  if (statusEl) {
+    if (items.length === 0) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent =
+        'No staged items. Use "Draft follow-up" on a commitment to stage one.';
+    } else {
+      statusEl.hidden = true;
+    }
+  }
+}
+
+// Wire the Outbox header buttons once (idempotent onclick assignment).
+(function wireOutboxHeaderButtons() {
+  const wire = () => {
+    const home = document.getElementById("btn-outbox-home");
+    if (home) home.onclick = () => goHome();
+    const refresh = document.getElementById("btn-outbox-refresh");
+    if (refresh) refresh.onclick = () => enterOutboxView();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", wire);
+  } else {
+    wire();
+  }
+})();
+
+// ── "Draft follow-up" — feed the producer from a decision-log commitment ──
+//
+// Maps a record (decision/commitment with a single `owner`) onto the producer's
+// ProducerActionItem (owner → executor) and POSTs via the outbox_propose IPC.
+// The staged draft then appears in the Outbox surface + the Outlook add-in.
+async function draftFollowUpFromRecord(rec) {
+  const item = {
+    id: "rec:" + (rec.recordId || rec.summary || ""),
+    title: rec.summary ? "Follow up: " + rec.summary : "Follow up",
+    detail: rec.summary || "",
+    intent: "email",
+    executor: rec.owner || undefined,
+    dueDate: rec.due || undefined,
+    sourceKind: rec.type === "decision" ? "decision" : "commitment",
+    sourceLabel: rec.summary || rec.recordId || "",
+  };
+  try {
+    const res = await tauri.core.invoke("outbox_propose", { items: [item] });
+    const created = (res && Array.isArray(res.created) && res.created.length) || 0;
+    if (created > 0) {
+      showToast({
+        kind: "success",
+        title: "Draft staged",
+        body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
+      });
+    } else {
+      showToast({
+        kind: "success",
+        title: "Already staged",
+        body: "This follow-up is already in your Outbox.",
+      });
+    }
+  } catch (err) {
+    showToast({ kind: "error", title: "Couldn't stage draft", body: String(err) });
+  }
+}
+
 async function handlePlaudConnectClick() {
   const progressEl = document.getElementById("plaud-progress");
   const statusEl = document.getElementById("plaud-status");
@@ -7640,6 +7883,13 @@ window.addEventListener("DOMContentLoaded", () => {
   const plaudDisconnectBtn = document.getElementById("btn-plaud-disconnect");
   if (plaudDisconnectBtn) {
     plaudDisconnectBtn.addEventListener("click", handlePlaudDisconnectClick);
+  }
+  // WP-Outlook-Writeback — Install Outlook Add-in (generates a pre-configured
+  // manifest URL from the saved connection). Defensive optional chaining
+  // mirrors the Plaud buttons above.
+  const outlookAddinBtn = document.getElementById("btn-outlook-addin-install");
+  if (outlookAddinBtn) {
+    outlookAddinBtn.addEventListener("click", handleOutlookAddinInstallClick);
   }
   // Phase-progress events fire from the Rust orchestrator; listener is
   // process-wide (no view-bound teardown needed — the Plaud card lives in

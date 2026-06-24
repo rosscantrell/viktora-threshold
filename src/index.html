@@ -97,6 +97,7 @@
         <button type="button" class="app-nav-dest" data-dest="today">Today</button>
         <button type="button" class="app-nav-dest" data-dest="watching">Watching</button>
         <button type="button" class="app-nav-dest" data-dest="log">Log</button>
+        <button type="button" class="app-nav-dest" data-dest="outbox">Outbox</button>
         <button type="button" class="app-nav-dest" data-dest="edges">Relationships</button>
         <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="settings" title="Settings" aria-label="Settings">⚙</button>
       </div>
@@ -353,6 +354,39 @@
                   and delete <code>/home/deploy/.plaud/tokens.json</code> to fully
                   revoke.
                 </p>
+              </div>
+
+              <!-- Outlook Add-in — WP-Outlook-Writeback. Generates a manifest
+                   URL pre-baked with THIS app's saved connection (base URL +
+                   bearer), so the add-in installs already configured. -->
+              <h3 class="settings-subhead">Outlook Add-in</h3>
+              <div class="connections-card" id="connection-outlook-addin">
+                <div class="connections-card-header">
+                  <h2 class="connections-card-title">Outlook Add-in</h2>
+                  <span class="connections-card-tag">Capture + send</span>
+                </div>
+
+                <p class="connections-card-help">
+                  Install the Apolla add-in in Outlook to capture emails and send
+                  Threshold's staged replies, drafts, and meeting invites. The
+                  manifest carries your connection, so the add-in arrives already
+                  configured — no token to paste.
+                </p>
+
+                <div class="connections-card-actions">
+                  <button type="button" id="btn-outlook-addin-install" class="btn btn-primary">
+                    Install Outlook Add-in
+                  </button>
+                </div>
+
+                <div class="connections-card-banner" id="outlook-addin-steps" hidden>
+                  <strong>Manifest link copied to your clipboard.</strong> In Outlook:
+                  <ol>
+                    <li>Open <em>Get Add-ins &rarr; My add-ins &rarr; Add a custom add-in &rarr; Add from URL&hellip;</em></li>
+                    <li>Paste the link and confirm. The add-in installs already configured.</li>
+                  </ol>
+                  Then open any email and click <em>Threshold</em> to see your staged outbox.
+                </div>
               </div>
 
               <!-- Auto-import — unified across OneNote notebooks + Plaud devices -->
@@ -775,6 +809,28 @@
          client-side join — fetch_decision_log_full (records + state + due) +
          fetch_documents (/api/data) for documentId → projects. (Date lens next.)
          ────────────────────────────────────────────────────────────────── -->
+    <!-- WP-Outlook-Writeback — staged outbox. Drafts Threshold composed
+         (replies / emails / invites) await review here; the SEND happens in
+         Outlook via the add-in (the desktop has no send path). -->
+    <section id="view-outbox" class="view view-decisions" hidden>
+      <header class="decisions-header">
+        <div class="decisions-header-text">
+          <h1 class="decisions-title">Outbox</h1>
+          <p class="decisions-sub" id="outbox-sub">Staged replies, drafts &amp; invites</p>
+        </div>
+        <div class="decisions-header-actions">
+          <button type="button" id="btn-outbox-home" class="btn btn-secondary">⌂ Main</button>
+          <button type="button" id="btn-outbox-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
+      </header>
+      <p class="decisions-sub" id="outbox-note">
+        These drafts send from Outlook — open the email and click <em>Threshold</em>
+        to bring one forward. Dismiss anything you don't want.
+      </p>
+      <div class="decisions-list" id="outbox-list" aria-label="Staged outbox items"></div>
+      <p class="record-status" id="outbox-status" hidden></p>
+    </section>
+
     <section id="view-decisions" class="view view-decisions" hidden>
       <header class="decisions-header">
         <div class="decisions-header-text">
