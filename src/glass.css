@@ -796,10 +796,41 @@ body {
   flex-direction: column;
   gap: 7px;
 }
+/* `display:flex` above otherwise defeats the `hidden` attribute, so a group
+   that was expanded once would never re-collapse. Restore hide-on-collapse. */
+.priority-group-body[hidden] {
+  display: none;
+}
 .priority-group-def {
   font-size: 12px;
   font-style: italic;
   line-height: 1.5;
   color: var(--glass-text-dim);
   padding: 2px 0 4px;
+}
+
+/* WP-Rollup P2 — section → job → action nesting. The section band is the
+   strong outer container; job rows nest inside it with a subtle inset. */
+.priority-section {
+  border-color: var(--glass-border-strong);
+}
+.priority-section > .priority-group-head .priority-group-title {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.priority-section > .priority-group-body {
+  padding: 2px 8px 8px;
+}
+.priority-job {
+  background: transparent;
+  border-color: var(--glass-border);
+  margin-bottom: 5px;
+}
+.priority-job > .priority-group-head {
+  padding: 8px 10px;
+}
+.priority-job > .priority-group-body {
+  padding: 0 10px 8px;
 }

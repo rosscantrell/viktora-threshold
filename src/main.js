@@ -3295,6 +3295,102 @@ function renderEntityGroup(entity, groupItems) {
   return section;
 }
 
+// WP-Rollup P2 — generic collapsible group row (used for section + job bands).
+// opts: { defaultOpen, extraClass, fill(body) }. `fill` runs once, lazily on
+// first open (or immediately when defaultOpen).
+function makeGroupRow(label, count, doNow, opts) {
+  const sec = document.createElement("section");
+  sec.className = "priority-group log-collapse" + (opts.defaultOpen ? "" : " log-collapsed") + (opts.extraClass ? " " + opts.extraClass : "");
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "priority-group-head log-collapse-head";
+  head.setAttribute("aria-expanded", opts.defaultOpen ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = opts.defaultOpen ? "▾" : "▸";
+  head.appendChild(caret);
+  const title = document.createElement("span");
+  title.className = "log-collapse-title priority-group-title";
+  title.textContent = label;
+  head.appendChild(title);
+  if (doNow) {
+    const b = document.createElement("span");
+    b.className = "priority-group-urgent";
+    b.textContent = `Do now ${doNow}`;
+    head.appendChild(b);
+  }
+  const c = document.createElement("span");
+  c.className = "log-collapse-count";
+  c.textContent = String(count);
+  head.appendChild(c);
+  const body = document.createElement("div");
+  body.className = "log-collapse-body priority-group-body";
+  let filled = false;
+  const fill = () => { if (filled) return; filled = true; opts.fill(body); };
+  if (opts.defaultOpen) fill(); else body.hidden = true;
+  head.addEventListener("click", () => {
+    const open = body.hidden;
+    if (open) fill();
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    sec.classList.toggle("log-collapsed", !open);
+  });
+  head.appendChild(document.createElement("span"));
+  sec.appendChild(head);
+  sec.appendChild(body);
+  return sec;
+}
+
+const doNowOf = (items) => items.filter((i) => i.quadrant === "do-now").length;
+
+// Display label for a job key — Veeva keys surface the ID (the project key).
+function jobLabel(parentJob, jobHeader) {
+  const veeva = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+  const name = (jobHeader || "").replace(/\s+/g, " ").trim();
+  if (veeva) {
+    const id = veeva[1].toUpperCase();
+    return name ? `${name} · ${id}` : id;
+  }
+  return name || prettySlug((parentJob || "").replace(/^job:/, ""));
+}
+
+function cleanSection(s) {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  return t.length > 44 ? t.slice(0, 43).trimEnd() + "…" : t || "Other";
+}
+
+// A job row (collapsed) → its action cards on expand.
+function renderJobGroup(parentJob, jobHeader, items) {
+  return makeGroupRow(jobLabel(parentJob, jobHeader), items.length, doNowOf(items), {
+    extraClass: "priority-job",
+    fill: (body) => { for (const it of items) body.appendChild(renderPriorityCard(it, false)); },
+  });
+}
+
+// A section band (open by default) → its job rows, hottest job first.
+function renderSectionGroup(section, items) {
+  // Group the section's items by parentJob.
+  const jobs = new Map();
+  for (const it of items) {
+    const jk = it.parentJob;
+    if (!jobs.has(jk)) jobs.set(jk, { header: it.jobHeader, items: [] });
+    jobs.get(jk).items.push(it);
+  }
+  const ordered = [...jobs.entries()].sort((a, b) => {
+    const ra = Math.min(...a[1].items.map((i) => quadrantRank(i.quadrant)));
+    const rb = Math.min(...b[1].items.map((i) => quadrantRank(i.quadrant)));
+    return ra - rb || b[1].items.length - a[1].items.length;
+  });
+  return makeGroupRow(cleanSection(section), items.length, doNowOf(items), {
+    defaultOpen: true,
+    extraClass: "priority-section",
+    fill: (body) => {
+      for (const [jk, j] of ordered) body.appendChild(renderJobGroup(jk, j.header, j.items));
+    },
+  });
+}
+
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
   const items = data.items || [];
@@ -3340,32 +3436,54 @@ function renderTodayPriority(container, data) {
     // WP-Rollup P1 — roll the untracked pool up by entity/job, collapsed by
     // default. Falls back to the flat list when rollup is off OR the server
     // isn't sending primaryEntity yet (P1a not deployed) — never an empty wall.
-    const canGroup = ROLLUP_ENABLED && pool.some((i) => i.primaryEntity);
+    const canGroup = ROLLUP_ENABLED && pool.some((i) => i.primaryEntity || i.parentJob);
     if (canGroup) {
+      // WP-Rollup P2 — hot-list records (those carrying a job-grain `parentJob`)
+      // nest section → job → action. Everything else falls back to P1's
+      // single-level grouping by primaryEntity.
+      const hotlist = pool.filter((i) => i.parentJob);
+      const rest = pool.filter((i) => !i.parentJob);
+      let rendered = 0;
+
+      if (hotlist.length) {
+        const sections = new Map();
+        for (const it of hotlist) {
+          const sk = it.section || "Other";
+          if (!sections.has(sk)) sections.set(sk, []);
+          sections.get(sk).push(it);
+        }
+        const secOrdered = [...sections.entries()].sort((a, b) => {
+          const ra = Math.min(...a[1].map((i) => quadrantRank(i.quadrant)));
+          const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
+          return ra - rb || b[1].length - a[1].length;
+        });
+        for (const [sec, sItems] of secOrdered) { cardArea.appendChild(renderSectionGroup(sec, sItems)); rendered++; }
+      }
+
+      // Non-hot-list remainder → P1 entity groups, capped.
       const groups = new Map();
-      for (const it of pool) {
+      for (const it of rest) {
         const key = it.primaryEntity || "__ungrouped__";
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push(it);
       }
       const ordered = [...groups.entries()].sort((a, b) => {
         const aUng = a[0] === "__ungrouped__", bUng = b[0] === "__ungrouped__";
-        if (aUng !== bUng) return aUng ? 1 : -1;                 // ungrouped last
+        if (aUng !== bUng) return aUng ? 1 : -1;
         const ra = Math.min(...a[1].map((i) => quadrantRank(i.quadrant)));
         const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
         return ra - rb || b[1].length - a[1].length || a[0].localeCompare(b[0]);
       });
-      const shownGroups = ordered.slice(0, FOCUS_GROUP_CAP);
-      for (const [entity, gItems] of shownGroups) {
-        cardArea.appendChild(renderEntityGroup(entity, gItems));
-      }
+      const cap = Math.max(0, FOCUS_GROUP_CAP - rendered);
+      const shownGroups = ordered.slice(0, cap);
+      for (const [entity, gItems] of shownGroups) cardArea.appendChild(renderEntityGroup(entity, gItems));
       if (ordered.length > shownGroups.length) {
         const more = document.createElement("div");
         more.className = "priority-more";
-        more.textContent = `+ ${ordered.length - shownGroups.length} more jobs`;
+        more.textContent = `+ ${ordered.length - shownGroups.length} more`;
         cardArea.appendChild(more);
       }
-      if (!trk.length && !ordered.length) {
+      if (!trk.length && !rendered && !shownGroups.length) {
         const empty = document.createElement("div");
         empty.className = "priority-more";
         empty.textContent = "Nothing here right now.";
