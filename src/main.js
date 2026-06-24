@@ -4972,11 +4972,16 @@ async function runSplit(grp, merged, overlay) {
   enterDecisionsView();
 }
 
-function groupRecords(items, lens, docProjects, aliases) {
+function groupRecords(items, lens, docProjects, aliases, jobNames) {
   const g = new Map();
   // Resolve a slug to its canonical form so duplicate subjects collapse into one
   // group (sora → project-sora). Identity when no alias is known.
   const canon = (s) => (aliases && aliases[s]) || s;
+  // WP-Grouping-Operator P4 — label a project group with its canonical P2 job
+  // name when one exists ("us-non-16619" → "Merck Vaccines Landing Page
+  // Updates"), so By-project reads consistently with Focus/Receipts. Falls back
+  // to the prettified slug.
+  const projLabel = (key) => (jobNames && jobNames[key]) || prettySlug(key);
   const ensure = (key, label, order, muted) => {
     if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
     return g.get(key);
@@ -4993,7 +4998,7 @@ function groupRecords(items, lens, docProjects, aliases) {
     } else {
       const projs = docProjects.get(rec.documentId) || [];
       const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
-      ensure(key, key === PROJECT_OTHER ? "Other" : prettySlug(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+      ensure(key, key === PROJECT_OTHER ? "Other" : projLabel(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
     }
   }
   return [...g.values()].sort((a, b) => {
@@ -5093,6 +5098,8 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // Canonical alias map (slug → canonical) from the engine — consolidates
     // duplicate subjects in the By-project lens (sora → project-sora).
     aliases: data && data.aliases ? data.aliases : {},
+    // P4 — canonical P2 job names (parentJob/slug → name) for By-project labels.
+    jobNames: data && data.jobNames ? data.jobNames : {},
   };
   renderDecisions();
 }
@@ -5550,7 +5557,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -5573,7 +5580,7 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases);
+  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames);
 
   listEl.innerHTML = "";
   // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
