@@ -3323,6 +3323,7 @@ function renderPriorityCard(item, isTracked) {
   // (delegate) · Not now (dismiss, opens the reason chooser).
   const buildDefaultActions = () => {
     actions.innerHTML = "";
+    actions.classList.remove("priority-actions-col");
     const track = document.createElement("button");
     track.type = "button";
     track.className = "priority-track";
@@ -3344,19 +3345,12 @@ function renderPriorityCard(item, isTracked) {
     snooze.addEventListener("click", buildSnoozeChooser);
     actions.appendChild(snooze);
 
-    // Hand off — "Delegate": copy a ready-to-send note, then it leaves Focus.
+    // Hand off — "Delegate": opens the inline editor (draft the note, edit it, then copy).
     const handoff = document.createElement("button");
     handoff.type = "button";
     handoff.className = "priority-reason";
     handoff.textContent = "Hand off";
-    handoff.addEventListener("click", async () => {
-      handoff.disabled = true;
-      try { await tauri.core.invoke("copy_text", { text: buildHandoffNote(item) }); }
-      catch (e) { /* clipboard best-effort */ }
-      const ok = await sendPriorityGesture(item, "handoff");
-      if (ok) { showToast({ kind: "success", title: "Copied to hand off", body: "Paste into email or chat." }); card.remove(); }
-      else handoff.disabled = false;
-    });
+    handoff.addEventListener("click", buildHandoffEditor);
     actions.appendChild(handoff);
 
     const dismiss = document.createElement("button");
@@ -3430,6 +3424,44 @@ function renderPriorityCard(item, isTracked) {
     cancel.textContent = "Cancel";
     cancel.addEventListener("click", buildDefaultActions);
     actions.appendChild(cancel);
+  };
+
+  // Hand-off editor — pre-fills the drafted note, lets the user edit it inline,
+  // THEN copies the edited text + records the handoff (the card leaves Focus).
+  const buildHandoffEditor = () => {
+    actions.innerHTML = "";
+    actions.classList.add("priority-actions-col");
+    const ta = document.createElement("textarea");
+    ta.className = "priority-handoff-edit";
+    ta.rows = 3;
+    ta.value = buildHandoffNote(item);
+    actions.appendChild(ta);
+
+    const row = document.createElement("div");
+    row.className = "priority-actions";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "priority-track";
+    copyBtn.textContent = "Copy & hand off";
+    copyBtn.addEventListener("click", async () => {
+      copyBtn.disabled = true;
+      try { await tauri.core.invoke("copy_text", { text: ta.value }); }
+      catch (e) { /* clipboard best-effort */ }
+      const ok = await sendPriorityGesture(item, "handoff");
+      if (ok) { showToast({ kind: "success", title: "Copied to hand off", body: "Paste into email or chat." }); card.remove(); }
+      else copyBtn.disabled = false;
+    });
+    row.appendChild(copyBtn);
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "priority-dismiss";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", buildDefaultActions);
+    row.appendChild(cancel);
+    actions.appendChild(row);
+
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
   };
 
   buildDefaultActions();

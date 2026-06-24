@@ -441,6 +441,29 @@ body {
   color: var(--glass-text);
   color-scheme: dark;
 }
+.priority-actions-col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.priority-handoff-edit {
+  width: 100%;
+  min-height: 60px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+  resize: vertical;
+  box-sizing: border-box;
+}
+.priority-handoff-edit:focus {
+  outline: none;
+  border-color: var(--glass-accent);
+}
 .priority-more {
   font-size: 11.5px;
   color: var(--glass-text-faint);
