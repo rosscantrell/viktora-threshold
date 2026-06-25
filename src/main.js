@@ -4814,8 +4814,10 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
     res = await tauri.core.invoke("project_canon_merge", {
       // Backend requires >=2 slugs in `sources` — ALL the projects being unified.
       // targetCanonical is which name survives.
-      sources: [sourceGrp.key, targetGrp.key],
-      targetCanonical: targetGrp.key,
+      // P4 (c) — a job chip's key is "job:<slug>"; project_canon operates on the
+      // project slug, so strip the prefix. No-op for plain project chips.
+      sources: [sourceGrp.key, targetGrp.key].map((k) => k.replace(/^job:/, "")),
+      targetCanonical: targetGrp.key.replace(/^job:/, ""),
       expectedSubstrateFingerprint: fp,
       actor,
       overrideVeto: override,
@@ -4895,7 +4897,7 @@ async function runRename(grp, newLabel, overlay) {
   try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
   try {
     await tauri.core.invoke("project_canon_rename", {
-      canonicalId: grp.key, // backend resolves a raw slug → canonical (mints one if fresh)
+      canonicalId: grp.key.replace(/^job:/, ""), // P4 (c) job:<slug> → project slug; backend mints if fresh
       newLabel,
       expectedSubstrateFingerprint: fp,
       actor,
@@ -4977,7 +4979,7 @@ async function runSplit(grp, merged, overlay) {
   enterDecisionsView();
 }
 
-function groupRecords(items, lens, docProjects, aliases, jobNames) {
+function groupRecords(items, lens, docProjects, aliases, jobNames, recordJobs) {
   const g = new Map();
   // Resolve a slug to its canonical form so duplicate subjects collapse into one
   // group (sora → project-sora). Identity when no alias is known.
@@ -4987,6 +4989,9 @@ function groupRecords(items, lens, docProjects, aliases, jobNames) {
   // Updates"), so By-project reads consistently with Focus/Receipts. Falls back
   // to the prettified slug.
   const projLabel = (key) => (jobNames && jobNames[key]) || prettySlug(key);
+  const jobLabel = (jk) =>
+    (jobNames && (jobNames[jk] || jobNames[jk.replace(/^job:/, "")])) ||
+    prettySlug(jk.replace(/^job:/, ""));
   const ensure = (key, label, order, muted) => {
     if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
     return g.get(key);
@@ -5001,9 +5006,18 @@ function groupRecords(items, lens, docProjects, aliases, jobNames) {
       const key = rec.owner ? canon(rec.owner) : "z-unassigned";
       ensure(key, rec.owner ? prettySlug(key) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
     } else {
-      const projs = docProjects.get(rec.documentId) || [];
-      const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
-      ensure(key, key === PROJECT_OTHER ? "Other" : projLabel(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+      // (c) — a hot-list record (carries a canonical job) groups by its JOB chip,
+      // so US-NON-16619 reads as its own group matching Today. Broad-corpus records
+      // (no job) keep their document-project grouping, untouched. Bounded re-point
+      // of the ~53 hot-list records; the ~226 broad-corpus records don't move.
+      const jobKey = recordJobs && recordJobs[rec.recordId];
+      if (jobKey) {
+        ensure(jobKey, jobLabel(jobKey), 0, false).items.push(it);
+      } else {
+        const projs = docProjects.get(rec.documentId) || [];
+        const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
+        ensure(key, key === PROJECT_OTHER ? "Other" : projLabel(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+      }
     }
   }
   return [...g.values()].sort((a, b) => {
@@ -5105,6 +5119,9 @@ async function enterDecisionsView(initialFilter, navCtx) {
     aliases: data && data.aliases ? data.aliases : {},
     // P4 — canonical P2 job names (parentJob/slug → name) for By-project labels.
     jobNames: data && data.jobNames ? data.jobNames : {},
+    // P4 (c) — recordId → job: key for hot-list records only; By-project re-points
+    // these to job chips, leaving broad-corpus records on document-project grouping.
+    recordJobs: data && data.recordJobs ? data.recordJobs : {},
   };
   renderDecisions();
 }
@@ -5562,7 +5579,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -5585,7 +5602,7 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames);
+  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames, recordJobs);
 
   listEl.innerHTML = "";
   // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
