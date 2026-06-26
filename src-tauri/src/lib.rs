@@ -2865,6 +2865,43 @@ async fn post_priority_gesture(
         .map_err(|e| format!("post_priority_gesture: parse response failed: {e}"))
 }
 
+/// WP-Frame-HITL — append one org-edit (move / create / rename / merge / mark-type
+/// / undo) to the viewer's overlay. The whole edit body is forwarded as-is to
+/// `POST /api/decision-log/frames/edit`; the server validates + enriches it. The
+/// edit is reapplied over the generated frames on the next decision-log read, so
+/// the correction sticks.
+#[tauri::command]
+async fn frame_edit(
+    state: tauri::State<'_, AppState>,
+    edit: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/frames/edit",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&edit)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("frame_edit: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-STATE-OF-PLAY — project altitude: returns the team-addressed
 /// digest AND the per-teammate digests scoped to one project. `polish=false`
 /// (`?team=text`) yields the instant deterministic team email; default polishes
@@ -6423,6 +6460,7 @@ pub fn run() {
             // WP-Priority-Operator — "Focus" rail + HITL calibration gestures
             fetch_priority,
             post_priority_gesture,
+            frame_edit,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,

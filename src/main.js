@@ -5027,6 +5027,325 @@ function groupRecords(items, lens, docProjects, aliases, jobNames, recordJobs) {
   });
 }
 
+// WP-Work-Forest top altitude — reorder + annotate project-lens groups under
+// their CoordinationFrameCompiler top frame (state Project/Suggested/Facet/
+// Needs-evidence) and workstream. Returns the reordered groups; each group is
+// tagged with `_frameHeader` (the top frame, on the first group of that frame)
+// and `_wsHeader` (workstream name, on the first group of that workstream).
+// Groups whose job isn't in any frame fall to a trailing "Unframed" bucket.
+const FRAME_STATE_ORDER = { Project: 0, Suggested: 1, Facet: 2, "Needs-evidence": 3 };
+// Attention rank — surfaces the jobs that need action to the top of each
+// section: deadline urgency (overdue > due-soon > future) dominates, then open
+// items, then size. Works across all jobs (hot-list + prose), unlike the
+// parentJob-scoped Eisenhower priority operator.
+function groupAttention(grp) {
+  let urg = 0, open = 0;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  for (const it of grp.items) {
+    const r = it.record || it;
+    if ((it.state || "open") === "open") open++;
+    if (r && r.due) {
+      const days = (new Date(r.due + "T00:00:00") - today) / 86400000;
+      const u = days < 0 ? 3 : days <= 7 ? 2 : 1;
+      if (u > urg) urg = u;
+    }
+  }
+  return urg * 1000 + open * 20 + grp.items.length;
+}
+// Per-group rank — the real PRIORITY heat when the job is "scored", else the
+// attention fallback. Tiers are kept separated by band so a scored job never
+// loses to a fallback job (scored ∈ [0.40,1.0], fallback ∈ [0.10,0.40), quiet
+// ∈ [0,0.10)); within a tier, order by heat/attention.
+function rankGroups(ordered, jobHeat) {
+  const maxAtt = Math.max(1, ...ordered.map((g) => groupAttention(g)));
+  for (const grp of ordered) {
+    const jh = jobHeat && jobHeat[grp.key];
+    const attN = groupAttention(grp) / maxAtt;
+    if (jh) {
+      grp._rank = 0.40 + 0.60 * jh.heat; grp._tier = "scored"; grp._band = jh.band; grp._why = jh.why;
+    } else if (groupAttention(grp) > 2) {
+      grp._rank = 0.10 + 0.30 * attN; grp._tier = "fallback";
+    } else {
+      grp._rank = 0.10 * attN; grp._tier = "quiet";
+    }
+  }
+}
+function applyFrameLayout(ordered, frames, jobHeat) {
+  if (!frames || !frames.length) return ordered;
+  rankGroups(ordered, jobHeat);
+  const byFid = new Map(frames.map((f) => [f.fid, f]));
+  const topOf = (f) => { let c = f, n = 0; while (c && c.parentFid != null && n++ < 50) c = byFid.get(c.parentFid) || null; return c || f; };
+  const homeOf = new Map();
+  for (const f of frames) {
+    const top = topOf(f);
+    const wsName = f.parentFid != null ? f.name : null;
+    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName });
+  }
+  const topOrder = (f) => (FRAME_STATE_ORDER[f.state] ?? 4) * 1000 - (f.maturity || 0) * 100;
+  for (const grp of ordered) {
+    const h = homeOf.get(grp.key);
+    grp._top = h ? h.top : null;
+    grp._wsName = h ? h.wsName : null;
+  }
+  // Build the list explicitly: frames in state/maturity order; within a frame the
+  // DIRECT jobs first (attention desc), then each workstream (ranked by its total
+  // attention), jobs inside by attention desc. Unframed groups trail at the end.
+  const topFrames = [...new Set(ordered.map((g) => g._top).filter(Boolean))].sort((a, b) => topOrder(a) - topOrder(b) || a.fid - b.fid);
+  const out = [];
+  for (const top of topFrames) {
+    const mine = ordered.filter((g) => g._top === top);
+    // Frame HEAT — roll job heat up (max+topK+share), an axis ORTHOGONAL to the
+    // frame's maturity (how-urgent vs how-sure). Rendered as its own chip.
+    const heats = mine.map((g) => (jobHeat && jobHeat[g.key] ? jobHeat[g.key].heat : 0)).sort((a, b) => b - a);
+    const fhTopK = heats.slice(0, 3);
+    const fh = 0.55 * (heats[0] || 0) + 0.30 * (fhTopK.reduce((s, x) => s + x, 0) / Math.max(1, fhTopK.length))
+      + 0.15 * (heats.length ? heats.filter((h) => h >= 0.5).length / heats.length : 0);
+    top._heat = fh;
+    top._heatBand = fh >= 0.65 ? "fire" : fh >= 0.4 ? "active" : "quiet";
+    const direct = mine.filter((g) => !g._wsName).sort((a, b) => b._rank - a._rank);
+    const wsNames = [...new Set(mine.filter((g) => g._wsName).map((g) => g._wsName))];
+    const wsBuckets = wsNames.map((name) => {
+      const groups = mine.filter((g) => g._wsName === name).sort((a, b) => b._rank - a._rank);
+      return { name, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
+    }).sort((a, b) => b.total - a.total);
+    let first = true;
+    for (const g of direct) { g._frameHeader = first ? top : null; g._wsHeader = null; first = false; out.push(g); }
+    for (const bucket of wsBuckets) {
+      let wsFirst = true;
+      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? bucket.name : null; wsFirst = false; out.push(g); }
+    }
+    // a frame with only workstream jobs still needs its header on the first row
+    if (first && mine.length) mine[0]._frameHeader = top;
+  }
+  const unframed = ordered.filter((g) => !g._top).sort((a, b) => b._rank - a._rank);
+  unframed.forEach((g, i) => { g._frameHeader = i === 0 ? { __unframed: true } : null; g._wsHeader = null; out.push(g); });
+  return out;
+}
+
+const FRAME_BADGE = {
+  Project: { label: "Project", cls: "frame-badge-project" },
+  Suggested: { label: "Suggested area", cls: "frame-badge-suggested" },
+  Facet: { label: "Topic / area", cls: "frame-badge-facet" },
+  "Needs-evidence": { label: "Needs evidence", cls: "frame-badge-needs" },
+};
+function buildFrameHeader(frame) {
+  const el = document.createElement("div");
+  el.className = "frame-header";
+  if (frame.__unframed) {
+    el.classList.add("frame-header-unframed");
+    const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = "Unframed";
+    el.appendChild(n);
+    return el;
+  }
+  const badge = FRAME_BADGE[frame.state] || FRAME_BADGE.Suggested;
+  const b = document.createElement("span"); b.className = "frame-badge " + badge.cls; b.textContent = badge.label;
+  const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = frame.name;
+  el.appendChild(b); el.appendChild(n);
+  // Heat chip — the orthogonal axis. "On fire" / "Active" carry an accent; "quiet"
+  // is omitted so a calm project doesn't shout.
+  if (frame._heatBand && frame._heatBand !== "quiet") {
+    const heat = document.createElement("span");
+    heat.className = "frame-heat frame-heat-" + frame._heatBand;
+    heat.textContent = frame._heatBand === "fire" ? "On fire" : "Active";
+    el.appendChild(heat);
+  }
+  if (frame.state !== "Project") el.classList.add("frame-header-soft");
+  // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
+  const edit = document.createElement("span");
+  edit.className = "frame-edit-btn";
+  edit.textContent = "⋯";
+  edit.setAttribute("role", "button");
+  edit.tabIndex = 0;
+  edit.title = "Rename, change type, or merge";
+  edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frame); });
+  el.appendChild(edit);
+  return el;
+}
+function buildWsHeader(name) {
+  const el = document.createElement("div");
+  el.className = "frame-ws-header";
+  el.textContent = name;
+  return el;
+}
+function buildFacetBar(facets) {
+  if (!facets || !facets.length) return null;
+  const bar = document.createElement("div");
+  bar.className = "frame-facet-bar";
+  const lbl = document.createElement("span"); lbl.className = "frame-facet-label"; lbl.textContent = "Also tagged";
+  bar.appendChild(lbl);
+  for (const fc of facets) {
+    const chip = document.createElement("span");
+    chip.className = "frame-facet-chip";
+    chip.textContent = `${fc.name} · ${fc.jobKeys.length}`;
+    bar.appendChild(chip);
+  }
+  return bar;
+}
+
+// WP-Frame-HITL — append one org-edit, then reload so the correction shows (it is
+// reapplied over the generated frames on read, so it sticks across regeneration).
+async function frameEdit(edit) {
+  try {
+    await tauri.core.invoke("frame_edit", { edit });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] frame_edit failed:", e);
+  }
+}
+
+// The "Move to…" picker: existing frames + an inline "New category" field. One
+// click reassigns the job; the move sticks and becomes evidence for the learner.
+// WP-Frame-HITL — the frame-header gesture menu: Rename / Mark-as-type / Merge,
+// all overlay-backed (replaces the legacy project-canon Combine/Rename).
+const FRAME_TYPE_CHOICES = [
+  ["project", "Project"], ["client", "Client"], ["initiative", "Initiative"],
+  ["workstream", "Workstream"], ["tracker", "Tracker"], ["topic", "Topic"], ["geography", "Geography"],
+];
+function positionMenu(menu, anchorEl) {
+  document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  menu.style.maxHeight = `${vh - 16}px`;
+  const mh = Math.min(menu.offsetHeight, vh - 16);
+  let top = r.bottom + 4;
+  if (top + mh > vh - 8) top = Math.max(8, vh - mh - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, vw - 260))}px`;
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
+}
+function openFrameEditMenu(anchorEl, frame) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = "Edit category";
+  header.appendChild(title);
+  const input = document.createElement("input");          // rename, prefilled
+  input.type = "text";
+  input.className = "frame-move-new-input";
+  input.value = frame.name;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const nn = input.value.trim();
+      if (nn && nn !== frame.name) { menu.remove(); frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn }); }
+    }
+  });
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const typeLbl = document.createElement("div");
+  typeLbl.className = "frame-move-section";
+  typeLbl.textContent = "Mark as type";
+  list.appendChild(typeLbl);
+  const typeRow = document.createElement("div");
+  typeRow.className = "frame-type-row";
+  for (const [t, label] of FRAME_TYPE_CHOICES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "frame-type-chip" + (frame.frameType === t ? " active" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "mark_type", frameName: frame.name, frameType: t }); });
+    typeRow.appendChild(b);
+  }
+  list.appendChild(typeRow);
+
+  const others = frames.filter((f) => f.parentFid == null && f.name !== frame.name);
+  if (others.length) {
+    const mLbl = document.createElement("div");
+    mLbl.className = "frame-move-section";
+    mLbl.textContent = "Merge into";
+    list.appendChild(mLbl);
+    for (const t of others) {
+      const it = document.createElement("button");
+      it.type = "button";
+      it.className = "frame-move-item";
+      it.textContent = t.name;
+      it.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "merge", mergeFromName: frame.name, mergeIntoName: t.name }); });
+      list.appendChild(it);
+    }
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
+}
+
+function openMovePicker(anchorEl, grp) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  // Pinned header: title + the "New category" field (always visible).
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = "Move to…";
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New category…";
+  input.className = "frame-move-new-input";
+  const go = async () => {
+    const name = input.value.trim();
+    if (!name) return;
+    menu.remove();
+    await tauri.core.invoke("frame_edit", { edit: { eventType: "create_frame", frameName: name, frameType: "initiative" } });
+    await frameEdit({ eventType: "move", jobKey: grp.key, toFrameName: name, sourceContext: { jobName: grp.label } });
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  // Scrollable list of existing destinations.
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addItem = (name, nested) => {
+    if (name === grp._top?.name && !nested) return; // skip its own top frame
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item" + (nested ? " nested" : "");
+    it.textContent = name;
+    it.addEventListener("click", () => {
+      menu.remove();
+      frameEdit({ eventType: "move", jobKey: grp.key, toFrameName: name, sourceContext: { jobName: grp.label } });
+    });
+    list.appendChild(it);
+  };
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    addItem(t.name, false);
+    for (const w of frames.filter((f) => f.parentFid === t.fid)) addItem(w.name, true);
+  }
+  menu.appendChild(list);
+
+  // Position INSIDE the viewport; clamp height so the list scrolls internally
+  // (the window isn't expandable, so the menu must self-contain).
+  document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  menu.style.maxHeight = `${vh - 16}px`;
+  const mh = Math.min(menu.offsetHeight, vh - 16);
+  let top = r.bottom + 4;
+  if (top + mh > vh - 8) top = Math.max(8, vh - mh - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, vw - 260))}px`;
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
+}
+
 /**
  * Open the Decisions browser. Pulls every record (fetch_decision_log_full) and
  * the documents (fetch_documents → /api/data) so each record joins to its
@@ -5122,6 +5441,18 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // P4 (c) — recordId → job: key for hot-list records only; By-project re-points
     // these to job chips, leaving broad-corpus records on document-project grouping.
     recordJobs: data && data.recordJobs ? data.recordJobs : {},
+    // WP-Work-Forest top altitude — the CoordinationFrameCompiler forest (top
+    // frames → workstreams) + geography/topic facets. Present only when
+    // COORDINATION_FRAMES_ENABLED on the server; absent → flat job grouping.
+    frames: Array.isArray(data && data.frames) ? data.frames : [],
+    facets: Array.isArray(data && data.facets) ? data.facets : [],
+    // WP-Priority-Frame-Integration step 1 — per-job heat from the real PRIORITY
+    // operator (importance × urgency, max+topK rollup). Present only when
+    // ENABLE_PRIORITY_OPERATOR; absent → jobs rank by the attention fallback.
+    jobHeat: data && data.jobHeat ? data.jobHeat : {},
+    // step 5 — ActionCandidateView mode per record; step 6 — per-record "who".
+    actionKinds: data && data.actionKinds ? data.actionKinds : {},
+    recordRelationship: data && data.recordRelationship ? data.recordRelationship : {},
   };
   renderDecisions();
 }
@@ -5579,7 +5910,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -5602,9 +5933,18 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames, recordJobs);
+  let ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames, recordJobs);
+  // WP-Work-Forest — under the project lens, arrange the job groups beneath their
+  // CoordinationFrameCompiler top frame (Projects → Suggested → Topics) with
+  // workstream sub-headers. No frames (flag off / empty) → unchanged flat order.
+  const framed = _decisionsLens === "project" && frames && frames.length;
+  if (framed) ordered = applyFrameLayout(ordered, frames, jobHeat);
 
   listEl.innerHTML = "";
+  if (framed) {
+    const fb = buildFacetBar(facets);
+    if (fb) listEl.appendChild(fb);
+  }
   // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
   // By-Person lens (the one lens where per-person digests make sense).
   if (_decisionsLens === "people") {
@@ -5638,12 +5978,17 @@ function renderDecisions() {
   }
 
   for (const grp of ordered) {
+    // WP-Work-Forest — top-frame + workstream section headers (project lens only).
+    if (grp._frameHeader) listEl.appendChild(buildFrameHeader(grp._frameHeader));
+    if (grp._wsHeader) listEl.appendChild(buildWsHeader(grp._wsHeader));
+
     const decisions = grp.items.filter((it) => (it.record ? it.record.type : it.type) === "decision").length;
     const commitments = grp.items.length - decisions;
     const expanded = _decisionsExpanded.has(grp.key);
 
     const groupEl = document.createElement("div");
     groupEl.className = "decisions-group";
+    if (grp._wsName) groupEl.classList.add("decisions-group-nested");
 
     // Clickable header — collapses/expands the group so the list reads as a
     // scannable overview of groups rather than one long scroll. Default collapsed.
@@ -5664,6 +6009,16 @@ function renderDecisions() {
     name.textContent = grp.label;
     head.appendChild(name);
 
+    // WP-Priority-Frame-Integration — the urgency tier as a discrete pill on the
+    // job row (Act now / Soon / Monitor), so urgency is shown by a control, not by
+    // recolouring the prose. Omitted for the quiet tier.
+    if (framed && grp._band && BAND_LABEL[grp._band]) {
+      const bp = document.createElement("span");
+      bp.className = "job-band-pill band-" + grp._band;
+      bp.textContent = BAND_LABEL[grp._band];
+      head.appendChild(bp);
+    }
+
     const count = document.createElement("span");
     count.className = "decisions-group-count";
     const parts = [];
@@ -5671,6 +6026,27 @@ function renderDecisions() {
     if (commitments) parts.push(`${commitments} commitment${commitments === 1 ? "" : "s"}`);
     count.textContent = parts.join(" · ");
     head.appendChild(count);
+
+    // WP-Frame-HITL — the Move control (a span, since the header is a <button>).
+    // One click → pick a destination (or a new category); the move sticks.
+    if (framed && grp._top) {
+      const mv = document.createElement("span");
+      mv.className = "job-move-btn";
+      mv.textContent = "Move";
+      mv.setAttribute("role", "button");
+      mv.tabIndex = 0;
+      mv.addEventListener("click", (ev) => { ev.stopPropagation(); openMovePicker(mv, grp); });
+      head.appendChild(mv);
+    }
+
+    // WP-Priority-Frame-Integration — the operator's business-language "why" (no
+    // slugs). Uniform colour — the band pill carries urgency, the prose explains.
+    if (framed && grp._why) {
+      const why = document.createElement("span");
+      why.className = "decisions-group-why";
+      why.textContent = grp._why;
+      head.appendChild(why);
+    }
 
     const body = document.createElement("div");
     body.className = "decisions-group-body";
@@ -5703,7 +6079,11 @@ function renderDecisions() {
     const headRow = document.createElement("div");
     headRow.className = "decisions-group-head-row";
     headRow.appendChild(head);
-    if (_decisionsLens === "project" && !grp.muted) {
+    // In the framed (Work-Forest) view the legacy per-group project-canon
+    // Combine/Rename is replaced by the overlay-backed frame-header menu (Move on
+    // jobs; Rename/Merge/Mark-type on the frame). Keep the legacy controls only
+    // when frames aren't present (plain By-project).
+    if (_decisionsLens === "project" && !grp.muted && !framed) {
       headRow.appendChild(buildProjectGroupActions(grp, ordered));
     }
     groupEl.appendChild(headRow);
@@ -5714,6 +6094,21 @@ function renderDecisions() {
 
 /** One compact card for the browser: type chip + state, summary, owner · due,
  *  and project chip(s) — the soft facet, always shown for context. */
+// WP-Priority-Frame-Integration — priority band labels (the urgency tier).
+const BAND_LABEL = { act_now: "Act now", verify: "Verify", soon: "Soon", monitor: "Monitor" };
+
+// WP-Priority-Frame-Integration step 5 — ActionCandidateView mode labels.
+const ACTION_KIND_LABEL = {
+  commitment_due: "Commitment",
+  decision_needed: "Decision needed",
+  decision_to_broadcast: "Decision to share",
+  blocked_work: "Blocked",
+  dependency_to_unblock: "Others waiting",
+  contradiction_to_resolve: "Conflict",
+  stale_commitment: "Stale",
+  follow_up: "Follow-up",
+};
+
 function renderDecisionCard(rec, recState, projects) {
   const card = document.createElement("div");
   card.className = "record-card decision-card";
@@ -5727,6 +6122,25 @@ function renderDecisionCard(rec, recState, projects) {
   chip.dataset.type = rec.type || "";
   chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   header.appendChild(chip);
+
+  // step 5 — the action mode (Blocked / Decision needed / Conflict …).
+  const ctx = _decisionsCtx || {};
+  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
+  if (ak && ACTION_KIND_LABEL[ak.kind] && ak.kind !== "follow_up") {
+    const kc = document.createElement("span");
+    kc.className = "record-kind-chip kind-" + ak.kind;
+    kc.textContent = ACTION_KIND_LABEL[ak.kind];
+    header.appendChild(kc);
+  }
+  // step 6 — the "who" (relationship) from the CommunicationRole substrate.
+  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+  if (rel && rel.relationship) {
+    const rc = document.createElement("span");
+    rc.className = "record-rel-chip";
+    rc.textContent = rel.counterparty ? `${rel.relationship} · ${rel.counterparty}` : rel.relationship;
+    if (rel.why) rc.title = rel.why;
+    header.appendChild(rc);
+  }
   if (recState && recState !== "open") {
     const pill = document.createElement("span");
     pill.className = "record-state-pill";
