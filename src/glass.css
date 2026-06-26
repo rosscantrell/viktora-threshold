@@ -766,3 +766,113 @@ body {
   background: var(--glass-surface-hover);
   color: var(--glass-text);
 }
+
+/* WP-Rollup P1 — Focus entity/job groups (collapsed-by-default rows). */
+.priority-group {
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  margin-bottom: 6px;
+}
+.priority-group-head {
+  padding: 9px 11px;
+}
+.priority-group-head:hover {
+  background: var(--glass-surface-hover);
+  border-radius: var(--glass-radius-md);
+}
+.priority-group-title {
+  flex: 1;
+  min-width: 0;                  /* allow the flex item to shrink so ellipsis works */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Veeva job ID chip — the project key. Fixed, never truncated. */
+.priority-job-tag {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--glass-link);
+  background: rgba(127, 179, 232, 0.12);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.priority-group-urgent {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--glass-accent);
+  background: rgba(255, 196, 64, 0.16);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.priority-group-body {
+  padding: 0 11px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+/* `display:flex` above otherwise defeats the `hidden` attribute, so a group
+   that was expanded once would never re-collapse. Restore hide-on-collapse. */
+.priority-group-body[hidden] {
+  display: none;
+}
+.priority-group-def {
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  padding: 2px 0 4px;
+}
+
+/* WP-Rollup P2 — section → job → action nesting. The section band is the
+   strong outer container; job rows nest inside it with a subtle inset. */
+.priority-section {
+  border-color: var(--glass-border-strong);
+}
+.priority-section > .priority-group-head .priority-group-title {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+.priority-section > .priority-group-body {
+  padding: 2px 8px 8px;
+}
+.priority-job {
+  background: transparent;
+  border-color: var(--glass-border);
+  margin-bottom: 5px;
+}
+.priority-job > .priority-group-head {
+  padding: 8px 10px;
+}
+.priority-job > .priority-group-body {
+  padding: 0 10px 8px;
+}
+
+/* WP-Rollup job-priority — job-grain quadrant badge on a job row. */
+.priority-qbadge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+/* Section provenance tag on an action card (which hot-list it came from). */
+.priority-prov {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-faint);
+  margin-bottom: 4px;
+}
+.priority-qbadge-do-now { color: var(--glass-accent); background: rgba(255, 196, 64, 0.16); }
+.priority-qbadge-schedule { color: var(--glass-link); background: rgba(127, 179, 232, 0.14); }
+.priority-qbadge-delegate { color: var(--glass-text-dim); background: var(--glass-surface); }
+.priority-qbadge-watch { color: var(--glass-text-faint); background: var(--glass-surface); }

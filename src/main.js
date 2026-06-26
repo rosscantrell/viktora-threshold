@@ -2184,7 +2184,12 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
@@ -2799,7 +2804,12 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     footer.appendChild(btn);
   }
   appendSourceBadge(footer, rec.documentId, rec.verbatim);
@@ -3096,6 +3106,41 @@ const FOCUS_QUADRANTS = new Set(["do-now", "schedule", "delegate"]);
 const FOCUS_CAP = 15;
 const WATCH_CAP = 25;
 
+// WP-Rollup P1 — roll the flat Focus list up by entity/job. Flippable: set to
+// false to fall back to the pre-rollup flat card list (A/B against the pilot).
+// Degrades automatically when the server doesn't send primaryEntity yet (P1a).
+const ROLLUP_ENABLED = true;
+const FOCUS_GROUP_CAP = 12;
+// Lazy entity-definition cache (entity slug → Promise<string|null>). One
+// fetch_entity_card per entity, ever; reused across expands + reloads.
+const _entityDefCache = new Map();
+
+function quadrantRank(q) {
+  const i = QUADRANT_ORDER.indexOf(q);
+  return i < 0 ? QUADRANT_ORDER.length : i;
+}
+
+// Lazily fetch the LLM "Definition" prose for an entity (the receipts/entity
+// card). Returns a short one-paragraph string, or null when unavailable (flag
+// off / no card / unreachable) — the group still renders, just without a blurb.
+function lazyEntityDefinition(entity) {
+  if (_entityDefCache.has(entity)) return _entityDefCache.get(entity);
+  const p = (async () => {
+    try {
+      const data = await tauri.core.invoke("fetch_entity_card", { entity });
+      if (!data || data.available === false) return null;
+      const prose = typeof data.prose === "string" ? data.prose.trim() : "";
+      if (!prose) return null;
+      const first = prose.split(/\n{2,}/)[0].trim();
+      return first.length > 180 ? first.slice(0, 177).trimEnd() + "…" : first;
+    } catch (_e) {
+      return null;
+    }
+  })();
+  _entityDefCache.set(entity, p);
+  return p;
+}
+
 // Reusable collapsible section (header with caret + count, toggles its body).
 function makeCollapsible(title, count, defaultOpen) {
   const section = document.createElement("section");
@@ -3210,8 +3255,213 @@ function buildHandoffNote(item) {
   return `Can you take point on this: "${item.summary || "this item"}"${tail}.${owner}`;
 }
 
+// WP-Rollup P1 — one collapsible job/entity group inside Focus. Collapsed by
+// default (the density win: a scannable list of jobs, not a wall of cards). The
+// do-now count is badged on the header so urgency is visible without expanding;
+// the LLM definition + the nested action cards load lazily on first expand.
+function renderEntityGroup(entity, groupItems) {
+  const section = document.createElement("section");
+  section.className = "priority-group log-collapse log-collapsed";
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "priority-group-head log-collapse-head";
+  head.setAttribute("aria-expanded", "false");
+
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = "▸";
+  head.appendChild(caret);
+
+  const title = document.createElement("span");
+  title.className = "log-collapse-title priority-group-title";
+  title.textContent = entity === "__ungrouped__" ? "Other" : prettySlug(entity);
+  head.appendChild(title);
+
+  const doNow = groupItems.filter((i) => i.quadrant === "do-now").length;
+  if (doNow) {
+    const badge = document.createElement("span");
+    badge.className = "priority-group-urgent";
+    badge.textContent = `Do now ${doNow}`;
+    head.appendChild(badge);
+  }
+
+  const count = document.createElement("span");
+  count.className = "log-collapse-count";
+  count.textContent = String(groupItems.length);
+  head.appendChild(count);
+
+  const body = document.createElement("div");
+  body.className = "log-collapse-body priority-group-body";
+  body.hidden = true;
+
+  let filled = false;
+  const fill = () => {
+    if (filled) return;
+    filled = true;
+    if (entity !== "__ungrouped__") {
+      const def = document.createElement("div");
+      def.className = "priority-group-def";
+      def.hidden = true;
+      body.appendChild(def);
+      lazyEntityDefinition(entity).then((text) => {
+        if (text) { def.textContent = text; def.hidden = false; }
+      });
+    }
+    for (const it of groupItems) body.appendChild(renderPriorityCard(it, false));
+  };
+
+  head.addEventListener("click", () => {
+    const open = body.hidden;
+    if (open) fill();
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    section.classList.toggle("log-collapsed", !open);
+  });
+
+  section.appendChild(head);
+  section.appendChild(body);
+  return section;
+}
+
+// WP-Rollup P2 — generic collapsible group row (used for section + job bands).
+// opts: { defaultOpen, extraClass, fill(body) }. `fill` runs once, lazily on
+// first open (or immediately when defaultOpen).
+function makeGroupRow(label, count, doNow, opts) {
+  const sec = document.createElement("section");
+  sec.className = "priority-group log-collapse" + (opts.defaultOpen ? "" : " log-collapsed") + (opts.extraClass ? " " + opts.extraClass : "");
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "priority-group-head log-collapse-head";
+  head.setAttribute("aria-expanded", opts.defaultOpen ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "log-collapse-caret";
+  caret.textContent = opts.defaultOpen ? "▾" : "▸";
+  head.appendChild(caret);
+  const title = document.createElement("span");
+  title.className = "log-collapse-title priority-group-title";
+  title.textContent = label;
+  title.title = label;                       // full text on hover (it truncates)
+  head.appendChild(title);
+  if (opts.tag) {                            // e.g. the Veeva job ID — never truncated
+    const tag = document.createElement("span");
+    tag.className = "priority-job-tag";
+    tag.textContent = opts.tag;
+    head.appendChild(tag);
+  }
+  if (opts.quadrant) {                       // job-grain quadrant (do-now/schedule/…)
+    const qb = document.createElement("span");
+    qb.className = "priority-qbadge priority-qbadge-" + opts.quadrant;
+    qb.textContent = QUADRANT_LABEL[opts.quadrant] || opts.quadrant;
+    head.appendChild(qb);
+  }
+  if (doNow) {
+    const b = document.createElement("span");
+    b.className = "priority-group-urgent";
+    b.textContent = `Do now ${doNow}`;
+    head.appendChild(b);
+  }
+  const c = document.createElement("span");
+  c.className = "log-collapse-count";
+  c.textContent = String(count);
+  head.appendChild(c);
+  const body = document.createElement("div");
+  body.className = "log-collapse-body priority-group-body";
+  let filled = false;
+  const fill = () => { if (filled) return; filled = true; opts.fill(body); };
+  if (opts.defaultOpen) fill(); else body.hidden = true;
+  head.addEventListener("click", () => {
+    const open = body.hidden;
+    if (open) fill();
+    body.hidden = !open;
+    caret.textContent = open ? "▾" : "▸";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    sec.classList.toggle("log-collapsed", !open);
+  });
+  head.appendChild(document.createElement("span"));
+  sec.appendChild(head);
+  sec.appendChild(body);
+  return sec;
+}
+
+const doNowOf = (items) => items.filter((i) => i.quadrant === "do-now").length;
+
+// WP-Grouping-Operator P4 — the canonical P2 job names from the priority
+// response (parentJob → subject-anchored name). Set per render in
+// renderTodayPriority; jobName() prefers it over the raw segmenter header.
+let currentJobNames = {};
+
+// Display name for a job row (the Veeva ID rides in a separate chip, not here).
+function jobName(parentJob, jobHeader) {
+  const canonical = currentJobNames[parentJob];
+  if (canonical) return canonical;
+  const name = (jobHeader || "").replace(/\s+/g, " ").trim();
+  if (name) return name;
+  const veeva = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+  return veeva ? veeva[1].toUpperCase() : prettySlug((parentJob || "").replace(/^job:/, ""));
+}
+// The Veeva job ID (the project key), or null — rendered as a non-truncated chip.
+function veevaTag(parentJob) {
+  const m = /^job:((?:us|hq)-non-\d+)$/i.exec(parentJob || "");
+  return m ? m[1].toUpperCase() : null;
+}
+
+function cleanSection(s) {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  return t.length > 44 ? t.slice(0, 43).trimEnd() + "…" : t || "Other";
+}
+
+// A job row (collapsed) → its action cards on expand.
+function renderJobGroup(parentJob, jobHeader, items) {
+  return makeGroupRow(jobName(parentJob, jobHeader), items.length, 0, {
+    extraClass: "priority-job",
+    tag: veevaTag(parentJob),
+    quadrant: items[0] && items[0].jobQuadrant,     // job-grain quadrant badge
+    fill: (body) => {
+      for (const it of items) {
+        const card = renderPriorityCard(it, false);
+        if (it.section) {                            // provenance: which hot-list this came from
+          const prov = document.createElement("div");
+          prov.className = "priority-prov";
+          prov.textContent = cleanSection(it.section);
+          card.insertBefore(prov, card.firstChild);
+        }
+        body.appendChild(card);
+      }
+    },
+  });
+}
+
+const jobRank = { "do-now": 0, schedule: 1, delegate: 2, watch: 3 };
+
+// A section band (open by default) → its job rows, hottest job first.
+function renderSectionGroup(section, items) {
+  // Group the section's items by parentJob.
+  const jobs = new Map();
+  for (const it of items) {
+    const jk = it.parentJob;
+    if (!jobs.has(jk)) jobs.set(jk, { header: it.jobHeader, items: [] });
+    jobs.get(jk).items.push(it);
+  }
+  // Sort jobs by job-grain quadrant (do-now first), then job priority, then size.
+  const ordered = [...jobs.entries()].sort((a, b) => {
+    const qa = jobRank[a[1].items[0]?.jobQuadrant] ?? 2, qb = jobRank[b[1].items[0]?.jobQuadrant] ?? 2;
+    const pa = a[1].items[0]?.jobPriority ?? 0, pb = b[1].items[0]?.jobPriority ?? 0;
+    return qa - qb || pb - pa || b[1].items.length - a[1].items.length;
+  });
+  return makeGroupRow(cleanSection(section), items.length, doNowOf(items), {
+    defaultOpen: true,
+    extraClass: "priority-section",
+    fill: (body) => {
+      for (const [jk, j] of ordered) body.appendChild(renderJobGroup(jk, j.header, j.items));
+    },
+  });
+}
+
 function renderTodayPriority(container, data) {
   container.innerHTML = "";
+  currentJobNames = data.jobNames || {};   // P4 — canonical names for job rows
   const items = data.items || [];
   const counts = data.quadrantCounts || {};
   const tracked = items.filter((i) => i.tracked);
@@ -3237,11 +3487,11 @@ function renderTodayPriority(container, data) {
   const cardArea = document.createElement("div");
   focus.body.appendChild(cardArea);
 
-  let activeFilter = null; // null = all focus quadrants; else a single quadrant key
+  let activeFilter = null; // null = all; else a JOB quadrant (do-now/schedule/delegate/watch)
 
   const renderCards = () => {
     cardArea.innerHTML = "";
-    const inScope = (i) => (activeFilter ? i.quadrant === activeFilter : FOCUS_QUADRANTS.has(i.quadrant));
+    const inScope = (i) => FOCUS_QUADRANTS.has(i.quadrant);   // base pool = focus actions
     const trk = tracked.filter(inScope);
     if (trk.length) {
       const th = document.createElement("div");
@@ -3250,7 +3500,75 @@ function renderTodayPriority(container, data) {
       cardArea.appendChild(th);
       for (const it of trk) cardArea.appendChild(renderPriorityCard(it, true));
     }
-    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId));
+    // Hot-list items are shown by their JOB quadrant (not the action quadrant),
+    // so Schedule/Watch jobs aren't hidden just because their actions read as
+    // low-urgency. Non-hot-list items keep the action-quadrant focus scope.
+    const hotlistAll = items.filter((i) => i.parentJob && !trackedIds.has(i.recordId));
+    const restPool = items.filter((i) => !i.parentJob && inScope(i) && !trackedIds.has(i.recordId));
+    const pool = items.filter((i) => inScope(i) && !trackedIds.has(i.recordId)); // flat fallback only
+
+    // WP-Rollup P1/P2 — roll up by section → job → action (hot-list) + entity
+    // groups (rest). Falls back to a flat list when rollup is off / no keys.
+    const canGroup = ROLLUP_ENABLED && (hotlistAll.length > 0 || restPool.some((i) => i.primaryEntity));
+    if (canGroup) {
+      // A job-quadrant filter narrows to jobs of that quadrant (and hides the
+      // non-hot-list entity groups, which aren't job-classified).
+      const hotlist = activeFilter ? hotlistAll.filter((i) => i.jobQuadrant === activeFilter) : hotlistAll;
+      const rest = activeFilter ? [] : restPool;
+      let rendered = 0;
+
+      if (hotlist.length) {
+        // WP-Rollup job-first — group by JOB across the whole corpus so a job
+        // mentioned in two emails is ONE row with all its actions (the chip
+        // count then equals the row count). Section travels as a per-action
+        // provenance tag, not a splitting band.
+        const jobs = new Map();
+        for (const it of hotlist) {
+          if (!jobs.has(it.parentJob)) jobs.set(it.parentJob, { header: it.jobHeader, items: [] });
+          const j = jobs.get(it.parentJob);
+          j.items.push(it);
+          if (!j.header && it.jobHeader) j.header = it.jobHeader;
+        }
+        const jobOrdered = [...jobs.entries()].sort((a, b) => {
+          const qa = jobRank[a[1].items[0]?.jobQuadrant] ?? 2, qb = jobRank[b[1].items[0]?.jobQuadrant] ?? 2;
+          const pa = a[1].items[0]?.jobPriority ?? 0, pb = b[1].items[0]?.jobPriority ?? 0;
+          return qa - qb || pb - pa || b[1].items.length - a[1].items.length;
+        });
+        for (const [pj, j] of jobOrdered) { cardArea.appendChild(renderJobGroup(pj, j.header, j.items)); rendered++; }
+      }
+
+      // Non-hot-list remainder → P1 entity groups, capped.
+      const groups = new Map();
+      for (const it of rest) {
+        const key = it.primaryEntity || "__ungrouped__";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(it);
+      }
+      const ordered = [...groups.entries()].sort((a, b) => {
+        const aUng = a[0] === "__ungrouped__", bUng = b[0] === "__ungrouped__";
+        if (aUng !== bUng) return aUng ? 1 : -1;
+        const ra = Math.min(...a[1].map((i) => quadrantRank(i.quadrant)));
+        const rb = Math.min(...b[1].map((i) => quadrantRank(i.quadrant)));
+        return ra - rb || b[1].length - a[1].length || a[0].localeCompare(b[0]);
+      });
+      const cap = FOCUS_GROUP_CAP;          // entity groups capped independently of job rows
+      const shownGroups = ordered.slice(0, cap);
+      for (const [entity, gItems] of shownGroups) cardArea.appendChild(renderEntityGroup(entity, gItems));
+      if (ordered.length > shownGroups.length) {
+        const more = document.createElement("div");
+        more.className = "priority-more";
+        more.textContent = `+ ${ordered.length - shownGroups.length} more`;
+        cardArea.appendChild(more);
+      }
+      if (!trk.length && !rendered && !shownGroups.length) {
+        const empty = document.createElement("div");
+        empty.className = "priority-more";
+        empty.textContent = "Nothing here right now.";
+        cardArea.appendChild(empty);
+      }
+      return;
+    }
+
     const shown = pool.slice(0, FOCUS_CAP);
     for (const it of shown) cardArea.appendChild(renderPriorityCard(it, false));
     if (pool.length > shown.length) {
@@ -3267,15 +3585,30 @@ function renderTodayPriority(container, data) {
     }
   };
 
-  // Chips are filter buttons (do-now / schedule / delegate). Watch lives in its
-  // own section below — it isn't a Focus filter.
-  for (const q of ["do-now", "schedule", "delegate"]) {
-    const n = counts[q] || 0;
+  // WP-Rollup job-priority — chips are JOB quadrants (one tally per job, not per
+  // action), so Do-now / Schedule / Delegate / Watch populate at the job altitude
+  // the user thinks in. Computed from the visible hot-list jobs; falls back to
+  // the action counts when no job-grain data is present.
+  const jobQC = {};
+  {
+    const seen = new Set();
+    for (const i of items) {
+      if (!i.parentJob || trackedIds.has(i.recordId)) continue;
+      if (seen.has(i.parentJob)) continue;
+      seen.add(i.parentJob);
+      const q = i.jobQuadrant || "delegate";
+      jobQC[q] = (jobQC[q] || 0) + 1;
+    }
+  }
+  const haveJobChips = Object.keys(jobQC).length > 0;
+  const chipQuadrants = haveJobChips ? ["do-now", "schedule", "delegate", "watch"] : ["do-now", "schedule", "delegate"];
+  for (const q of chipQuadrants) {
+    const n = haveJobChips ? (jobQC[q] || 0) : (counts[q] || 0);
     if (!n) continue;
     const chip = document.createElement("button");
     chip.type = "button";
     chip.dataset.q = q;
-    chip.className = "priority-chip" + (q === "do-now" ? " priority-chip-now" : "");
+    chip.className = "priority-chip priority-chip-" + q + (q === "do-now" ? " priority-chip-now" : "");
     chip.textContent = `${QUADRANT_LABEL[q]} · ${n}`;
     chip.addEventListener("click", () => {
       activeFilter = activeFilter === q ? null : q;
@@ -4176,6 +4509,11 @@ async function enterEntityCardView(entity) {
     return;
   }
 
+  // WP-Grouping-Operator P4 — a job's Definition reuses the operator's name as
+  // the title (one naming path) instead of the raw entity slug ("us-non-16619"
+  // → "Merck Vaccines Landing Page Updates"). Non-job entities keep their slug.
+  if (titleEl && data && data.jobName) titleEl.textContent = data.jobName;
+
   const prose = data && typeof data.prose === "string" ? data.prose.trim() : "";
   if (!prose) {
     if (statusEl) {
@@ -4496,8 +4834,10 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
     res = await tauri.core.invoke("project_canon_merge", {
       // Backend requires >=2 slugs in `sources` — ALL the projects being unified.
       // targetCanonical is which name survives.
-      sources: [sourceGrp.key, targetGrp.key],
-      targetCanonical: targetGrp.key,
+      // P4 (c) — a job chip's key is "job:<slug>"; project_canon operates on the
+      // project slug, so strip the prefix. No-op for plain project chips.
+      sources: [sourceGrp.key, targetGrp.key].map((k) => k.replace(/^job:/, "")),
+      targetCanonical: targetGrp.key.replace(/^job:/, ""),
       expectedSubstrateFingerprint: fp,
       actor,
       overrideVeto: override,
@@ -4577,7 +4917,7 @@ async function runRename(grp, newLabel, overlay) {
   try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
   try {
     await tauri.core.invoke("project_canon_rename", {
-      canonicalId: grp.key, // backend resolves a raw slug → canonical (mints one if fresh)
+      canonicalId: grp.key.replace(/^job:/, ""), // P4 (c) job:<slug> → project slug; backend mints if fresh
       newLabel,
       expectedSubstrateFingerprint: fp,
       actor,
@@ -4659,11 +4999,19 @@ async function runSplit(grp, merged, overlay) {
   enterDecisionsView();
 }
 
-function groupRecords(items, lens, docProjects, aliases) {
+function groupRecords(items, lens, docProjects, aliases, jobNames, recordJobs) {
   const g = new Map();
   // Resolve a slug to its canonical form so duplicate subjects collapse into one
   // group (sora → project-sora). Identity when no alias is known.
   const canon = (s) => (aliases && aliases[s]) || s;
+  // WP-Grouping-Operator P4 — label a project group with its canonical P2 job
+  // name when one exists ("us-non-16619" → "Merck Vaccines Landing Page
+  // Updates"), so By-project reads consistently with Focus/Receipts. Falls back
+  // to the prettified slug.
+  const projLabel = (key) => (jobNames && jobNames[key]) || prettySlug(key);
+  const jobLabel = (jk) =>
+    (jobNames && (jobNames[jk] || jobNames[jk.replace(/^job:/, "")])) ||
+    prettySlug(jk.replace(/^job:/, ""));
   const ensure = (key, label, order, muted) => {
     if (!g.has(key)) g.set(key, { key, label, order, muted: !!muted, items: [] });
     return g.get(key);
@@ -4678,9 +5026,18 @@ function groupRecords(items, lens, docProjects, aliases) {
       const key = rec.owner ? canon(rec.owner) : "z-unassigned";
       ensure(key, rec.owner ? prettySlug(key) : "Unassigned", rec.owner ? 0 : 9, !rec.owner).items.push(it);
     } else {
-      const projs = docProjects.get(rec.documentId) || [];
-      const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
-      ensure(key, key === PROJECT_OTHER ? "Other" : prettySlug(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+      // (c) — a hot-list record (carries a canonical job) groups by its JOB chip,
+      // so US-NON-16619 reads as its own group matching Today. Broad-corpus records
+      // (no job) keep their document-project grouping, untouched. Bounded re-point
+      // of the ~53 hot-list records; the ~226 broad-corpus records don't move.
+      const jobKey = recordJobs && recordJobs[rec.recordId];
+      if (jobKey) {
+        ensure(jobKey, jobLabel(jobKey), 0, false).items.push(it);
+      } else {
+        const projs = docProjects.get(rec.documentId) || [];
+        const key = projs.length ? canon(projs[0]) : PROJECT_OTHER;
+        ensure(key, key === PROJECT_OTHER ? "Other" : projLabel(key), key === PROJECT_OTHER ? 9 : 0, key === PROJECT_OTHER).items.push(it);
+      }
     }
   }
   return [...g.values()].sort((a, b) => {
@@ -4688,6 +5045,325 @@ function groupRecords(items, lens, docProjects, aliases) {
     if (a.order !== b.order) return a.order - b.order; // catch-all last
     return b.items.length - a.items.length; // else largest first
   });
+}
+
+// WP-Work-Forest top altitude — reorder + annotate project-lens groups under
+// their CoordinationFrameCompiler top frame (state Project/Suggested/Facet/
+// Needs-evidence) and workstream. Returns the reordered groups; each group is
+// tagged with `_frameHeader` (the top frame, on the first group of that frame)
+// and `_wsHeader` (workstream name, on the first group of that workstream).
+// Groups whose job isn't in any frame fall to a trailing "Unframed" bucket.
+const FRAME_STATE_ORDER = { Project: 0, Suggested: 1, Facet: 2, "Needs-evidence": 3 };
+// Attention rank — surfaces the jobs that need action to the top of each
+// section: deadline urgency (overdue > due-soon > future) dominates, then open
+// items, then size. Works across all jobs (hot-list + prose), unlike the
+// parentJob-scoped Eisenhower priority operator.
+function groupAttention(grp) {
+  let urg = 0, open = 0;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  for (const it of grp.items) {
+    const r = it.record || it;
+    if ((it.state || "open") === "open") open++;
+    if (r && r.due) {
+      const days = (new Date(r.due + "T00:00:00") - today) / 86400000;
+      const u = days < 0 ? 3 : days <= 7 ? 2 : 1;
+      if (u > urg) urg = u;
+    }
+  }
+  return urg * 1000 + open * 20 + grp.items.length;
+}
+// Per-group rank — the real PRIORITY heat when the job is "scored", else the
+// attention fallback. Tiers are kept separated by band so a scored job never
+// loses to a fallback job (scored ∈ [0.40,1.0], fallback ∈ [0.10,0.40), quiet
+// ∈ [0,0.10)); within a tier, order by heat/attention.
+function rankGroups(ordered, jobHeat) {
+  const maxAtt = Math.max(1, ...ordered.map((g) => groupAttention(g)));
+  for (const grp of ordered) {
+    const jh = jobHeat && jobHeat[grp.key];
+    const attN = groupAttention(grp) / maxAtt;
+    if (jh) {
+      grp._rank = 0.40 + 0.60 * jh.heat; grp._tier = "scored"; grp._band = jh.band; grp._why = jh.why;
+    } else if (groupAttention(grp) > 2) {
+      grp._rank = 0.10 + 0.30 * attN; grp._tier = "fallback";
+    } else {
+      grp._rank = 0.10 * attN; grp._tier = "quiet";
+    }
+  }
+}
+function applyFrameLayout(ordered, frames, jobHeat) {
+  if (!frames || !frames.length) return ordered;
+  rankGroups(ordered, jobHeat);
+  const byFid = new Map(frames.map((f) => [f.fid, f]));
+  const topOf = (f) => { let c = f, n = 0; while (c && c.parentFid != null && n++ < 50) c = byFid.get(c.parentFid) || null; return c || f; };
+  const homeOf = new Map();
+  for (const f of frames) {
+    const top = topOf(f);
+    const wsName = f.parentFid != null ? f.name : null;
+    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName });
+  }
+  const topOrder = (f) => (FRAME_STATE_ORDER[f.state] ?? 4) * 1000 - (f.maturity || 0) * 100;
+  for (const grp of ordered) {
+    const h = homeOf.get(grp.key);
+    grp._top = h ? h.top : null;
+    grp._wsName = h ? h.wsName : null;
+  }
+  // Build the list explicitly: frames in state/maturity order; within a frame the
+  // DIRECT jobs first (attention desc), then each workstream (ranked by its total
+  // attention), jobs inside by attention desc. Unframed groups trail at the end.
+  const topFrames = [...new Set(ordered.map((g) => g._top).filter(Boolean))].sort((a, b) => topOrder(a) - topOrder(b) || a.fid - b.fid);
+  const out = [];
+  for (const top of topFrames) {
+    const mine = ordered.filter((g) => g._top === top);
+    // Frame HEAT — roll job heat up (max+topK+share), an axis ORTHOGONAL to the
+    // frame's maturity (how-urgent vs how-sure). Rendered as its own chip.
+    const heats = mine.map((g) => (jobHeat && jobHeat[g.key] ? jobHeat[g.key].heat : 0)).sort((a, b) => b - a);
+    const fhTopK = heats.slice(0, 3);
+    const fh = 0.55 * (heats[0] || 0) + 0.30 * (fhTopK.reduce((s, x) => s + x, 0) / Math.max(1, fhTopK.length))
+      + 0.15 * (heats.length ? heats.filter((h) => h >= 0.5).length / heats.length : 0);
+    top._heat = fh;
+    top._heatBand = fh >= 0.65 ? "fire" : fh >= 0.4 ? "active" : "quiet";
+    const direct = mine.filter((g) => !g._wsName).sort((a, b) => b._rank - a._rank);
+    const wsNames = [...new Set(mine.filter((g) => g._wsName).map((g) => g._wsName))];
+    const wsBuckets = wsNames.map((name) => {
+      const groups = mine.filter((g) => g._wsName === name).sort((a, b) => b._rank - a._rank);
+      return { name, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
+    }).sort((a, b) => b.total - a.total);
+    let first = true;
+    for (const g of direct) { g._frameHeader = first ? top : null; g._wsHeader = null; first = false; out.push(g); }
+    for (const bucket of wsBuckets) {
+      let wsFirst = true;
+      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? bucket.name : null; wsFirst = false; out.push(g); }
+    }
+    // a frame with only workstream jobs still needs its header on the first row
+    if (first && mine.length) mine[0]._frameHeader = top;
+  }
+  const unframed = ordered.filter((g) => !g._top).sort((a, b) => b._rank - a._rank);
+  unframed.forEach((g, i) => { g._frameHeader = i === 0 ? { __unframed: true } : null; g._wsHeader = null; out.push(g); });
+  return out;
+}
+
+const FRAME_BADGE = {
+  Project: { label: "Project", cls: "frame-badge-project" },
+  Suggested: { label: "Suggested area", cls: "frame-badge-suggested" },
+  Facet: { label: "Topic / area", cls: "frame-badge-facet" },
+  "Needs-evidence": { label: "Needs evidence", cls: "frame-badge-needs" },
+};
+function buildFrameHeader(frame) {
+  const el = document.createElement("div");
+  el.className = "frame-header";
+  if (frame.__unframed) {
+    el.classList.add("frame-header-unframed");
+    const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = "Unframed";
+    el.appendChild(n);
+    return el;
+  }
+  const badge = FRAME_BADGE[frame.state] || FRAME_BADGE.Suggested;
+  const b = document.createElement("span"); b.className = "frame-badge " + badge.cls; b.textContent = badge.label;
+  const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = frame.name;
+  el.appendChild(b); el.appendChild(n);
+  // Heat chip — the orthogonal axis. "On fire" / "Active" carry an accent; "quiet"
+  // is omitted so a calm project doesn't shout.
+  if (frame._heatBand && frame._heatBand !== "quiet") {
+    const heat = document.createElement("span");
+    heat.className = "frame-heat frame-heat-" + frame._heatBand;
+    heat.textContent = frame._heatBand === "fire" ? "On fire" : "Active";
+    el.appendChild(heat);
+  }
+  if (frame.state !== "Project") el.classList.add("frame-header-soft");
+  // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
+  const edit = document.createElement("span");
+  edit.className = "frame-edit-btn";
+  edit.textContent = "⋯";
+  edit.setAttribute("role", "button");
+  edit.tabIndex = 0;
+  edit.title = "Rename, change type, or merge";
+  edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frame); });
+  el.appendChild(edit);
+  return el;
+}
+function buildWsHeader(name) {
+  const el = document.createElement("div");
+  el.className = "frame-ws-header";
+  el.textContent = name;
+  return el;
+}
+function buildFacetBar(facets) {
+  if (!facets || !facets.length) return null;
+  const bar = document.createElement("div");
+  bar.className = "frame-facet-bar";
+  const lbl = document.createElement("span"); lbl.className = "frame-facet-label"; lbl.textContent = "Also tagged";
+  bar.appendChild(lbl);
+  for (const fc of facets) {
+    const chip = document.createElement("span");
+    chip.className = "frame-facet-chip";
+    chip.textContent = `${fc.name} · ${fc.jobKeys.length}`;
+    bar.appendChild(chip);
+  }
+  return bar;
+}
+
+// WP-Frame-HITL — append one org-edit, then reload so the correction shows (it is
+// reapplied over the generated frames on read, so it sticks across regeneration).
+async function frameEdit(edit) {
+  try {
+    await tauri.core.invoke("frame_edit", { edit });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] frame_edit failed:", e);
+  }
+}
+
+// The "Move to…" picker: existing frames + an inline "New category" field. One
+// click reassigns the job; the move sticks and becomes evidence for the learner.
+// WP-Frame-HITL — the frame-header gesture menu: Rename / Mark-as-type / Merge,
+// all overlay-backed (replaces the legacy project-canon Combine/Rename).
+const FRAME_TYPE_CHOICES = [
+  ["project", "Project"], ["client", "Client"], ["initiative", "Initiative"],
+  ["workstream", "Workstream"], ["tracker", "Tracker"], ["topic", "Topic"], ["geography", "Geography"],
+];
+function positionMenu(menu, anchorEl) {
+  document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  menu.style.maxHeight = `${vh - 16}px`;
+  const mh = Math.min(menu.offsetHeight, vh - 16);
+  let top = r.bottom + 4;
+  if (top + mh > vh - 8) top = Math.max(8, vh - mh - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, vw - 260))}px`;
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
+}
+function openFrameEditMenu(anchorEl, frame) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = "Edit category";
+  header.appendChild(title);
+  const input = document.createElement("input");          // rename, prefilled
+  input.type = "text";
+  input.className = "frame-move-new-input";
+  input.value = frame.name;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const nn = input.value.trim();
+      if (nn && nn !== frame.name) { menu.remove(); frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn }); }
+    }
+  });
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const typeLbl = document.createElement("div");
+  typeLbl.className = "frame-move-section";
+  typeLbl.textContent = "Mark as type";
+  list.appendChild(typeLbl);
+  const typeRow = document.createElement("div");
+  typeRow.className = "frame-type-row";
+  for (const [t, label] of FRAME_TYPE_CHOICES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "frame-type-chip" + (frame.frameType === t ? " active" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "mark_type", frameName: frame.name, frameType: t }); });
+    typeRow.appendChild(b);
+  }
+  list.appendChild(typeRow);
+
+  const others = frames.filter((f) => f.parentFid == null && f.name !== frame.name);
+  if (others.length) {
+    const mLbl = document.createElement("div");
+    mLbl.className = "frame-move-section";
+    mLbl.textContent = "Merge into";
+    list.appendChild(mLbl);
+    for (const t of others) {
+      const it = document.createElement("button");
+      it.type = "button";
+      it.className = "frame-move-item";
+      it.textContent = t.name;
+      it.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "merge", mergeFromName: frame.name, mergeIntoName: t.name }); });
+      list.appendChild(it);
+    }
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
+}
+
+function openMovePicker(anchorEl, grp) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  // Pinned header: title + the "New category" field (always visible).
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = "Move to…";
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New category…";
+  input.className = "frame-move-new-input";
+  const go = async () => {
+    const name = input.value.trim();
+    if (!name) return;
+    menu.remove();
+    await tauri.core.invoke("frame_edit", { edit: { eventType: "create_frame", frameName: name, frameType: "initiative" } });
+    await frameEdit({ eventType: "move", jobKey: grp.key, toFrameName: name, sourceContext: { jobName: grp.label } });
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  // Scrollable list of existing destinations.
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addItem = (name, nested) => {
+    if (name === grp._top?.name && !nested) return; // skip its own top frame
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item" + (nested ? " nested" : "");
+    it.textContent = name;
+    it.addEventListener("click", () => {
+      menu.remove();
+      frameEdit({ eventType: "move", jobKey: grp.key, toFrameName: name, sourceContext: { jobName: grp.label } });
+    });
+    list.appendChild(it);
+  };
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    addItem(t.name, false);
+    for (const w of frames.filter((f) => f.parentFid === t.fid)) addItem(w.name, true);
+  }
+  menu.appendChild(list);
+
+  // Position INSIDE the viewport; clamp height so the list scrolls internally
+  // (the window isn't expandable, so the menu must self-contain).
+  document.body.appendChild(menu);
+  const r = anchorEl.getBoundingClientRect();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  menu.style.maxHeight = `${vh - 16}px`;
+  const mh = Math.min(menu.offsetHeight, vh - 16);
+  let top = r.bottom + 4;
+  if (top + mh > vh - 8) top = Math.max(8, vh - mh - 8);
+  menu.style.top = `${top}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.left, vw - 260))}px`;
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
 }
 
 /**
@@ -4780,6 +5456,23 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // Canonical alias map (slug → canonical) from the engine — consolidates
     // duplicate subjects in the By-project lens (sora → project-sora).
     aliases: data && data.aliases ? data.aliases : {},
+    // P4 — canonical P2 job names (parentJob/slug → name) for By-project labels.
+    jobNames: data && data.jobNames ? data.jobNames : {},
+    // P4 (c) — recordId → job: key for hot-list records only; By-project re-points
+    // these to job chips, leaving broad-corpus records on document-project grouping.
+    recordJobs: data && data.recordJobs ? data.recordJobs : {},
+    // WP-Work-Forest top altitude — the CoordinationFrameCompiler forest (top
+    // frames → workstreams) + geography/topic facets. Present only when
+    // COORDINATION_FRAMES_ENABLED on the server; absent → flat job grouping.
+    frames: Array.isArray(data && data.frames) ? data.frames : [],
+    facets: Array.isArray(data && data.facets) ? data.facets : [],
+    // WP-Priority-Frame-Integration step 1 — per-job heat from the real PRIORITY
+    // operator (importance × urgency, max+topK rollup). Present only when
+    // ENABLE_PRIORITY_OPERATOR; absent → jobs rank by the attention fallback.
+    jobHeat: data && data.jobHeat ? data.jobHeat : {},
+    // step 5 — ActionCandidateView mode per record; step 6 — per-record "who".
+    actionKinds: data && data.actionKinds ? data.actionKinds : {},
+    recordRelationship: data && data.recordRelationship ? data.recordRelationship : {},
   };
   renderDecisions();
 }
@@ -5237,7 +5930,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -5260,9 +5953,18 @@ function renderDecisions() {
   const filtered = items.filter((it) =>
     _decisionsFilter === "all" ? true : (it.state || "open") === _decisionsFilter);
 
-  const ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases);
+  let ordered = groupRecords(filtered, _decisionsLens, docProjects, aliases, jobNames, recordJobs);
+  // WP-Work-Forest — under the project lens, arrange the job groups beneath their
+  // CoordinationFrameCompiler top frame (Projects → Suggested → Topics) with
+  // workstream sub-headers. No frames (flag off / empty) → unchanged flat order.
+  const framed = _decisionsLens === "project" && frames && frames.length;
+  if (framed) ordered = applyFrameLayout(ordered, frames, jobHeat);
 
   listEl.innerHTML = "";
+  if (framed) {
+    const fb = buildFacetBar(facets);
+    if (fb) listEl.appendChild(fb);
+  }
   // WP-THRESHOLD-STATE-OF-PLAY — batch "Copy all" lives at the top of the
   // By-Person lens (the one lens where per-person digests make sense).
   if (_decisionsLens === "people") {
@@ -5296,12 +5998,17 @@ function renderDecisions() {
   }
 
   for (const grp of ordered) {
+    // WP-Work-Forest — top-frame + workstream section headers (project lens only).
+    if (grp._frameHeader) listEl.appendChild(buildFrameHeader(grp._frameHeader));
+    if (grp._wsHeader) listEl.appendChild(buildWsHeader(grp._wsHeader));
+
     const decisions = grp.items.filter((it) => (it.record ? it.record.type : it.type) === "decision").length;
     const commitments = grp.items.length - decisions;
     const expanded = _decisionsExpanded.has(grp.key);
 
     const groupEl = document.createElement("div");
     groupEl.className = "decisions-group";
+    if (grp._wsName) groupEl.classList.add("decisions-group-nested");
 
     // Clickable header — collapses/expands the group so the list reads as a
     // scannable overview of groups rather than one long scroll. Default collapsed.
@@ -5322,6 +6029,16 @@ function renderDecisions() {
     name.textContent = grp.label;
     head.appendChild(name);
 
+    // WP-Priority-Frame-Integration — the urgency tier as a discrete pill on the
+    // job row (Act now / Soon / Monitor), so urgency is shown by a control, not by
+    // recolouring the prose. Omitted for the quiet tier.
+    if (framed && grp._band && BAND_LABEL[grp._band]) {
+      const bp = document.createElement("span");
+      bp.className = "job-band-pill band-" + grp._band;
+      bp.textContent = BAND_LABEL[grp._band];
+      head.appendChild(bp);
+    }
+
     const count = document.createElement("span");
     count.className = "decisions-group-count";
     const parts = [];
@@ -5329,6 +6046,27 @@ function renderDecisions() {
     if (commitments) parts.push(`${commitments} commitment${commitments === 1 ? "" : "s"}`);
     count.textContent = parts.join(" · ");
     head.appendChild(count);
+
+    // WP-Frame-HITL — the Move control (a span, since the header is a <button>).
+    // One click → pick a destination (or a new category); the move sticks.
+    if (framed && grp._top) {
+      const mv = document.createElement("span");
+      mv.className = "job-move-btn";
+      mv.textContent = "Move";
+      mv.setAttribute("role", "button");
+      mv.tabIndex = 0;
+      mv.addEventListener("click", (ev) => { ev.stopPropagation(); openMovePicker(mv, grp); });
+      head.appendChild(mv);
+    }
+
+    // WP-Priority-Frame-Integration — the operator's business-language "why" (no
+    // slugs). Uniform colour — the band pill carries urgency, the prose explains.
+    if (framed && grp._why) {
+      const why = document.createElement("span");
+      why.className = "decisions-group-why";
+      why.textContent = grp._why;
+      head.appendChild(why);
+    }
 
     const body = document.createElement("div");
     body.className = "decisions-group-body";
@@ -5361,7 +6099,11 @@ function renderDecisions() {
     const headRow = document.createElement("div");
     headRow.className = "decisions-group-head-row";
     headRow.appendChild(head);
-    if (_decisionsLens === "project" && !grp.muted) {
+    // In the framed (Work-Forest) view the legacy per-group project-canon
+    // Combine/Rename is replaced by the overlay-backed frame-header menu (Move on
+    // jobs; Rename/Merge/Mark-type on the frame). Keep the legacy controls only
+    // when frames aren't present (plain By-project).
+    if (_decisionsLens === "project" && !grp.muted && !framed) {
       headRow.appendChild(buildProjectGroupActions(grp, ordered));
     }
     groupEl.appendChild(headRow);
@@ -5372,6 +6114,21 @@ function renderDecisions() {
 
 /** One compact card for the browser: type chip + state, summary, owner · due,
  *  and project chip(s) — the soft facet, always shown for context. */
+// WP-Priority-Frame-Integration — priority band labels (the urgency tier).
+const BAND_LABEL = { act_now: "Act now", verify: "Verify", soon: "Soon", monitor: "Monitor" };
+
+// WP-Priority-Frame-Integration step 5 — ActionCandidateView mode labels.
+const ACTION_KIND_LABEL = {
+  commitment_due: "Commitment",
+  decision_needed: "Decision needed",
+  decision_to_broadcast: "Decision to share",
+  blocked_work: "Blocked",
+  dependency_to_unblock: "Others waiting",
+  contradiction_to_resolve: "Conflict",
+  stale_commitment: "Stale",
+  follow_up: "Follow-up",
+};
+
 function renderDecisionCard(rec, recState, projects) {
   const card = document.createElement("div");
   card.className = "record-card decision-card";
@@ -5385,6 +6142,25 @@ function renderDecisionCard(rec, recState, projects) {
   chip.dataset.type = rec.type || "";
   chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   header.appendChild(chip);
+
+  // step 5 — the action mode (Blocked / Decision needed / Conflict …).
+  const ctx = _decisionsCtx || {};
+  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
+  if (ak && ACTION_KIND_LABEL[ak.kind] && ak.kind !== "follow_up") {
+    const kc = document.createElement("span");
+    kc.className = "record-kind-chip kind-" + ak.kind;
+    kc.textContent = ACTION_KIND_LABEL[ak.kind];
+    header.appendChild(kc);
+  }
+  // step 6 — the "who" (relationship) from the CommunicationRole substrate.
+  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+  if (rel && rel.relationship) {
+    const rc = document.createElement("span");
+    rc.className = "record-rel-chip";
+    rc.textContent = rel.counterparty ? `${rel.relationship} · ${rel.counterparty}` : rel.relationship;
+    if (rel.why) rc.title = rel.why;
+    header.appendChild(rc);
+  }
   if (recState && recState !== "open") {
     const pill = document.createElement("span");
     pill.className = "record-state-pill";
@@ -5426,7 +6202,12 @@ function renderDecisionCard(rec, recState, projects) {
     btn.type = "button";
     btn.className = "btn btn-link receipts-entry-btn";
     btn.textContent = "Show receipts →";
-    btn.addEventListener("click", () => enterReceiptsView(rec.primaryEntity));
+    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
+    // canonical name) when the record is job-grouped; else the entity's. Hot-
+    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
+    // parentJob is what reaches a job's receipts instead of section-receipts.
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
     actions.appendChild(btn);
   }
   appendSourceBadge(actions, rec.documentId, rec.verbatim);
@@ -5544,6 +6325,22 @@ async function enterReceiptsView(entity) {
 
   const items = Array.isArray(data && data.records) ? data.records : [];
   const edges = Array.isArray(data && data.edges) ? data.edges : [];
+
+  // WP-Grouping-Operator P4 — when this entity resolves to a single canonical
+  // job, title the view with the job's NAME ("Merck Vaccines Landing Page
+  // Updates") instead of the raw entity slug. A section (spans many jobs) →
+  // resolvedJob is null → keep the entity slug. Consistent: the header always
+  // names exactly what the set is.
+  const resolvedJob = data && data.resolvedJob;
+  const headerName = resolvedJob && resolvedJob.name ? resolvedJob.name : prettySlug(entity);
+  if (titleEl) titleEl.textContent = headerName;
+  setNav(
+    [
+      { label: "Today", go: () => enterLogView() },
+      { label: "Receipts · " + headerName },
+    ],
+    { back: () => enterLogView() },
+  );
 
   if (statusEl) {
     if (items.length === 0) {

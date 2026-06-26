@@ -3384,9 +3384,250 @@ code {
   color: var(--glass-text-faint);
 }
 
+/* WP-Work-Forest top altitude — frame section headers above the job groups. */
+.frame-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 2px;
+  padding: 2px 2px 6px;
+  border-bottom: 1px solid var(--glass-border);
+  flex-wrap: wrap;
+}
+.frame-header:first-child { margin-top: 4px; }
+.frame-header-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--glass-text);
+  letter-spacing: 0.01em;
+}
+.frame-header-soft .frame-header-name { color: var(--glass-text-faint); font-weight: 600; }
+.frame-header-unframed .frame-header-name { color: var(--glass-text-faint); font-weight: 600; font-size: 12px; }
+.frame-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+}
+.frame-badge-project { color: #d6e9ff; background: rgba(56, 132, 255, 0.18); border-color: rgba(56, 132, 255, 0.4); }
+.frame-badge-suggested { color: var(--glass-text-faint); background: var(--glass-surface); }
+.frame-badge-facet { color: var(--glass-text-faint); background: transparent; }
+.frame-badge-needs { color: var(--glass-text-faint); background: transparent; border-style: dashed; }
+/* Heat chip — the urgency axis, orthogonal to maturity. */
+.frame-heat {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.frame-heat-fire { color: #ffb59a; background: rgba(255, 96, 56, 0.18); border: 1px solid rgba(255, 96, 56, 0.45); }
+.frame-heat-active { color: var(--glass-text-faint); background: var(--glass-surface); border: 1px solid var(--glass-border); }
+/* Workstream sub-header — a quieter label that opens a nested sub-section. */
+.frame-ws-header {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+  margin: 14px 0 2px 14px;
+}
+/* Workstream jobs sit indented under the label with a containment rail. The
+   card style itself stays IDENTICAL to direct jobs — the indent + rail + label
+   carry the nesting, so the two tiers read consistently. */
+.decisions-group-nested {
+  margin-left: 14px;
+  padding-left: 12px;
+  border-left: 2px solid var(--glass-border);
+}
+/* Facet chip bar — geography/topic tags that cross-cut the projects. */
+.frame-facet-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+.frame-facet-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+}
+.frame-facet-chip {
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+}
+
+/* PRIORITY "why" on a scored job — quiet, explains the ranking; full-width so it
+   wraps under the title row. */
+.decisions-group-why {
+  flex-basis: 100%;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  margin: 1px 0 0 18px;
+}
+/* Urgency tier pill on the job row — carries the band so the why prose can stay
+   one consistent colour. */
+.job-band-pill {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+}
+.job-band-pill.band-act_now { color: #ffb59a; background: rgba(255, 96, 56, 0.16); border-color: rgba(255, 96, 56, 0.42); }
+.job-band-pill.band-verify { color: #ffd9a3; background: rgba(255, 180, 80, 0.14); border-color: rgba(255, 180, 80, 0.42); }
+.job-band-pill.band-soon { color: #d6e9ff; background: rgba(56, 132, 255, 0.12); border-color: rgba(56, 132, 255, 0.32); }
+.job-band-pill.band-monitor { color: var(--glass-text-faint); }
+
+/* WP-Frame-HITL — the Move control + the "Move to…" picker. */
+.job-move-btn {
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  cursor: pointer;
+  margin-left: auto;
+}
+.job-move-btn:hover { background: var(--glass-surface-hover); color: var(--glass-text); }
+.frame-move-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 230px;
+  max-width: 270px;
+  display: flex;
+  flex-direction: column;
+  /* SOLID, opaque — the translucent glass surface bled the cards through. */
+  background: #1c1f27;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.66);
+  overflow: hidden;
+}
+.frame-move-header {
+  flex-shrink: 0;
+  padding: 8px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.frame-move-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+.frame-move-title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+  padding: 0 2px 6px;
+}
+.frame-move-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--glass-text);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.frame-move-item:hover { background: var(--glass-surface-hover); }
+.frame-move-item.nested { padding-left: 18px; color: var(--glass-text-faint); }
+.frame-move-section {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+  padding: 8px 2px 4px;
+}
+.frame-type-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px; }
+.frame-type-chip {
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.frame-type-chip:hover { background: var(--glass-surface-hover); color: var(--glass-text); }
+.frame-type-chip.active { color: #d6e9ff; border-color: rgba(56, 132, 255, 0.45); background: rgba(56, 132, 255, 0.16); }
+/* The frame-header gesture trigger (rename / type / merge). */
+.frame-edit-btn {
+  margin-left: 8px;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--glass-text-faint);
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 5px;
+}
+.frame-edit-btn:hover { color: var(--glass-text); background: var(--glass-surface-hover); }
+.frame-move-new-row { padding: 4px 4px 2px; border-top: 1px solid var(--glass-border); margin-top: 4px; }
+.frame-move-new-input {
+  width: 100%;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--glass-text);
+  background: var(--glass-surface-hover);
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+  padding: 5px 8px;
+  box-sizing: border-box;
+}
+
 /* Compact card — reuses .record-card; project chips under the meta. */
 .decision-card {
   gap: 6px;
+}
+
+/* Action mode (step 5) + relationship (step 6) chips in the record header. */
+.record-kind-chip {
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+}
+.record-kind-chip.kind-blocked_work,
+.record-kind-chip.kind-contradiction_to_resolve {
+  color: #ffb59a;
+  border-color: rgba(255, 96, 56, 0.4);
+}
+.record-kind-chip.kind-dependency_to_unblock {
+  color: #ffd9a3;
+}
+.record-rel-chip {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #d6e9ff;
+  background: rgba(56, 132, 255, 0.14);
+  border: 1px solid rgba(56, 132, 255, 0.35);
 }
 
 .decision-projects {
