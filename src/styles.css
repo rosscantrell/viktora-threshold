@@ -3505,6 +3505,100 @@ code {
   margin-left: auto;
 }
 .job-move-btn:hover { background: var(--glass-surface-hover); color: var(--glass-text); }
+
+/* WP-Frame-HITL "adapts" tier — ambient learned suggestion chip (Stage 3). */
+.job-suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  border-radius: 5px;
+  border: 1px solid var(--accent-gold, #c8a24a);
+  background: rgba(200, 162, 74, 0.10);
+  color: var(--glass-text-faint);
+}
+.job-suggestion-label { color: var(--glass-text); }
+.job-suggestion-yes, .job-suggestion-no {
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--glass-border);
+}
+.job-suggestion-yes { color: var(--accent-gold, #c8a24a); }
+.job-suggestion-yes:hover { background: rgba(200, 162, 74, 0.18); }
+.job-suggestion-no:hover { background: var(--glass-surface-hover); color: var(--glass-text); }
+
+/* The apply-to-similar review modal (reuses .frame-move-menu base). */
+.learned-review-why {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+/* The review modal is wider than the move picker — it carries inspect detail.
+   Cap its height so expanded details scroll INSIDE the list and the footer
+   (Move selected / Don't learn this) stays pinned + visible. */
+.learned-review { min-width: 340px; max-width: 440px; max-height: 86vh; }
+.learned-review-cand { border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
+.learned-review-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 2px;
+  font-size: 12px;
+  color: var(--glass-text);
+}
+.learned-review-name { flex: 1 1 auto; cursor: pointer; }
+.learned-review-name:hover { text-decoration: underline; }
+.learned-review-inspect {
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.learned-review-inspect:hover { color: var(--glass-text); background: var(--glass-surface-hover); }
+.learned-review-detail {
+  padding: 4px 2px 8px 24px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+.learned-review-loc { margin-bottom: 4px; color: var(--accent-gold, #c8a24a); }
+.learned-review-records { margin: 0; padding-left: 14px; list-style: disc; }
+.learned-review-records li { margin: 2px 0; line-height: 1.35; color: var(--glass-text); }
+.learned-review-more { color: var(--glass-text-faint); font-style: italic; list-style: none; }
+.learned-review-footer {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-top: 1px solid var(--glass-border);
+  flex-shrink: 0;            /* stays pinned + visible while the list scrolls */
+  background: #1c1f27;
+}
+.learned-review-primary {
+  flex: 1 1 auto;
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--accent-gold, #c8a24a);
+  background: rgba(200, 162, 74, 0.16);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.learned-review-ghost {
+  padding: 5px 10px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  color: var(--glass-text-faint);
+  cursor: pointer;
+}
+.learned-review-ghost:hover { color: var(--glass-text); }
+
 .frame-move-menu {
   position: fixed;
   z-index: 1000;
