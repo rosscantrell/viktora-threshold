@@ -5208,9 +5208,212 @@ async function frameEdit(edit) {
   try {
     await tauri.core.invoke("frame_edit", { edit });
     await enterDecisionsView();
+    // WP-Frame-HITL "adapts" tier — felt learning. After a MOVE, ask the learner
+    // whether the same explicit feature explains other jobs, and surface a visible
+    // "move them too?" offer. The user still confirms; nothing auto-moves.
+    if (edit && edit.eventType === "move" && edit.jobKey && edit.toFrameName) {
+      maybeOfferApplyToSimilar(edit.jobKey, edit.toFrameName);
+    }
   } catch (e) {
     console.warn("[main] frame_edit failed:", e);
   }
+}
+
+// After a move, fetch the apply-to-similar offer and (if anything generalizes)
+// toast it. Failure-safe: any error degrades to silence — the move still stuck.
+async function maybeOfferApplyToSimilar(jobKey, toFrameName) {
+  try {
+    const res = await tauri.core.invoke("apply_to_similar", { action: "offer", body: { jobKey, toFrameName } });
+    const offer = res && res.offer;
+    if (!offer || !offer.candidates || !offer.candidates.length) return;
+    const n = offer.candidates.length;
+    showToast({
+      kind: "success",
+      sticky: true,
+      title: "Pattern noticed",
+      body: `${n} other ${n === 1 ? "job" : "jobs"} ${offer.predicateLabel}. Move ${n === 1 ? "it" : "them"} too?`,
+      cta: { label: "Review similar", onClick: () => openLearnedReview(offer, toFrameName) },
+    });
+  } catch (e) {
+    console.warn("[main] apply_to_similar offer failed:", e);
+  }
+}
+
+// The apply-to-similar review: the candidate jobs (all pre-selected), a plain
+// "why", and the three honest choices — move the selected, decline the rest (which
+// become counterexamples), or stop learning this pattern entirely (suppress).
+function openLearnedReview(offer, toFrameName) {
+  document.querySelectorAll(".learned-review").forEach((m) => m.remove());
+  const modal = document.createElement("div");
+  modal.className = "frame-move-menu learned-review";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = `Move similar to ${toFrameName}?`;
+  header.appendChild(title);
+  const why = document.createElement("div");
+  why.className = "learned-review-why";
+  why.textContent = offer.predicateLabel;
+  header.appendChild(why);
+  modal.appendChild(header);
+
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const checks = new Map();
+  for (const c of offer.candidates) {
+    const wrap = document.createElement("div");
+    wrap.className = "learned-review-cand";
+
+    const row = document.createElement("div");
+    row.className = "learned-review-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    checks.set(c.jobKey, cb);
+    const name = document.createElement("span");
+    name.className = "learned-review-name";
+    name.textContent = c.jobName || c.jobKey;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "learned-review-inspect";
+    toggle.textContent = "Details";
+
+    // inspect panel — current location + the records this job contains
+    const detail = document.createElement("div");
+    detail.className = "learned-review-detail";
+    detail.style.display = "none";
+    const loc = document.createElement("div");
+    loc.className = "learned-review-loc";
+    loc.textContent = c.currentFrame ? `Currently in: ${c.currentFrame}` : "Not yet filed";
+    detail.appendChild(loc);
+    if (Array.isArray(c.records) && c.records.length) {
+      const ul = document.createElement("ul");
+      ul.className = "learned-review-records";
+      for (const r of c.records) {
+        const li = document.createElement("li");
+        li.textContent = `${r.type === "commitment" ? "commitment" : "decision"}: ${r.summary}`;
+        ul.appendChild(li);
+      }
+      if (c.recordCount > c.records.length) {
+        const more = document.createElement("li");
+        more.className = "learned-review-more";
+        more.textContent = `…and ${c.recordCount - c.records.length} more`;
+        ul.appendChild(more);
+      }
+      detail.appendChild(ul);
+    } else {
+      const none = document.createElement("div");
+      none.className = "learned-review-loc";
+      none.textContent = "No records on this job.";
+      detail.appendChild(none);
+    }
+
+    const toggleFn = (ev) => {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      const open = detail.style.display !== "none";
+      detail.style.display = open ? "none" : "block";
+      toggle.textContent = open ? "Details" : "Hide";
+    };
+    toggle.addEventListener("click", toggleFn);
+    name.addEventListener("click", toggleFn);   // click the name to inspect (NOT toggle the checkbox)
+
+    row.appendChild(cb);
+    row.appendChild(name);
+    row.appendChild(toggle);
+    wrap.appendChild(row);
+    wrap.appendChild(detail);
+    list.appendChild(wrap);
+  }
+  modal.appendChild(list);
+
+  const footer = document.createElement("div");
+  footer.className = "learned-review-footer";
+  const moveBtn = document.createElement("button");
+  moveBtn.type = "button";
+  moveBtn.className = "learned-review-primary";
+  moveBtn.textContent = "Move selected";
+  moveBtn.addEventListener("click", async () => {
+    const selected = [], rejected = [];
+    for (const [k, cb] of checks) (cb.checked ? selected : rejected).push(k);
+    modal.remove();
+    try {
+      const r = await tauri.core.invoke("apply_to_similar", {
+        action: "resolve",
+        body: { selectedJobKeys: selected, rejectedJobKeys: rejected, toFrameName, predicate: offer.predicate },
+      });
+      await enterDecisionsView();
+      const applied = (r && r.applied) || selected.length;
+      showToast({
+        kind: "success",
+        title: `Applied to ${applied} ${applied === 1 ? "job" : "jobs"}`,
+        body: `Learned for your view: ${offer.predicateLabel} → ${toFrameName}. I'll suggest this next time.`,
+      });
+    } catch (e) {
+      console.warn("[main] apply_to_similar resolve failed:", e);
+    }
+  });
+  const stopBtn = document.createElement("button");
+  stopBtn.type = "button";
+  stopBtn.className = "learned-review-ghost";
+  stopBtn.textContent = "Don't learn this";
+  stopBtn.addEventListener("click", async () => {
+    modal.remove();
+    try {
+      await tauri.core.invoke("apply_to_similar", { action: "reject", body: { predicate: offer.predicate, suppressRule: true } });
+      await enterDecisionsView();
+      showToast({ kind: "idempotent", title: "Won't suggest that", body: `Stopped learning: ${offer.predicateLabel}.` });
+    } catch (e) {
+      console.warn("[main] apply_to_similar suppress failed:", e);
+    }
+  });
+  footer.appendChild(moveBtn);
+  footer.appendChild(stopBtn);
+  modal.appendChild(footer);
+
+  document.body.appendChild(modal);
+  // centre it
+  modal.style.left = `${Math.max(8, (window.innerWidth - modal.offsetWidth) / 2)}px`;
+  modal.style.top = `${Math.max(8, (window.innerHeight - modal.offsetHeight) / 2)}px`;
+  setTimeout(() => {
+    document.addEventListener("click", function close(ev) {
+      if (!modal.contains(ev.target)) { modal.remove(); document.removeEventListener("click", close); }
+    });
+  }, 0);
+}
+
+// Stage 3 — ambient learned suggestions. Fetched per Log render; keyed by jobKey
+// so the row renderer can show "Suggested: X · Move / Not this" inline. Failure or
+// none → empty map (byte-equal to no-suggestion render).
+let _learnedSuggestions = new Map();
+async function refreshLearnedSuggestions() {
+  try {
+    const res = await tauri.core.invoke("fetch_learned_suggestions");
+    const m = new Map();
+    for (const s of (res && res.suggestions) || []) m.set(s.jobKey, s);
+    _learnedSuggestions = m;
+  } catch (e) {
+    _learnedSuggestions = new Map();
+  }
+}
+
+// Accept one ambient suggestion: move the job + credit the rule (a preview-weighted
+// move via resolve, so it stays bounded). "Not this" → a per-job counterexample.
+async function acceptLearnedSuggestion(s) {
+  try {
+    await tauri.core.invoke("apply_to_similar", {
+      action: "resolve",
+      body: { selectedJobKeys: [s.jobKey], rejectedJobKeys: [], toFrameName: s.suggestedFrame, predicate: s.predicate },
+    });
+    await enterDecisionsView();
+  } catch (e) { console.warn("[main] accept suggestion failed:", e); }
+}
+async function dismissLearnedSuggestion(s) {
+  try {
+    await tauri.core.invoke("apply_to_similar", { action: "reject", body: { predicate: s.predicate, jobKey: s.jobKey } });
+    await enterDecisionsView();
+  } catch (e) { console.warn("[main] dismiss suggestion failed:", e); }
 }
 
 // The "Move to…" picker: existing frames + an inline "New category" field. One
@@ -5402,6 +5605,9 @@ async function enterDecisionsView(initialFilter, navCtx) {
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log_full");
+    // WP-Frame-HITL "adapts" tier — refresh ambient learned suggestions in lockstep
+    // with the Log data so job rows can render the inline "Suggested: X" chips.
+    await refreshLearnedSuggestions();
   } catch (err) {
     console.warn("[main] fetch_decision_log_full failed:", err);
     if (statusEl) {
@@ -6057,6 +6263,35 @@ function renderDecisions() {
       mv.tabIndex = 0;
       mv.addEventListener("click", (ev) => { ev.stopPropagation(); openMovePicker(mv, grp); });
       head.appendChild(mv);
+    }
+
+    // WP-Frame-HITL "adapts" tier — Stage 3 ambient learned suggestion. When an
+    // EARNED rule thinks this job belongs elsewhere, show a visible, confirmable
+    // chip inline. The user still decides; nothing auto-moves.
+    if (framed && grp._top && _learnedSuggestions.has(grp.key)) {
+      const s = _learnedSuggestions.get(grp.key);
+      const chip = document.createElement("span");
+      chip.className = "job-suggestion-chip";
+      const lbl = document.createElement("span");
+      lbl.className = "job-suggestion-label";
+      lbl.textContent = `Suggested: ${s.suggestedFrame}`;
+      lbl.title = s.predicateLabel;
+      chip.appendChild(lbl);
+      const yes = document.createElement("span");
+      yes.className = "job-suggestion-yes";
+      yes.textContent = "Move";
+      yes.setAttribute("role", "button");
+      yes.tabIndex = 0;
+      yes.addEventListener("click", (ev) => { ev.stopPropagation(); acceptLearnedSuggestion(s); });
+      const no = document.createElement("span");
+      no.className = "job-suggestion-no";
+      no.textContent = "Not this";
+      no.setAttribute("role", "button");
+      no.tabIndex = 0;
+      no.addEventListener("click", (ev) => { ev.stopPropagation(); dismissLearnedSuggestion(s); });
+      chip.appendChild(yes);
+      chip.appendChild(no);
+      head.appendChild(chip);
     }
 
     // WP-Priority-Frame-Integration — the operator's business-language "why" (no
