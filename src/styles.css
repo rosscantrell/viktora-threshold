@@ -3788,11 +3788,19 @@ button.record-action-badge {
   margin: 0 0 5px;
 }
 .record-share-ctxitem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
   font-size: 11.5px;
   line-height: 1.4;
-  color: var(--glass-text-dim);
+  color: var(--glass-link);
+  background: none;
+  border: none;
   padding: 3px 0;
+  cursor: pointer;
 }
+.record-share-ctxitem:hover { text-decoration: underline; }
 /* Inline linked-record cards inside the dependency popover. */
 .record-linked-menu {
   width: 344px;

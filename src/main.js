@@ -6304,14 +6304,15 @@ function buildShareDraft(rec, related, who) {
   // was decided, not just the one-line label. Skipped when it just echoes it.
   if (verbatim && verbatim.toLowerCase() !== summary.toLowerCase()) {
     lines.push("");
-    lines.push("What was decided: “" + shortenSummary(verbatim, 240) + "”");
+    lines.push("What was decided: “" + verbatim + "”");
   }
-  // The single most useful tie-back to prior work, if any.
+  // The single most useful tie-back to prior work, if any. Full text — this is an
+  // email draft, not a chip; nothing here should be truncated with an ellipsis.
   const VERB = { Resolves: "This resolves", Replaces: "This replaces", Unblocks: "This unblocks", "Depends on": "This depends on", "Relates to": "Related to" };
   const ctxItem = related.find((r) => VERB[r.phrase]);
   if (ctxItem) {
     lines.push("");
-    lines.push(`${VERB[ctxItem.phrase]}: ${shortenSummary(ctxItem.summary, 120)}`);
+    lines.push(`${VERB[ctxItem.phrase]}: ${ctxItem.summary}`);
   }
   lines.push("", "Happy to talk it through.");
   return lines.join("\n");
@@ -6443,9 +6444,17 @@ function openShareMenu(anchorBtn, rec, ctx) {
     ctxLbl.textContent = "Relates to";
     menu.appendChild(ctxLbl);
     for (const r of related.slice(0, 3)) {
-      const line = document.createElement("div");
+      const other = recordById(ctx, r.otherId);
+      const line = document.createElement("button");
+      line.type = "button";
       line.className = "record-share-ctxitem";
-      line.textContent = r.phrase + ": " + shortenSummary(r.summary, 48);
+      line.textContent = r.phrase + ": " + shortenSummary(r.summary, 56);
+      if (other) {
+        line.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openLinkedMenu(line, r.phrase, [other]);
+        });
+      }
       menu.appendChild(line);
     }
   }
@@ -6457,7 +6466,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
   // if the result is very tall. Re-runs as the user edits.
   const autosizeDraft = () => {
     draft.style.height = "auto";
-    draft.style.height = Math.min(draft.scrollHeight + 2, 460) + "px";
+    draft.style.height = Math.min(draft.scrollHeight + 2, 700) + "px";
   };
   draft.addEventListener("input", autosizeDraft);
   menu.appendChild(draft);
@@ -6503,6 +6512,9 @@ function openShareMenu(anchorBtn, rec, ctx) {
   document.body.appendChild(menu);
   autosizeDraft(); // size to content now that it's in the DOM, before positioning
   positionPopover(menu, anchorBtn);
+  // Re-measure after layout settles (first pass can under-measure scrollHeight),
+  // then re-fit the popover to the viewport.
+  requestAnimationFrame(() => { autosizeDraft(); positionPopover(menu, anchorBtn); });
   _openReasonMenu = menu;
   setTimeout(() => {
     document.addEventListener("click", _onOutsideReasonClick, true);
