@@ -3114,7 +3114,9 @@ if (logSopBtn) {
 async function loadSoP(level, id, lens) {
   let res;
   try {
-    res = await tauri.core.invoke("fetch_sop", { level, id: id || null, lens: lens || null });
+    // id may arrive as a number (frame.fid) — the Rust command takes Option<String>,
+    // so coerce or the invoke fails deserialization (and the surface silently vanishes).
+    res = await tauri.core.invoke("fetch_sop", { level, id: id == null ? null : String(id), lens: lens || null });
   } catch (err) {
     console.warn("[main] fetch_sop(" + level + ") failed:", err);
     return null; // silent — degrade to hidden
