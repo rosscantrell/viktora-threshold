@@ -105,6 +105,9 @@ const VIEWS = [
   "view-entity-card",
   // WP-THRESHOLD-DECISION-ORG — Decisions browser (by project, filterable)
   "view-decisions",
+  // WP-Outlook-Writeback — staged Outbox surface (registered here so showView()
+  // can actually un-hide it; without this the view stays hidden = blank screen).
+  "view-outbox",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
