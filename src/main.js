@@ -3353,43 +3353,14 @@ async function renderFrameSoP(panel, fid) {
   return true;
 }
 
-// ───────── WP-WorkForest-Native-SoP (UI-4) — Job SoP, lazy on job rows ─────────
+// ───────── WP-WorkForest-Native-SoP (UI-4) — per-job SoP REMOVED ─────────
 //
-// The collapsible job rows already exist (Focus rail renderJobGroup + Decisions
-// project-lens job groups). On expand, lazy-load the Job SoP digest — the
-// missing-middle per-job prose + action line — via fetch_sop(level='job', id=jobKey).
-// Mirrors the entity-Definition lazy-load (lazyEntityDefinition): fetch once per
-// jobKey, cache the promise, and render the resolved prose into a calm inline block.
-// Additive + silent — when there's no digest, the block simply never appears.
-
-const _jobSoPCache = new Map(); // jobKey -> Promise<SoP payload | null>
-
-// Lazy fetch + cache of a Job SoP payload. Returns the full payload (so the caller
-// can render prose + sections), or null when unavailable / unreachable.
-function lazyJobSoP(jobKey) {
-  if (_jobSoPCache.has(jobKey)) return _jobSoPCache.get(jobKey);
-  const p = loadSoP("job", jobKey, null).catch(() => null);
-  _jobSoPCache.set(jobKey, p);
-  return p;
-}
-
-// UI-4 — append a Job SoP digest to a (collapsed) job-row body. Inserts a hidden
-// block first, then reveals it once the lazy fetch resolves with prose — so a job
-// with no digest shows nothing extra and the layout never jumps before content.
-// Placed at the TOP of the body (before the action cards) as the per-job overview.
-function appendJobSoP(body, jobKey) {
-  if (!body || !jobKey) return;
-  const block = document.createElement("div");
-  block.className = "sop-job-panel";
-  block.hidden = true;
-  // Keep it first in the body even though the cards may already be appended.
-  body.insertBefore(block, body.firstChild);
-  lazyJobSoP(jobKey).then((data) => {
-    if (!data) return; // silent — no digest for this job
-    renderSoPProse(block, data, { compact: true });
-    block.hidden = false;
-  });
-}
+// The job-level "State of play" digest (lazyJobSoP/appendJobSoP + the .sop-job-panel
+// block) was retired in the consistency pass: the consolidated state of play now
+// lives one level up, on the workstream/frame header (makeSoPToggle → renderFrameSoP),
+// on demand. Individual job rows no longer carry their own digest, so the dead
+// fetch/cache/append helpers and the level='job' loadSoP call site are gone. The
+// only remaining SoP rendering path for forest/frame/workstream is renderSoPProse.
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
 // rendered on the PER-PERSON digest and scoped to the viewer (`viewerSlug`):
@@ -7141,9 +7112,17 @@ function renderDecisions() {
     body.hidden = !expanded;
     // WP-THRESHOLD-STATE-OF-PLAY — the send-ready digest for this person sits at
     // the top of their group (By-Person lens only; never on Unassigned).
+    //
+    // WP-WorkForest-Native-SoP consistency pass — under the Work-Forest (framed)
+    // project view, individual JOB groups must NOT carry a per-job "State of Play"
+    // affordance: the consolidated state of play now lives one level up, on the
+    // workstream/frame header (makeSoPToggle), on demand. The per-job button
+    // dead-ended with "No open items for {label}" — that's the dead link removed
+    // here. The project-altitude email digest is kept only on the PLAIN
+    // (un-framed) By-project view, where a group is a genuine project, not a job.
     if (_decisionsLens === "people" && !grp.muted) {
       body.appendChild(buildSopBar(grp.key, grp.label));
-    } else if (_decisionsLens === "project" && !grp.muted) {
+    } else if (_decisionsLens === "project" && !grp.muted && !framed) {
       // Project altitude — the team email + per-teammate digests for this project.
       body.appendChild(buildProjectSopBar(grp.key, grp.label));
     }
