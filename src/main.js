@@ -2323,6 +2323,60 @@ function vvHumanizeSlug(s) {
   return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
+// WP-Job-Vigilance-Wave2 UI — resolve a void to its anchor RECORD id. The backend
+// carries the record either as the void's anchor (anchorType "record") or via the
+// blocked-record context; prefer the explicit anchor, fall back to the blocked id.
+function vvVoidRecordId(v) {
+  if (v && v.anchorType === "record" && v.anchorId) return v.anchorId;
+  const blocked = v && v.context && v.context.blocked;
+  return (blocked && blocked.recordId) || (v && v.anchorId) || "";
+}
+
+// The full record for a void (from the decision-log join), or null when absent.
+function vvVoidRecord(v) {
+  const rid = vvVoidRecordId(v);
+  return rid ? _vigilanceRecordsById.get(rid) || null : null;
+}
+
+// Build the work-forest breadcrumb (frame › workstream › job) for a void, mirroring
+// the hierarchy the Log groups by: recordId → recordJobs[jobKey] → jobNames (job),
+// then the frame whose jobKeys contains it (workstream = a frame with a parent;
+// top frame = its root). Returns a breadcrumb element, or null when the record
+// doesn't resolve to a job (degrade silently — same as the Log's "Unframed").
+function vvBuildHierarchy(v) {
+  const rid = vvVoidRecordId(v);
+  if (!rid) return null;
+  const jobKey = _vigilanceRecordJobs[rid];
+  if (!jobKey) return null;
+
+  // Job name (canonical, jobNames join; falls back to prettified slug).
+  const jobName = stalledName(jobKey);
+
+  // Frame chain: find the frame owning this job, then walk parentFid to the root.
+  const byFid = new Map(_vigilanceFrames.map((f) => [f.fid, f]));
+  let owning = null;
+  for (const f of _vigilanceFrames) {
+    if (Array.isArray(f.jobKeys) && f.jobKeys.includes(jobKey)) { owning = f; break; }
+  }
+  let topFrame = owning, wsName = null;
+  if (owning && owning.parentFid != null) {
+    wsName = owning.name; // the owning frame is a workstream under a top frame
+    let c = owning, n = 0;
+    while (c && c.parentFid != null && n++ < 50) c = byFid.get(c.parentFid) || null;
+    topFrame = c || owning;
+  }
+
+  // Render as the same breadcrumb wayfinding the Log uses: Frame › Workstream › Job.
+  const crumb = document.createElement("p");
+  crumb.className = "watching-hierarchy";
+  const parts = [];
+  if (topFrame && topFrame.name) parts.push(topFrame.name);
+  if (wsName && wsName !== (topFrame && topFrame.name)) parts.push(wsName);
+  parts.push(jobName);
+  crumb.textContent = parts.join(" › ");
+  return crumb;
+}
+
 function renderVoidCard(v, opts) {
   const card = document.createElement("div");
   card.className = "record-card watching-card";
@@ -2354,6 +2408,12 @@ function renderVoidCard(v, opts) {
   }
   meta.innerHTML = metaHtml;
   card.appendChild(meta);
+
+  // WP-Job-Vigilance-Wave2 UI (change 2) — work-forest breadcrumb (frame › job),
+  // the same hierarchy the Log shows, so a card reads in org context. Null (and
+  // omitted) when the void's record doesn't resolve to a job — degrade silently.
+  const hierarchy = vvBuildHierarchy(v);
+  if (hierarchy) card.appendChild(hierarchy);
 
   // Headline: what this is actually about (the present/blocked record), or the
   // server's one-line render when there's no record context (e.g. a sent digest).
@@ -3308,6 +3368,12 @@ function stalledMaxAge(job) {
 let _vigilanceGrouped = null; // { stalledJobs, receipts, jobCount, rawVoidCount } | null
 let _vigilanceJobHeat = {};   // jobKey -> { band, heat, ... }
 let _vigilanceJobNames = {};  // jobKey -> canonical name
+// WP-Job-Vigilance-Wave2 UI — the same work-forest substrate the Log uses, so a
+// Watching card can render the frame › workstream › job breadcrumb + resolve its
+// anchor record (→ documentId for the source badge, → owner for "Draft follow-up").
+let _vigilanceFrames = [];        // CoordinationFrame[] (fid, name, parentFid, jobKeys, state)
+let _vigilanceRecordJobs = {};    // recordId -> "job:..." key
+let _vigilanceRecordsById = new Map(); // recordId -> record
 
 // Fetch the grouped vigilance payload + the full decision-log (for jobHeat/jobNames).
 // Returns null when grouped data is absent (flag off / old backend) so callers can
@@ -3333,10 +3399,23 @@ async function fetchVigilanceGrouped() {
     const full = await tauri.core.invoke("fetch_decision_log_full");
     _vigilanceJobHeat = (full && full.jobHeat) || {};
     _vigilanceJobNames = (full && full.jobNames) || {};
+    // WP-Job-Vigilance-Wave2 UI — also keep the work-forest hierarchy + the
+    // record join so each Watching card can show its frame › job breadcrumb,
+    // link to the source document, and draft a follow-up to the owner.
+    _vigilanceFrames = Array.isArray(full && full.frames) ? full.frames : [];
+    _vigilanceRecordJobs = (full && full.recordJobs) || {};
+    _vigilanceRecordsById = new Map();
+    for (const it of Array.isArray(full && full.records) ? full.records : []) {
+      const rec = it && it.record ? it.record : it;
+      if (rec && rec.recordId) _vigilanceRecordsById.set(rec.recordId, rec);
+    }
   } catch (err) {
     console.warn("[main] fetch_decision_log_full (vigilance join) failed:", err);
     _vigilanceJobHeat = {};
     _vigilanceJobNames = {};
+    _vigilanceFrames = [];
+    _vigilanceRecordJobs = {};
+    _vigilanceRecordsById = new Map();
   }
   return { voidData, grouped };
 }

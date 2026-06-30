@@ -1837,6 +1837,16 @@ code {
   font-size: 10.5px;
   color: var(--glass-text-dim);
 }
+/* WP-Job-Vigilance-Wave2 UI — work-forest breadcrumb (frame › workstream › job),
+   the same hierarchy the Log groups by, rendered as quiet wayfinding context. */
+.watching-hierarchy {
+  margin: 1px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--glass-text-dim);
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
 .watching-drawer-note {
   font-size: 11.5px;
   color: var(--glass-text-faint);
