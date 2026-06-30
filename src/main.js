@@ -6318,6 +6318,26 @@ function buildShareDraft(rec, related, who) {
   return lines.join("\n");
 }
 
+// WP-Edit-Capture — record how the user changed our generated share draft, as a
+// retained event on the decision-log overlay (same /edit event log as the inline
+// field edits). Best-effort: a capture failure must never block the share. Only
+// the delta is a signal — an unchanged draft says our generation was good enough.
+async function captureShareDraftEdit(rec, generated, finalText, action) {
+  if (!rec || !rec.recordId) return;
+  const from = (generated || "").trim();
+  const to = (finalText || "").trim();
+  if (!to || from === to) return;
+  try {
+    await tauri.core.invoke("edit_record", {
+      recordId: rec.recordId,
+      editType: "share_draft",
+      edits: [{ field: "share_draft", from: generated, to: finalText, type: "share_draft", action }],
+    });
+  } catch (e) {
+    console.warn("[main] share-draft edit capture failed (non-blocking):", e);
+  }
+}
+
 // Shared viewport-fit positioning for the card popovers: open below the anchor
 // if there's room, flip above when not, else cap height + scroll on the larger
 // side. Keeps the content reachable on a small window.
@@ -6462,6 +6482,9 @@ function openShareMenu(anchorBtn, rec, ctx) {
   const draft = document.createElement("textarea");
   draft.className = "record-share-draft";
   draft.value = buildShareDraft(rec, related, who);
+  // Snapshot what WE generated, so a send/copy can record how the user changed it
+  // — the learning signal for how the engine's drafting is off (WP-Edit-Capture).
+  const generatedDraft = draft.value;
   // Grow to fit the whole draft so nothing is clipped; the popover itself scrolls
   // if the result is very tall. Re-runs as the user edits.
   const autosizeDraft = () => {
@@ -6482,10 +6505,12 @@ function openShareMenu(anchorBtn, rec, ctx) {
   send.textContent = "Send to Outbox";
   send.addEventListener("click", (e) => {
     e.stopPropagation();
+    captureShareDraftEdit(rec, generatedDraft, draft.value, "outbox");
     stageOutboxDraft({
       id: "share:" + (rec.recordId || rec.summary || ""),
       title: rec.summary ? "Share decision: " + rec.summary : "Share decision",
       detail: draft.value,
+      detailGenerated: generatedDraft, // what we drafted, so the server can keep the delta
       intent: "email",
       executor: who || rec.owner || undefined,
       sourceKind: "decision",
@@ -6502,6 +6527,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
   copy.addEventListener("click", (e) => {
     e.stopPropagation();
     try { navigator.clipboard.writeText(draft.value); } catch (_) { draft.select(); document.execCommand("copy"); }
+    captureShareDraftEdit(rec, generatedDraft, draft.value, "copy");
     copy.textContent = "Copied ✓";
     setTimeout(() => { copy.textContent = "Copy"; }, 1200);
   });
