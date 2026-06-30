@@ -2540,6 +2540,17 @@ code {
   padding-top: 2px;
 }
 
+/* Any link-button in a card footer flows in place — overrides the legacy global
+   `.btn-link { position:absolute; top:4px; right:0 }` that otherwise flings it to
+   the window's top-right (the same trap .receipts-entry-btn dodges individually).
+   Without this the Outbox "Dismiss" was rendered but invisible off-card. */
+.record-actions .btn-link {
+  position: static;
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--glass-link);
+}
+
 .receipts-entry-btn {
   /* Override the legacy global `.btn-link { position:absolute; top:4px; right:0 }`
      rule. These buttons live in flex footers (.log-row-actions / .record-actions)
