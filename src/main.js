@@ -6369,6 +6369,19 @@ function renderLinkedRecord(rec) {
   sum.className = "linked-rec-summary";
   sum.textContent = rec.summary || "";
   row.appendChild(sum);
+  // Optional: jump to the item in the list (closes the popover first).
+  if (rec.recordId) {
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.className = "linked-rec-jump";
+    jump.textContent = "Jump to item →";
+    jump.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeDismissReasonMenu();
+      jumpToRecord(rec.recordId);
+    });
+    row.appendChild(jump);
+  }
   return row;
 }
 
