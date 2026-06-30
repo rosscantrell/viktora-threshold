@@ -4201,8 +4201,8 @@ function renderJobGroup(parentJob, jobHeader, items) {
         }
         body.appendChild(card);
       }
-      // UI-4 — the per-job overview prose, lazy-loaded above the cards.
-      if (parentJob) appendJobSoP(body, parentJob);
+      // (Per-job SoP removed — the state of play now lives on the workstream/frame
+      // header above, on demand. A single job is too granular to "digest".)
     },
   });
 }
@@ -5872,14 +5872,16 @@ function applyFrameLayout(ordered, frames, jobHeat) {
   const homeOf = new Map();
   for (const f of frames) {
     const top = topOf(f);
-    const wsName = f.parentFid != null ? f.name : null;
-    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName });
+    const ws = f.parentFid != null ? f : null;
+    const wsName = ws ? ws.name : null;
+    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName, ws });
   }
   const topOrder = (f) => (FRAME_STATE_ORDER[f.state] ?? 4) * 1000 - (f.maturity || 0) * 100;
   for (const grp of ordered) {
     const h = homeOf.get(grp.key);
     grp._top = h ? h.top : null;
     grp._wsName = h ? h.wsName : null;
+    grp._ws = h ? h.ws : null;
   }
   // Build the list explicitly: frames in state/maturity order; within a frame the
   // DIRECT jobs first (attention desc), then each workstream (ranked by its total
@@ -5900,13 +5902,13 @@ function applyFrameLayout(ordered, frames, jobHeat) {
     const wsNames = [...new Set(mine.filter((g) => g._wsName).map((g) => g._wsName))];
     const wsBuckets = wsNames.map((name) => {
       const groups = mine.filter((g) => g._wsName === name).sort((a, b) => b._rank - a._rank);
-      return { name, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
+      return { name, ws: groups[0] ? groups[0]._ws : null, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
     }).sort((a, b) => b.total - a.total);
     let first = true;
     for (const g of direct) { g._frameHeader = first ? top : null; g._wsHeader = null; first = false; out.push(g); }
     for (const bucket of wsBuckets) {
       let wsFirst = true;
-      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? bucket.name : null; wsFirst = false; out.push(g); }
+      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? (bucket.ws || bucket.name) : null; wsFirst = false; out.push(g); }
     }
     // a frame with only workstream jobs still needs its header on the first row
     if (first && mine.length) mine[0]._frameHeader = top;
@@ -5922,6 +5924,36 @@ const FRAME_BADGE = {
   Facet: { label: "Topic / area", cls: "frame-badge-facet" },
   "Needs-evidence": { label: "Needs evidence", cls: "frame-badge-needs" },
 };
+// Shared on-demand "State of play" affordance for a grouping header (top frame or
+// workstream — the level ABOVE individual jobs, which is where a digest belongs).
+// Returns { toggle, panel }; the caller places the toggle inline and the full-width
+// panel last. Nothing fetches until the user clicks. The empty state stays visible
+// (the trigger never silently vanishes).
+function makeSoPToggle(fid, titleText) {
+  const toggle = document.createElement("span");
+  toggle.className = "sop-frame-toggle";
+  toggle.setAttribute("role", "button");
+  toggle.tabIndex = 0;
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.title = titleText || "State of play for this area";
+  toggle.textContent = "State of play";
+  const panel = document.createElement("div");
+  panel.className = "sop-frame-panel";
+  panel.hidden = true;
+  let loaded = false;
+  const doToggle = async () => {
+    const open = toggle.getAttribute("aria-expanded") === "true";
+    if (open) { toggle.setAttribute("aria-expanded", "false"); panel.hidden = true; return; }
+    toggle.setAttribute("aria-expanded", "true"); panel.hidden = false;
+    if (loaded) return;            // already rendered (or shown empty) — just reveal
+    loaded = true;
+    const ok = await renderFrameSoP(panel, fid);
+    if (!ok) panel.innerHTML = '<div class="sop-status">No state of play to show for this area right now.</div>';
+  };
+  toggle.addEventListener("click", (ev) => { ev.stopPropagation(); doToggle(); });
+  toggle.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); doToggle(); } });
+  return { toggle, panel };
+}
 function buildFrameHeader(frame) {
   const el = document.createElement("div");
   el.className = "frame-header";
@@ -5947,38 +5979,13 @@ function buildFrameHeader(frame) {
   // UI-3 — Frame SoP affordance. Maturity-gated to Project/Suggested frames (the
   // ones mature enough to digest). Built below; the trigger sits inline in the
   // header row, the panel is a full-width child that stacks beneath when expanded.
-  let sopToggle = null, sopPanel = null;
+  // UI-3 — Frame SoP affordance (on-demand, maturity-gated to Project/Suggested top
+  // frames). Trigger sits inline; the panel stacks full-width below (appended last).
+  let sopPanel = null;
   if (frameSoPEligible(frame) && frame.fid != null) {
-    sopToggle = document.createElement("span");
-    sopToggle.className = "sop-frame-toggle";
-    sopToggle.setAttribute("role", "button");
-    sopToggle.tabIndex = 0;
-    sopToggle.setAttribute("aria-expanded", "false");
-    sopToggle.title = "State of play for this frame";
-    sopToggle.textContent = "State of play";
-
-    sopPanel = document.createElement("div");
-    sopPanel.className = "sop-frame-panel";
-    sopPanel.hidden = true;
-
-    const toggle = async () => {
-      const open = sopToggle.getAttribute("aria-expanded") === "true";
-      if (open) {
-        sopToggle.setAttribute("aria-expanded", "false");
-        sopPanel.hidden = true;
-        return;
-      }
-      // Opening — lazy-load on first expand; retire the trigger if nothing came back.
-      sopToggle.setAttribute("aria-expanded", "true");
-      sopPanel.hidden = false;
-      const ok = await renderFrameSoP(sopPanel, frame.fid);
-      if (!ok) { sopToggle.remove(); sopPanel.remove(); }
-    };
-    sopToggle.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
-    sopToggle.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); toggle(); }
-    });
-    el.appendChild(sopToggle);
+    const sop = makeSoPToggle(frame.fid, "State of play for this frame");
+    el.appendChild(sop.toggle);
+    sopPanel = sop.panel;
   }
   // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
   const edit = document.createElement("span");
@@ -5993,10 +6000,24 @@ function buildFrameHeader(frame) {
   if (sopPanel) el.appendChild(sopPanel);
   return el;
 }
-function buildWsHeader(name) {
+// Workstream header (the level ABOVE jobs, BELOW the top frame) — the consolidated
+// altitude a state-of-play digest is actually for. Gets the SAME on-demand toggle
+// as a top frame. `ws` is the workstream frame object (carries fid + name); a bare
+// string is tolerated for back-compat (renders the name with no toggle).
+function buildWsHeader(ws) {
   const el = document.createElement("div");
   el.className = "frame-ws-header";
-  el.textContent = name;
+  const name = ws && typeof ws === "object" ? ws.name : ws;
+  const n = document.createElement("span");
+  n.className = "frame-ws-name";
+  n.textContent = name || "";
+  el.appendChild(n);
+  const fid = ws && typeof ws === "object" ? ws.fid : null;
+  if (fid != null) {
+    const sop = makeSoPToggle(fid, "State of play for this area");
+    el.appendChild(sop.toggle);
+    el.appendChild(sop.panel);
+  }
   return el;
 }
 function buildFacetBar(facets) {
@@ -7131,24 +7152,15 @@ function renderDecisions() {
       if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
     }
 
-    // UI-4 — Job SoP digest on Decisions project-lens job groups. The group key is
-    // `job:<slug>` (the jobKey). Lazy: injected on first expand (not at render time,
-    // so we don't fan out a fetch per job on every list paint).
-    const jobSoPEligible = _decisionsLens === "project" && !grp.muted && /^job:/.test(grp.key || "");
-    let jobSoPDone = false;
-    const ensureJobSoP = () => {
-      if (jobSoPDone || !jobSoPEligible) return;
-      jobSoPDone = true;
-      appendJobSoP(body, grp.key);
-    };
-    if (expanded) ensureJobSoP(); // already open on render — load now
+    // (Per-job SoP removed — the consolidated state of play now lives one level up,
+    // on the workstream/frame header, on demand. Jobs no longer carry their own digest.)
 
     head.addEventListener("click", () => {
       const willExpand = body.hidden;
       body.hidden = !willExpand;
       head.setAttribute("aria-expanded", willExpand ? "true" : "false");
       chev.textContent = willExpand ? "▾" : "▸";
-      if (willExpand) { _decisionsExpanded.add(grp.key); ensureJobSoP(); }
+      if (willExpand) { _decisionsExpanded.add(grp.key); }
       else _decisionsExpanded.delete(grp.key);
     });
 
