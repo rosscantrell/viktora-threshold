@@ -2867,6 +2867,12 @@ async function enterLogView() {
     });
   }
 
+  // WP-WorkForest-Native-SoP (UI-1 + UI-6) — the top-of-Today SoP narrative +
+  // Person/Forest lens toggle, above the Focus rail. Additive + silent: bar +
+  // panel stay hidden when the endpoint is unavailable.
+  wireSopLensToggle();
+  loadPersonLensSoP();
+
   // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
   // independently of the State-of-Play digest. Additive + silent if the flag's off.
   loadTodayPriority();
@@ -3228,6 +3234,78 @@ function renderCorpusPanel(panel, data) {
   // Phase B — inline digest edit (forest altitude). Editor edits the flattened
   // copy text; lead element is the prose wrapper.
   attachDigestEditor({ panel, bar, msg: proseWrap, scope: "forest", subject: "forest", label: "the org", message: copyText, editsEnabled: data.editsEnabled });
+}
+
+// ───────── WP-WorkForest-Native-SoP (UI-1 + UI-6) — top-of-Today narrative ─────────
+//
+// The Work-Forest-native State of Play sits above the Focus rail. A small lens
+// toggle ("Your jobs" / "All work") picks the altitude:
+//   person — forest level + person lens: "your jobs today" partitioned own vs touch
+//   forest — unscoped forest rollup: the whole org's hot/stalled/conflicting work
+// Both are the FOREST altitude; the lens is the only difference (Person × Forest).
+// Additive + silent: the bar + panel stay hidden when the endpoint is unavailable.
+
+let _sopLens = "person"; // "person" | "forest"
+
+// UI-1 — render the person-lens SoP narrative into a container. Thin wrapper over
+// the shared prose renderer; the heading reflects the active lens.
+function renderPersonLensSoP(container, data, lens) {
+  container.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "sop-lens-head";
+  head.textContent = lens === "forest" ? "Across all work" : "Your jobs today";
+  container.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "sop-lens-body";
+  renderSoPProse(body, data, {});
+  container.appendChild(body);
+}
+
+// Load + render the top-of-Today SoP for the current lens. Hides the bar + panel
+// when there's nothing to show (unavailable / no prose) — never an error surface.
+async function loadPersonLensSoP() {
+  const bar = document.getElementById("log-sop-lens");
+  const panel = document.getElementById("log-sop-lens-panel");
+  if (!panel) return;
+  const viewerSlug = _todayCtx && _todayCtx.viewerSlug;
+  // The Person lens needs an identity; with none, fall back to the Forest lens
+  // and hide the Person toggle option (mirrors the Mine/Everyone identity gate).
+  const lens = _sopLens === "person" && !viewerSlug ? "forest" : _sopLens;
+  const selector = lens === "person" ? personLens(viewerSlug) : null;
+  panel.innerHTML = '<div class="sop-status">Composing your state of play…</div>';
+  const data = await loadSoP("forest", null, selector);
+  if (!data) {
+    // Nothing to show — keep the surface calm and empty (no bar, no panel).
+    panel.innerHTML = "";
+    if (bar) bar.hidden = true;
+    return;
+  }
+  if (bar) {
+    bar.hidden = false;
+    // The Person toggle only makes sense with an identity.
+    const personBtn = bar.querySelector('[data-lens="person"]');
+    if (personBtn) personBtn.hidden = !viewerSlug;
+  }
+  renderPersonLensSoP(panel, data, lens);
+}
+
+// UI-6 — wire the Person / Forest lens toggle at the top of Today. Idempotent
+// (binds once); re-renders the panel for the chosen lens without a view reload.
+function wireSopLensToggle() {
+  const bar = document.getElementById("log-sop-lens");
+  if (!bar || bar.dataset.wired) return;
+  bar.dataset.wired = "1";
+  bar.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".sop-lens-btn");
+    if (!btn) return;
+    const lens = btn.dataset.lens;
+    if (!lens || lens === _sopLens) return;
+    _sopLens = lens;
+    for (const b of bar.querySelectorAll(".sop-lens-btn")) {
+      b.setAttribute("aria-pressed", b.dataset.lens === lens ? "true" : "false");
+    }
+    loadPersonLensSoP();
+  });
 }
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
