@@ -2469,6 +2469,14 @@ function renderVoidCard(v, opts) {
   const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
   actions.append(snooze, dismiss);
 
+  // WP-Job-Vigilance-Wave2 UI (change 3) — link to the original captured item.
+  // Reuse renderSourceBadge: anchor record → documentId → the source-reader panel
+  // the Log opens. No badge when the doc/metadata isn't loaded (invisible-by-absence).
+  const anchorRec = vvVoidRecord(v);
+  if (anchorRec && anchorRec.documentId) {
+    appendSourceBadge(actions, anchorRec.documentId, anchorRec.verbatim);
+  }
+
   for (const [reason, label] of [["handling-it", "Handling it"], ["not-watching", "Not watching"], ["not-real", "Not real"]]) {
     reasons.appendChild(vvActionBtn(label, () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason })));
   }
@@ -2556,6 +2564,11 @@ async function enterWatchingView() {
   // split off the "Low-impact waiting" drawer (monitor/quiet-band + singleton
   // voids the Focus chase-list suppresses). Feature-detects: when `grouped` is
   // absent the ledger renders exactly today's flat behavior (ship gate G4).
+  // WP-Job-Vigilance-Wave2 UI — load the documentId→doc map so void cards can
+  // render the source badge (open/link to the original captured item). Best-effort;
+  // a failure just leaves badges absent (renderSourceBadge no-ops without _docsById).
+  await loadDocsMap();
+
   let data, grouped;
   try {
     const result = await fetchVigilanceGrouped();
