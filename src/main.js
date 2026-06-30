@@ -8564,7 +8564,14 @@ async function enterOutboxView() {
 
   const items = Array.isArray(data && data.items) ? data.items : [];
   if (listEl) {
-    for (const item of items) listEl.appendChild(renderOutboxCard(item));
+    // Guard each card so one malformed item can't silently blank the whole list.
+    for (const item of items) {
+      try {
+        listEl.appendChild(renderOutboxCard(item));
+      } catch (e) {
+        console.warn("[main] renderOutboxCard failed for", item && item.id, e);
+      }
+    }
   }
   if (statusEl) {
     if (items.length === 0) {
