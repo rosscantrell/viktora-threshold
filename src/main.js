@@ -2323,19 +2323,28 @@ function vvHumanizeSlug(s) {
   return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
-function renderVoidCard(v) {
+function renderVoidCard(v, opts) {
   const card = document.createElement("div");
   card.className = "record-card watching-card";
   card.dataset.license = v.license || "";
   const ctx = v.context || { waitingOn: [] };
   const waitingOn = Array.isArray(ctx.waitingOn) ? ctx.waitingOn : [];
+  // WP-Job-Vigilance-Wave2 — silent-days joined from grouped.scoredVoids (the
+  // flat void carries forward-looking whenDays, not the stalled "N days silent").
+  const ageDays = opts && typeof opts.ageDays === "number" ? opts.ageDays : null;
 
-  // Compact meta row at the TOP: trigger pill + cadence.
+  // Compact meta row at the TOP: trigger pill + motif + cadence + silent-Nd.
   const meta = document.createElement("div");
   meta.className = "watching-meta";
   const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
   let metaHtml = `<span class="watching-pill">${escapeHtml(label)}</span>`;
-  if (typeof v.whenDays === "number") {
+  // Motif (additive, server-side) — the graph-shape that detected this void.
+  if (v.motif) {
+    metaHtml += `<span class="watching-motif">${escapeHtml(stalledMotifLabel(v.motif))}</span>`;
+  }
+  if (ageDays != null) {
+    metaHtml += `<span class="watching-silent">${ageDays}d silent</span>`;
+  } else if (typeof v.whenDays === "number") {
     metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
   }
   meta.innerHTML = metaHtml;
@@ -2477,9 +2486,17 @@ async function enterWatchingView() {
   if (arrivedSection) arrivedSection.hidden = true;
   if (emptyEl) emptyEl.hidden = true;
 
-  let data;
+  // WP-Job-Vigilance-Wave2 — the Watching tab is now the passive LEDGER. Fetch
+  // ?grouped=1 so we can (a) join silent-Nd onto the flat void cards and (b)
+  // split off the "Low-impact waiting" drawer (monitor/quiet-band + singleton
+  // voids the Focus chase-list suppresses). Feature-detects: when `grouped` is
+  // absent the ledger renders exactly today's flat behavior (ship gate G4).
+  let data, grouped;
   try {
-    data = await tauri.core.invoke("fetch_vigilance_voids");
+    const result = await fetchVigilanceGrouped();
+    if (!result) throw new Error("vigilance fetch failed");
+    data = result.voidData;
+    grouped = result.grouped; // null when flag off / old backend
   } catch (err) {
     console.warn("[main] fetch_vigilance_voids failed:", err);
     if (statusEl) {
@@ -2495,6 +2512,27 @@ async function enterWatchingView() {
 
   const voids = Array.isArray(data && data.voids) ? data.voids : [];
   const arrived = Array.isArray(data && data.arrived) ? data.arrived : [];
+
+  // Build the silent-Nd join (voidId -> ageDays) and the low-impact voidId set
+  // from grouped. Low-impact = voids on stalled jobs that DON'T make the primary
+  // chase-list (monitor/quiet band & low surfaceScore) OR singleton jobs.
+  const ageByVoid = new Map();
+  const lowImpactVoidIds = new Set();
+  if (grouped && Array.isArray(grouped.stalledJobs)) {
+    for (const job of grouped.stalledJobs) {
+      const isPrimary = stalledIsPrimary(job, stalledBand(job.jobKey));
+      const isSingleton = (job.voidCount || 0) <= 1 && !(job.blockerCount || 0);
+      for (const sv of job.scoredVoids || []) {
+        if (typeof sv.ageDays === "number") ageByVoid.set(sv.voidId, sv.ageDays);
+        if (!isPrimary || isSingleton) lowImpactVoidIds.add(sv.voidId);
+      }
+    }
+  }
+
+  // Partition the flat voids into the primary ledger vs the low-impact drawer.
+  const primaryVoids = voids.filter((v) => !lowImpactVoidIds.has(v.voidId));
+  const lowImpactVoids = voids.filter((v) => lowImpactVoidIds.has(v.voidId));
+
   if (subEl) {
     subEl.textContent =
       voids.length > 0
@@ -2508,9 +2546,25 @@ async function enterWatchingView() {
     arrivedSection.hidden = false;
   }
 
-  // Still-open voids.
+  // Still-open voids — primary list (each with motif + silent-Nd join).
   if (listEl) {
-    for (const v of voids) listEl.appendChild(renderVoidCard(v));
+    for (const v of primaryVoids) {
+      listEl.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+    }
+
+    // "Low-impact waiting" drawer — the monitor/quiet + singleton voids the Focus
+    // chase-list suppresses. Present for completeness/audit, collapsed by default.
+    if (lowImpactVoids.length) {
+      const drawer = makeCollapsible("Low-impact waiting", lowImpactVoids.length, false);
+      const note = document.createElement("p");
+      note.className = "watching-drawer-note";
+      note.textContent = "Lower-priority promises still being watched — not crowding the Focus chase-list.";
+      drawer.body.appendChild(note);
+      for (const v of lowImpactVoids) {
+        drawer.body.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+      }
+      listEl.appendChild(drawer.section);
+    }
   }
   // Empty state only when there's nothing open AND nothing recently arrived.
   if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
