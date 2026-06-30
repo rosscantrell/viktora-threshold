@@ -2867,6 +2867,12 @@ async function enterLogView() {
     });
   }
 
+  // WP-WorkForest-Native-SoP (UI-1 + UI-6) — the top-of-Today SoP narrative +
+  // Person/Forest lens toggle, above the Focus rail. Additive + silent: bar +
+  // panel stay hidden when the endpoint is unavailable.
+  wireSopLensToggle();
+  loadPersonLensSoP();
+
   // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
   // independently of the State-of-Play digest. Additive + silent if the flag's off.
   loadTodayPriority();
@@ -3077,9 +3083,9 @@ if (watchingRefreshBtn) {
   });
 }
 
-// WP-THRESHOLD-STATE-OF-PLAY — corpus altitude on Today: the Monday overview
-// across all projects, on demand. Same engine as the per-person digest.
-let _corpusPolish = false;
+// WP-WorkForest-Native-SoP (UI-2) — the "State of Play" panel on Today now shows
+// the FOREST altitude (rollup across frames), re-pointed from the old flat corpus
+// altitude. Same panel slot + toggle.
 const logSopBtn = document.getElementById("btn-log-sop");
 if (logSopBtn) {
   logSopBtn.addEventListener("click", () => {
@@ -3091,23 +3097,114 @@ if (logSopBtn) {
     loadCorpusStateOfPlay(panel);
   });
 }
+// ───────── WP-WorkForest-Native-SoP — Work-Forest-native State of Play ─────────
+//
+// A prose layer over the already-existing job/frame/forest scaffolding. The new
+// /api/state-of-play endpoint (proxied by the fetch_sop Rust command) returns a
+// register-bounded, already-voiced digest at any altitude (job/frame/forest) with
+// an optional person/facet lens. Contract: { level, id, prose, license, sections,
+// maturity? }. Jargon stays internal — prose arrives plain-language from the
+// backend, so the UI never re-translates "do-now"/"stallProb"/"jobQuadrant".
+//
+// Every fetch degrades to {available:false} → the component renders nothing (or a
+// calm empty state on the explicit corpus panel), exactly like the existing rails.
+
+// Shared loader. Returns the SoP payload, or null when unavailable / unreachable
+// (additive + silent — never an error surface). `id`/`lens` are optional.
+async function loadSoP(level, id, lens) {
+  let res;
+  try {
+    // id may arrive as a number (frame.fid) — the Rust command takes Option<String>,
+    // so coerce or the invoke fails deserialization (and the surface silently vanishes).
+    res = await tauri.core.invoke("fetch_sop", { level, id: id == null ? null : String(id), lens: lens || null });
+  } catch (err) {
+    console.warn("[main] fetch_sop(" + level + ") failed:", err);
+    return null; // silent — degrade to hidden
+  }
+  if (!res || res.available === false) return null; // flag off / server too old / no altitude
+  const prose = typeof res.prose === "string" ? res.prose.trim() : "";
+  if (!prose) return null;
+  return res;
+}
+
+// Compose the person-lens selector from a viewer email/slug, or null when there's
+// no identity (the unscoped forest view is then used).
+function personLens(viewerSlug) {
+  return viewerSlug ? "person:" + viewerSlug : null;
+}
+
+// Render the SoP prose into a container. `sections`, when present, render as
+// labelled sub-blocks beneath the lead prose; otherwise the prose alone shows.
+// No jargon translation here — the backend already voiced it. `opts.compact`
+// drops the licence footnote (used for inline lazy expansions like Job SoP).
+function renderSoPProse(container, data, opts) {
+  opts = opts || {};
+  container.innerHTML = "";
+  const lead = document.createElement("p");
+  lead.className = "sop-prose";
+  lead.textContent = data.prose || "";
+  container.appendChild(lead);
+
+  const sections = Array.isArray(data.sections) ? data.sections : [];
+  for (const sec of sections) {
+    if (!sec || typeof sec !== "object") continue;
+    const body = typeof sec.prose === "string" ? sec.prose.trim() : (typeof sec.body === "string" ? sec.body.trim() : "");
+    if (!body && !sec.title) continue;
+    const block = document.createElement("div");
+    block.className = "sop-section";
+    if (sec.title) {
+      const h = document.createElement("div");
+      h.className = "sop-section-title";
+      h.textContent = String(sec.title);
+      block.appendChild(h);
+    }
+    if (body) {
+      const p = document.createElement("p");
+      p.className = "sop-section-body";
+      p.textContent = body;
+      block.appendChild(p);
+    }
+    container.appendChild(block);
+  }
+
+  // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
+  // dim, single line; omitted in compact mode and when absent.
+  if (!opts.compact && data.license && typeof data.license === "string") {
+    const lic = document.createElement("div");
+    lic.className = "sop-license";
+    lic.textContent = data.license;
+    container.appendChild(lic);
+  }
+}
+
+// UI-2 — Forest SoP, re-pointed corpus panel. The explicit "State of Play" panel
+// on Today now shows the FOREST altitude (rollup across frames: hottest jobs,
+// stalled frames, cross-frame conflicts), scoped to the viewer via the person
+// lens when an identity is known. Same panel slot + copy/edit affordances as the
+// old corpus altitude; maturity-aware now that the backend gates by frame.
 async function loadCorpusStateOfPlay(panel) {
   panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
-  try {
-    const res = await tauri.core.invoke("fetch_corpus_state_of_play", { polish: _corpusPolish });
-    if (!res || res.available === false) {
-      panel.innerHTML = '<div class="sop-status">' +
-        (res && res.reason === "unavailable" ? "Overview isn't available on this server yet." : "No open items.") + "</div>";
-      return;
-    }
-    renderCorpusPanel(panel, res);
-  } catch (err) {
-    console.warn("[main] fetch_corpus_state_of_play failed:", err);
-    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  const data = await loadSoP("forest", null, personLens(_todayCtx && _todayCtx.viewerSlug));
+  if (!data) {
+    panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
+    return;
   }
+  renderCorpusPanel(panel, data);
 }
 function renderCorpusPanel(panel, data) {
   panel.innerHTML = "";
+  // Flatten the SoP payload to a copy-ready plain-text block (lead prose + any
+  // labelled sections), for the Copy button + the inline digest editor.
+  const sectionText = (Array.isArray(data.sections) ? data.sections : [])
+    .map((s) => {
+      const t = s && s.title ? String(s.title) : "";
+      const b = s && (typeof s.prose === "string" ? s.prose : s.body) || "";
+      return (t ? t + "\n" : "") + (b || "").trim();
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const copyText = [data.prose || "", sectionText].filter(Boolean).join("\n\n");
+
   const bar = document.createElement("div");
   bar.className = "sop-toolbar";
   const copyBtn = document.createElement("button");
@@ -3116,38 +3213,154 @@ function renderCorpusPanel(panel, data) {
   copyBtn.textContent = "Copy";
   copyBtn.addEventListener("click", async () => {
     try {
-      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      await tauri.core.invoke("copy_text", { text: copyText });
       copyBtn.textContent = "Copied ✓";
       copyBtn.disabled = true;
       setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
     } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
   });
   bar.appendChild(copyBtn);
-  const polishBtn = document.createElement("button");
-  polishBtn.type = "button";
-  polishBtn.className = "sop-polish";
-  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
-  polishBtn.addEventListener("click", async () => {
-    _corpusPolish = !data.polished;
-    await loadCorpusStateOfPlay(panel);
-  });
-  bar.appendChild(polishBtn);
-  if (data.polished) {
+  if (data.maturity) {
     const t = document.createElement("span");
-    t.className = "sop-polished-tag";
-    t.textContent = "AI-polished";
+    t.className = "sop-maturity-tag";
+    t.textContent = String(data.maturity);
     bar.appendChild(t);
   }
   panel.appendChild(bar);
-  const msg = document.createElement("pre");
-  msg.className = "sop-message";
-  msg.textContent = data.message || "";
-  panel.appendChild(msg);
-  // Phase B — inline digest edit (corpus altitude).
-  attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
-  // (WP-Priority-Operator — the Focus rail now lives on the Today surface, loaded
-  // independently of State-of-Play; see renderTodayPriority.)
+
+  const proseWrap = document.createElement("div");
+  proseWrap.className = "sop-prose-wrap";
+  renderSoPProse(proseWrap, data, {});
+  panel.appendChild(proseWrap);
+
+  // Phase B — inline digest edit (forest altitude). Editor edits the flattened
+  // copy text; lead element is the prose wrapper.
+  attachDigestEditor({ panel, bar, msg: proseWrap, scope: "forest", subject: "forest", label: "the org", message: copyText, editsEnabled: data.editsEnabled });
 }
+
+// ───────── WP-WorkForest-Native-SoP (UI-1 + UI-6) — top-of-Today narrative ─────────
+//
+// The Work-Forest-native State of Play sits above the Focus rail. A small lens
+// toggle ("Your jobs" / "All work") picks the altitude:
+//   person — forest level + person lens: "your jobs today" partitioned own vs touch
+//   forest — unscoped forest rollup: the whole org's hot/stalled/conflicting work
+// Both are the FOREST altitude; the lens is the only difference (Person × Forest).
+// Additive + silent: the bar + panel stay hidden when the endpoint is unavailable.
+
+let _sopLens = "person"; // "person" | "forest"
+
+// UI-1 — render the person-lens SoP narrative into a container. Thin wrapper over
+// the shared prose renderer; the heading reflects the active lens.
+function renderPersonLensSoP(container, data, lens) {
+  container.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "sop-lens-head";
+  head.textContent = lens === "forest" ? "Across all work" : "Your jobs today";
+  container.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "sop-lens-body";
+  renderSoPProse(body, data, {});
+  container.appendChild(body);
+}
+
+// Load + render the top-of-Today SoP for the current lens. Hides the bar + panel
+// when there's nothing to show (unavailable / no prose) — never an error surface.
+async function loadPersonLensSoP() {
+  const bar = document.getElementById("log-sop-lens");
+  const panel = document.getElementById("log-sop-lens-panel");
+  if (!panel) return;
+  const viewerSlug = _todayCtx && _todayCtx.viewerSlug;
+  // The Person lens needs an identity; with none, fall back to the Forest lens
+  // and hide the Person toggle option (mirrors the Mine/Everyone identity gate).
+  const lens = _sopLens === "person" && !viewerSlug ? "forest" : _sopLens;
+  const selector = lens === "person" ? personLens(viewerSlug) : null;
+  panel.innerHTML = '<div class="sop-status">Composing your state of play…</div>';
+  const data = await loadSoP("forest", null, selector);
+  if (!data) {
+    // Nothing to show — keep the surface calm and empty (no bar, no panel).
+    panel.innerHTML = "";
+    if (bar) bar.hidden = true;
+    return;
+  }
+  if (bar) {
+    bar.hidden = false;
+    // The Person toggle only makes sense with an identity.
+    const personBtn = bar.querySelector('[data-lens="person"]');
+    if (personBtn) personBtn.hidden = !viewerSlug;
+  }
+  renderPersonLensSoP(panel, data, lens);
+}
+
+// UI-6 — wire the Person / Forest lens toggle at the top of Today. Idempotent
+// (binds once); re-renders the panel for the chosen lens without a view reload.
+function wireSopLensToggle() {
+  const bar = document.getElementById("log-sop-lens");
+  if (!bar || bar.dataset.wired) return;
+  bar.dataset.wired = "1";
+  bar.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".sop-lens-btn");
+    if (!btn) return;
+    const lens = btn.dataset.lens;
+    if (!lens || lens === _sopLens) return;
+    _sopLens = lens;
+    for (const b of bar.querySelectorAll(".sop-lens-btn")) {
+      b.setAttribute("aria-pressed", b.dataset.lens === lens ? "true" : "false");
+    }
+    loadPersonLensSoP();
+  });
+}
+
+// ───────── WP-WorkForest-Native-SoP (UI-3) — Frame SoP, on Decisions frame headers ─────────
+//
+// A "state of play" affordance on Project/Suggested frame headers (maturity-gated —
+// Facet/Needs-evidence frames are too thin to digest). Clicking toggles an inline
+// expansion that lazy-loads the Frame SoP digest via fetch_sop(level='frame', id=fid).
+// Mirrors the Job SoP / entity-Definition lazy-load shape: fetch once, cache on the
+// panel element, toggle visibility thereafter. Additive + silent — when the endpoint
+// returns {available:false} or no prose, the affordance quietly removes itself.
+
+// Maturity gate — only Project/Suggested frames get a Frame SoP affordance.
+function frameSoPEligible(frame) {
+  return !!frame && !frame.__unframed && (frame.state === "Project" || frame.state === "Suggested");
+}
+
+// Render a Frame SoP digest into an inline panel. Compact (no licence footnote) so
+// the expansion stays light beneath the frame header. Lazy: fetches on first open,
+// caches its result on the panel's dataset, reuses the cached DOM on later toggles.
+// Returns true when the panel now holds prose, false when there was nothing to show
+// (the caller then quietly retires the trigger).
+async function renderFrameSoP(panel, fid) {
+  if (panel.dataset.loaded === "1") return true; // already populated — toggle only
+  panel.innerHTML = '<div class="sop-status">Composing this frame’s state of play…</div>';
+  const data = await loadSoP("frame", fid, null);
+  if (!data) {
+    panel.dataset.loaded = "empty";
+    panel.innerHTML = "";
+    return false;
+  }
+  panel.dataset.loaded = "1";
+  panel.innerHTML = "";
+  if (data.maturity) {
+    const tag = document.createElement("div");
+    tag.className = "sop-maturity-tag";
+    tag.textContent = String(data.maturity);
+    panel.appendChild(tag);
+  }
+  const body = document.createElement("div");
+  body.className = "sop-frame-body";
+  renderSoPProse(body, data, { compact: true });
+  panel.appendChild(body);
+  return true;
+}
+
+// ───────── WP-WorkForest-Native-SoP (UI-4) — per-job SoP REMOVED ─────────
+//
+// The job-level "State of play" digest (lazyJobSoP/appendJobSoP + the .sop-job-panel
+// block) was retired in the consistency pass: the consolidated state of play now
+// lives one level up, on the workstream/frame header (makeSoPToggle → renderFrameSoP),
+// on demand. Individual job rows no longer carry their own digest, so the dead
+// fetch/cache/append helpers and the level='job' loadSoP call site are gone. The
+// only remaining SoP rendering path for forest/frame/workstream is renderSoPProse.
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
 // rendered on the PER-PERSON digest and scoped to the viewer (`viewerSlug`):
@@ -3959,6 +4172,8 @@ function renderJobGroup(parentJob, jobHeader, items) {
         }
         body.appendChild(card);
       }
+      // (Per-job SoP removed — the state of play now lives on the workstream/frame
+      // header above, on demand. A single job is too granular to "digest".)
     },
   });
 }
@@ -5628,14 +5843,16 @@ function applyFrameLayout(ordered, frames, jobHeat) {
   const homeOf = new Map();
   for (const f of frames) {
     const top = topOf(f);
-    const wsName = f.parentFid != null ? f.name : null;
-    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName });
+    const ws = f.parentFid != null ? f : null;
+    const wsName = ws ? ws.name : null;
+    for (const jk of f.jobKeys || []) homeOf.set(jk, { top, wsName, ws });
   }
   const topOrder = (f) => (FRAME_STATE_ORDER[f.state] ?? 4) * 1000 - (f.maturity || 0) * 100;
   for (const grp of ordered) {
     const h = homeOf.get(grp.key);
     grp._top = h ? h.top : null;
     grp._wsName = h ? h.wsName : null;
+    grp._ws = h ? h.ws : null;
   }
   // Build the list explicitly: frames in state/maturity order; within a frame the
   // DIRECT jobs first (attention desc), then each workstream (ranked by its total
@@ -5656,13 +5873,13 @@ function applyFrameLayout(ordered, frames, jobHeat) {
     const wsNames = [...new Set(mine.filter((g) => g._wsName).map((g) => g._wsName))];
     const wsBuckets = wsNames.map((name) => {
       const groups = mine.filter((g) => g._wsName === name).sort((a, b) => b._rank - a._rank);
-      return { name, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
+      return { name, ws: groups[0] ? groups[0]._ws : null, groups, total: groups.reduce((s, g) => s + g._rank, 0) };
     }).sort((a, b) => b.total - a.total);
     let first = true;
     for (const g of direct) { g._frameHeader = first ? top : null; g._wsHeader = null; first = false; out.push(g); }
     for (const bucket of wsBuckets) {
       let wsFirst = true;
-      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? bucket.name : null; wsFirst = false; out.push(g); }
+      for (const g of bucket.groups) { g._frameHeader = first ? top : null; first = false; g._wsHeader = wsFirst ? (bucket.ws || bucket.name) : null; wsFirst = false; out.push(g); }
     }
     // a frame with only workstream jobs still needs its header on the first row
     if (first && mine.length) mine[0]._frameHeader = top;
@@ -5678,6 +5895,36 @@ const FRAME_BADGE = {
   Facet: { label: "Topic / area", cls: "frame-badge-facet" },
   "Needs-evidence": { label: "Needs evidence", cls: "frame-badge-needs" },
 };
+// Shared on-demand "State of play" affordance for a grouping header (top frame or
+// workstream — the level ABOVE individual jobs, which is where a digest belongs).
+// Returns { toggle, panel }; the caller places the toggle inline and the full-width
+// panel last. Nothing fetches until the user clicks. The empty state stays visible
+// (the trigger never silently vanishes).
+function makeSoPToggle(fid, titleText) {
+  const toggle = document.createElement("span");
+  toggle.className = "sop-frame-toggle";
+  toggle.setAttribute("role", "button");
+  toggle.tabIndex = 0;
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.title = titleText || "State of play for this area";
+  toggle.textContent = "State of play";
+  const panel = document.createElement("div");
+  panel.className = "sop-frame-panel";
+  panel.hidden = true;
+  let loaded = false;
+  const doToggle = async () => {
+    const open = toggle.getAttribute("aria-expanded") === "true";
+    if (open) { toggle.setAttribute("aria-expanded", "false"); panel.hidden = true; return; }
+    toggle.setAttribute("aria-expanded", "true"); panel.hidden = false;
+    if (loaded) return;            // already rendered (or shown empty) — just reveal
+    loaded = true;
+    const ok = await renderFrameSoP(panel, fid);
+    if (!ok) panel.innerHTML = '<div class="sop-status">No state of play to show for this area right now.</div>';
+  };
+  toggle.addEventListener("click", (ev) => { ev.stopPropagation(); doToggle(); });
+  toggle.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); doToggle(); } });
+  return { toggle, panel };
+}
 function buildFrameHeader(frame) {
   const el = document.createElement("div");
   el.className = "frame-header";
@@ -5700,6 +5947,17 @@ function buildFrameHeader(frame) {
     el.appendChild(heat);
   }
   if (frame.state !== "Project") el.classList.add("frame-header-soft");
+  // UI-3 — Frame SoP affordance. Maturity-gated to Project/Suggested frames (the
+  // ones mature enough to digest). Built below; the trigger sits inline in the
+  // header row, the panel is a full-width child that stacks beneath when expanded.
+  // UI-3 — Frame SoP affordance (on-demand, maturity-gated to Project/Suggested top
+  // frames). Trigger sits inline; the panel stacks full-width below (appended last).
+  let sopPanel = null;
+  if (frameSoPEligible(frame) && frame.fid != null) {
+    const sop = makeSoPToggle(frame.fid, "State of play for this frame");
+    el.appendChild(sop.toggle);
+    sopPanel = sop.panel;
+  }
   // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
   const edit = document.createElement("span");
   edit.className = "frame-edit-btn";
@@ -5709,12 +5967,28 @@ function buildFrameHeader(frame) {
   edit.title = "Rename, change type, or merge";
   edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frame); });
   el.appendChild(edit);
+  // Full-width inline SoP panel stacks last, beneath the header row (flex-basis:100%).
+  if (sopPanel) el.appendChild(sopPanel);
   return el;
 }
-function buildWsHeader(name) {
+// Workstream header (the level ABOVE jobs, BELOW the top frame) — the consolidated
+// altitude a state-of-play digest is actually for. Gets the SAME on-demand toggle
+// as a top frame. `ws` is the workstream frame object (carries fid + name); a bare
+// string is tolerated for back-compat (renders the name with no toggle).
+function buildWsHeader(ws) {
   const el = document.createElement("div");
   el.className = "frame-ws-header";
-  el.textContent = name;
+  const name = ws && typeof ws === "object" ? ws.name : ws;
+  const n = document.createElement("span");
+  n.className = "frame-ws-name";
+  n.textContent = name || "";
+  el.appendChild(n);
+  const fid = ws && typeof ws === "object" ? ws.fid : null;
+  if (fid != null) {
+    const sop = makeSoPToggle(fid, "State of play for this area");
+    el.appendChild(sop.toggle);
+    el.appendChild(sop.panel);
+  }
   return el;
 }
 function buildFacetBar(facets) {
@@ -6838,9 +7112,17 @@ function renderDecisions() {
     body.hidden = !expanded;
     // WP-THRESHOLD-STATE-OF-PLAY — the send-ready digest for this person sits at
     // the top of their group (By-Person lens only; never on Unassigned).
+    //
+    // WP-WorkForest-Native-SoP consistency pass — under the Work-Forest (framed)
+    // project view, individual JOB groups must NOT carry a per-job "State of Play"
+    // affordance: the consolidated state of play now lives one level up, on the
+    // workstream/frame header (makeSoPToggle), on demand. The per-job button
+    // dead-ended with "No open items for {label}" — that's the dead link removed
+    // here. The project-altitude email digest is kept only on the PLAIN
+    // (un-framed) By-project view, where a group is a genuine project, not a job.
     if (_decisionsLens === "people" && !grp.muted) {
       body.appendChild(buildSopBar(grp.key, grp.label));
-    } else if (_decisionsLens === "project" && !grp.muted) {
+    } else if (_decisionsLens === "project" && !grp.muted && !framed) {
       // Project altitude — the team email + per-teammate digests for this project.
       body.appendChild(buildProjectSopBar(grp.key, grp.label));
     }
@@ -6849,12 +7131,15 @@ function renderDecisions() {
       if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
     }
 
+    // (Per-job SoP removed — the consolidated state of play now lives one level up,
+    // on the workstream/frame header, on demand. Jobs no longer carry their own digest.)
+
     head.addEventListener("click", () => {
       const willExpand = body.hidden;
       body.hidden = !willExpand;
       head.setAttribute("aria-expanded", willExpand ? "true" : "false");
       chev.textContent = willExpand ? "▾" : "▸";
-      if (willExpand) _decisionsExpanded.add(grp.key);
+      if (willExpand) { _decisionsExpanded.add(grp.key); }
       else _decisionsExpanded.delete(grp.key);
     });
 

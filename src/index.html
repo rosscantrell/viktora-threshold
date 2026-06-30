@@ -598,6 +598,18 @@
         <!-- open / resolved / superseded count pills rendered by main.js -->
       </div>
 
+      <!-- WP-WorkForest-Native-SoP (UI-1 + UI-6) — the Work-Forest-native State
+           of Play narrative at the top of Today, above the Focus rail. A small
+           Person / Forest lens toggle picks the altitude: Person = "your jobs
+           today" (own vs touch), Forest = the cross-frame rollup. Populated from
+           GET /api/state-of-play via fetch_sop; additive + silent (empty node
+           when the endpoint is unavailable). -->
+      <div class="sop-lens-bar" id="log-sop-lens" hidden>
+        <button type="button" class="sop-lens-btn" data-lens="person" aria-pressed="true">Your jobs</button>
+        <button type="button" class="sop-lens-btn" data-lens="forest" aria-pressed="false">All work</button>
+      </div>
+      <div class="sop-lens-panel" id="log-sop-lens-panel"></div>
+
       <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
            from GET /api/decision-log/priority (loaded on Today, independent of
            the State-of-Play button). main.js fills these via renderTodayPriority. -->

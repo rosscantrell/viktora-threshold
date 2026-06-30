@@ -2943,6 +2943,69 @@ async fn fetch_priority(
         .map_err(|e| format!("fetch_priority: parse response failed: {e}"))
 }
 
+/// WP-WorkForest-Native-SoP — Work-Forest-native State of Play at any altitude.
+/// Proxies GET /api/state-of-play?level=job|frame|forest&id=<key>&lens=person:<p>|facet:<f>.
+/// `level` is required; `id` is required for job/frame (omit for forest); `lens`
+/// is optional (`person:<slug>` or `facet:<slug>`). Mirrors the fetch_priority
+/// shape — bearer auth, base_url, 30s timeout — and the fetch_entity_card
+/// URL-encoding of caller-supplied path/query values. 404 (flag off / no such
+/// altitude) or 503 (synthesis unavailable) → {available:false} so every
+/// consuming component degrades to hidden, like the existing rails.
+/// Response contract: { level, id, prose, license, sections, maturity? }.
+#[tauri::command]
+async fn fetch_sop(
+    state: tauri::State<'_, AppState>,
+    level: String,
+    id: Option<String>,
+    lens: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if level.trim().is_empty() {
+        return Err("fetch_sop: empty level".into());
+    }
+    let cfg = current_config(&state)?;
+    let enc = |s: &str| -> String {
+        url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+    };
+    let mut query = format!("level={}", enc(level.trim()));
+    if let Some(id_val) = id.as_deref() {
+        if !id_val.trim().is_empty() {
+            query.push_str(&format!("&id={}", enc(id_val.trim())));
+        }
+    }
+    if let Some(lens_val) = lens.as_deref() {
+        if !lens_val.trim().is_empty() {
+            query.push_str(&format!("&lens={}", enc(lens_val.trim())));
+        }
+    }
+    let url = format!(
+        "{}/api/state-of-play?{}",
+        cfg.base_url.trim_end_matches('/'),
+        query
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_sop: parse response failed: {e}"))
+}
+
 /// WP-Priority-Operator HITL — record a natural calibration gesture (pin / unpin /
 /// dismiss / reorder) for one priority item. POSTs /api/decision-log/priority/gesture;
 /// the per-user weight vector is derived server-side from the gesture stream — never
@@ -6687,6 +6750,8 @@ pub fn run() {
             // WP-Priority-Operator — "Focus" rail + HITL calibration gestures
             fetch_priority,
             post_priority_gesture,
+            // WP-WorkForest-Native-SoP — Work-Forest-native State of Play (job/frame/forest + lenses)
+            fetch_sop,
             frame_edit,
             apply_to_similar,
             fetch_learned_suggestions,

@@ -185,6 +185,141 @@ body {
   padding: 4px 0;
 }
 
+/* ── WP-WorkForest-Native-SoP — the prose layer over the job/frame/forest
+ *    scaffolding. Tokens match .sop-message / .priority-* / .frame-* (same
+ *    radius/elevation/text scale). Prose arrives already voiced from the
+ *    backend; these are presentation-only. ── */
+.sop-prose-wrap {
+  display: block;
+}
+.sop-prose {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--glass-text);
+}
+.sop-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-border);
+}
+.sop-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  margin-bottom: 4px;
+}
+.sop-section-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--glass-text);
+}
+.sop-license {
+  margin-top: 12px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--glass-text-faint);
+}
+.sop-maturity-tag {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-faint);
+}
+
+/* ── UI-1 + UI-6 — Person/Forest lens bar + top-of-Today SoP panel. The toggle
+ *    mirrors .priority-chip pill shape; the panel matches .priority-card surface. ── */
+.sop-lens-bar {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.sop-lens-btn {
+  font-size: 11px;
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.sop-lens-btn:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.sop-lens-btn[aria-pressed="true"] {
+  background: rgba(255, 196, 64, 0.18);
+  border-color: var(--glass-accent);
+  color: var(--glass-accent);
+}
+.sop-lens-panel:empty {
+  display: none;
+}
+.sop-lens-panel {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  background: var(--glass-surface);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.sop-lens-head {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  margin-bottom: 8px;
+}
+.sop-lens-body {
+  display: block;
+}
+
+/* ── UI-3 — Frame SoP affordance on Decisions frame headers. The trigger reads as
+ *    a soft text control (like .frame-edit-btn); the panel is a full-width child
+ *    of the flex header that stacks beneath the badge/name row when expanded. ── */
+.sop-frame-toggle {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.sop-frame-toggle:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+}
+.sop-frame-toggle[aria-expanded="true"] {
+  color: var(--glass-accent);
+  border-color: var(--glass-accent);
+}
+.sop-frame-panel {
+  flex-basis: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+}
+.sop-frame-body {
+  display: block;
+}
+
+/* ── UI-4 — per-job SoP digest REMOVED (consistency pass). The state of play now
+ *    lives on the workstream/frame header (.sop-frame-toggle / .sop-frame-panel),
+ *    not on individual job rows. The .sop-job-panel rule was retired with it. ── */
+
 /* WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator). */
 .inform-rail {
   margin-top: 20px;

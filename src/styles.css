@@ -3473,13 +3473,20 @@ code {
 .frame-heat-active { color: var(--glass-text-faint); background: var(--glass-surface); border: 1px solid var(--glass-border); }
 /* Workstream sub-header — a quieter label that opens a nested sub-section. */
 .frame-ws-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   font-size: 10.5px;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--glass-text-faint);
   margin: 14px 0 2px 14px;
 }
+.frame-ws-name { text-transform: uppercase; }
+/* The on-demand SoP toggle keeps its normal case + dim color inside the
+   uppercase workstream label. */
+.frame-ws-header .sop-frame-toggle { text-transform: none; letter-spacing: 0.02em; }
 /* Workstream jobs sit indented under the label with a containment rail. The
    card style itself stays IDENTICAL to direct jobs — the indent + rail + label
    carry the nesting, so the two tiers read consistently. */
