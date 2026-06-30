@@ -3815,16 +3815,27 @@ button.record-action-badge {
   outline: none;
   border-color: rgba(56, 132, 255, 0.5);
 }
-.record-share-copy {
-  align-self: flex-start;
-  margin-top: 11px;
+.record-share-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.record-share-send {
   padding: 6px 14px;
-  color: #d6e9ff;
-  background: rgba(56, 132, 255, 0.14);
-  border: 1px solid rgba(56, 132, 255, 0.4);
+  color: #eaf2ff;
+  background: rgba(56, 132, 255, 0.32);
+  border: 1px solid rgba(56, 132, 255, 0.55);
   border-radius: 7px;
 }
-.record-share-copy:hover { background: rgba(56, 132, 255, 0.22); }
+.record-share-send:hover { background: rgba(56, 132, 255, 0.46); }
+.record-share-copy {
+  padding: 6px 14px;
+  color: var(--glass-text-dim);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+}
+.record-share-copy:hover { background: var(--glass-surface); }
 
 .decisions-status {
   font-size: 12px;

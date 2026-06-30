@@ -6361,17 +6361,43 @@ function openShareMenu(anchorBtn, rec, ctx) {
   draft.value = buildShareDraft(rec, related, who);
   menu.appendChild(draft);
 
+  // Same two affordances as every other drafted email: stage it into the Outlook
+  // threshold queue (Outbox + add-in) via the shared producer path, or copy it.
+  const btnRow = document.createElement("div");
+  btnRow.className = "record-share-actions";
+
+  const send = document.createElement("button");
+  send.type = "button";
+  send.className = "record-reason-item record-share-send";
+  send.textContent = "Send to Outbox";
+  send.addEventListener("click", (e) => {
+    e.stopPropagation();
+    stageOutboxDraft({
+      id: "share:" + (rec.recordId || rec.summary || ""),
+      title: rec.summary ? "Share decision: " + rec.summary : "Share decision",
+      detail: draft.value,
+      intent: "email",
+      executor: who || rec.owner || undefined,
+      sourceKind: "decision",
+      sourceLabel: rec.summary || rec.recordId || "",
+    });
+    closeDismissReasonMenu();
+  });
+  btnRow.appendChild(send);
+
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "record-reason-item record-share-copy";
-  copy.textContent = "Copy draft";
+  copy.textContent = "Copy";
   copy.addEventListener("click", (e) => {
     e.stopPropagation();
     try { navigator.clipboard.writeText(draft.value); } catch (_) { draft.select(); document.execCommand("copy"); }
     copy.textContent = "Copied ✓";
-    setTimeout(() => { copy.textContent = "Copy draft"; }, 1200);
+    setTimeout(() => { copy.textContent = "Copy"; }, 1200);
   });
-  menu.appendChild(copy);
+  btnRow.appendChild(copy);
+
+  menu.appendChild(btnRow);
 
   document.body.appendChild(menu);
   // Fit to viewport: open below the pill if there's room, else flip above; if it
@@ -8246,7 +8272,7 @@ async function enterOutboxView() {
 // ProducerActionItem (owner → executor) and POSTs via the outbox_propose IPC.
 // The staged draft then appears in the Outbox surface + the Outlook add-in.
 async function draftFollowUpFromRecord(rec) {
-  const item = {
+  await stageOutboxDraft({
     id: "rec:" + (rec.recordId || rec.summary || ""),
     title: rec.summary ? "Follow up: " + rec.summary : "Follow up",
     detail: rec.summary || "",
@@ -8255,25 +8281,29 @@ async function draftFollowUpFromRecord(rec) {
     dueDate: rec.due || undefined,
     sourceKind: rec.type === "decision" ? "decision" : "commitment",
     sourceLabel: rec.summary || rec.recordId || "",
-  };
+  });
+}
+
+// Shared producer-staging path: POST one ProducerActionItem via outbox_propose
+// so it lands in the Outbox surface + the Outlook add-in. Used by the follow-up
+// control AND the decision Share draft — one path, identical toast feedback.
+async function stageOutboxDraft(item) {
   try {
     const res = await tauri.core.invoke("outbox_propose", { items: [item] });
     const created = (res && Array.isArray(res.created) && res.created.length) || 0;
-    if (created > 0) {
-      showToast({
-        kind: "success",
-        title: "Draft staged",
-        body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
-      });
-    } else {
-      showToast({
-        kind: "success",
-        title: "Already staged",
-        body: "This follow-up is already in your Outbox.",
-      });
-    }
+    showToast(
+      created > 0
+        ? {
+            kind: "success",
+            title: "Draft staged",
+            body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
+          }
+        : { kind: "success", title: "Already staged", body: "This draft is already in your Outbox." },
+    );
+    return true;
   } catch (err) {
     showToast({ kind: "error", title: "Couldn't stage draft", body: String(err) });
+    return false;
   }
 }
 
