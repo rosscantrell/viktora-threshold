@@ -185,6 +185,54 @@ body {
   padding: 4px 0;
 }
 
+/* ── WP-WorkForest-Native-SoP — the prose layer over the job/frame/forest
+ *    scaffolding. Tokens match .sop-message / .priority-* / .frame-* (same
+ *    radius/elevation/text scale). Prose arrives already voiced from the
+ *    backend; these are presentation-only. ── */
+.sop-prose-wrap {
+  display: block;
+}
+.sop-prose {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--glass-text);
+}
+.sop-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-border);
+}
+.sop-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  margin-bottom: 4px;
+}
+.sop-section-body {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--glass-text);
+}
+.sop-license {
+  margin-top: 12px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--glass-text-faint);
+}
+.sop-maturity-tag {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-faint);
+}
+
 /* WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator). */
 .inform-rail {
   margin-top: 20px;

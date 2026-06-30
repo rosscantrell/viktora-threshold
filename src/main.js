@@ -3077,9 +3077,9 @@ if (watchingRefreshBtn) {
   });
 }
 
-// WP-THRESHOLD-STATE-OF-PLAY — corpus altitude on Today: the Monday overview
-// across all projects, on demand. Same engine as the per-person digest.
-let _corpusPolish = false;
+// WP-WorkForest-Native-SoP (UI-2) — the "State of Play" panel on Today now shows
+// the FOREST altitude (rollup across frames), re-pointed from the old flat corpus
+// altitude. Same panel slot + toggle.
 const logSopBtn = document.getElementById("btn-log-sop");
 if (logSopBtn) {
   logSopBtn.addEventListener("click", () => {
@@ -3091,23 +3091,112 @@ if (logSopBtn) {
     loadCorpusStateOfPlay(panel);
   });
 }
+// ───────── WP-WorkForest-Native-SoP — Work-Forest-native State of Play ─────────
+//
+// A prose layer over the already-existing job/frame/forest scaffolding. The new
+// /api/state-of-play endpoint (proxied by the fetch_sop Rust command) returns a
+// register-bounded, already-voiced digest at any altitude (job/frame/forest) with
+// an optional person/facet lens. Contract: { level, id, prose, license, sections,
+// maturity? }. Jargon stays internal — prose arrives plain-language from the
+// backend, so the UI never re-translates "do-now"/"stallProb"/"jobQuadrant".
+//
+// Every fetch degrades to {available:false} → the component renders nothing (or a
+// calm empty state on the explicit corpus panel), exactly like the existing rails.
+
+// Shared loader. Returns the SoP payload, or null when unavailable / unreachable
+// (additive + silent — never an error surface). `id`/`lens` are optional.
+async function loadSoP(level, id, lens) {
+  let res;
+  try {
+    res = await tauri.core.invoke("fetch_sop", { level, id: id || null, lens: lens || null });
+  } catch (err) {
+    console.warn("[main] fetch_sop(" + level + ") failed:", err);
+    return null; // silent — degrade to hidden
+  }
+  if (!res || res.available === false) return null; // flag off / server too old / no altitude
+  const prose = typeof res.prose === "string" ? res.prose.trim() : "";
+  if (!prose) return null;
+  return res;
+}
+
+// Compose the person-lens selector from a viewer email/slug, or null when there's
+// no identity (the unscoped forest view is then used).
+function personLens(viewerSlug) {
+  return viewerSlug ? "person:" + viewerSlug : null;
+}
+
+// Render the SoP prose into a container. `sections`, when present, render as
+// labelled sub-blocks beneath the lead prose; otherwise the prose alone shows.
+// No jargon translation here — the backend already voiced it. `opts.compact`
+// drops the licence footnote (used for inline lazy expansions like Job SoP).
+function renderSoPProse(container, data, opts) {
+  opts = opts || {};
+  container.innerHTML = "";
+  const lead = document.createElement("p");
+  lead.className = "sop-prose";
+  lead.textContent = data.prose || "";
+  container.appendChild(lead);
+
+  const sections = Array.isArray(data.sections) ? data.sections : [];
+  for (const sec of sections) {
+    if (!sec || typeof sec !== "object") continue;
+    const body = typeof sec.prose === "string" ? sec.prose.trim() : (typeof sec.body === "string" ? sec.body.trim() : "");
+    if (!body && !sec.title) continue;
+    const block = document.createElement("div");
+    block.className = "sop-section";
+    if (sec.title) {
+      const h = document.createElement("div");
+      h.className = "sop-section-title";
+      h.textContent = String(sec.title);
+      block.appendChild(h);
+    }
+    if (body) {
+      const p = document.createElement("p");
+      p.className = "sop-section-body";
+      p.textContent = body;
+      block.appendChild(p);
+    }
+    container.appendChild(block);
+  }
+
+  // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
+  // dim, single line; omitted in compact mode and when absent.
+  if (!opts.compact && data.license && typeof data.license === "string") {
+    const lic = document.createElement("div");
+    lic.className = "sop-license";
+    lic.textContent = data.license;
+    container.appendChild(lic);
+  }
+}
+
+// UI-2 — Forest SoP, re-pointed corpus panel. The explicit "State of Play" panel
+// on Today now shows the FOREST altitude (rollup across frames: hottest jobs,
+// stalled frames, cross-frame conflicts), scoped to the viewer via the person
+// lens when an identity is known. Same panel slot + copy/edit affordances as the
+// old corpus altitude; maturity-aware now that the backend gates by frame.
 async function loadCorpusStateOfPlay(panel) {
   panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
-  try {
-    const res = await tauri.core.invoke("fetch_corpus_state_of_play", { polish: _corpusPolish });
-    if (!res || res.available === false) {
-      panel.innerHTML = '<div class="sop-status">' +
-        (res && res.reason === "unavailable" ? "Overview isn't available on this server yet." : "No open items.") + "</div>";
-      return;
-    }
-    renderCorpusPanel(panel, res);
-  } catch (err) {
-    console.warn("[main] fetch_corpus_state_of_play failed:", err);
-    panel.innerHTML = '<div class="sop-status">Couldn\'t reach Apolla.</div>';
+  const data = await loadSoP("forest", null, personLens(_todayCtx && _todayCtx.viewerSlug));
+  if (!data) {
+    panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
+    return;
   }
+  renderCorpusPanel(panel, data);
 }
 function renderCorpusPanel(panel, data) {
   panel.innerHTML = "";
+  // Flatten the SoP payload to a copy-ready plain-text block (lead prose + any
+  // labelled sections), for the Copy button + the inline digest editor.
+  const sectionText = (Array.isArray(data.sections) ? data.sections : [])
+    .map((s) => {
+      const t = s && s.title ? String(s.title) : "";
+      const b = s && (typeof s.prose === "string" ? s.prose : s.body) || "";
+      return (t ? t + "\n" : "") + (b || "").trim();
+    })
+    .filter(Boolean)
+    .join("\n\n");
+  const copyText = [data.prose || "", sectionText].filter(Boolean).join("\n\n");
+
   const bar = document.createElement("div");
   bar.className = "sop-toolbar";
   const copyBtn = document.createElement("button");
@@ -3116,37 +3205,29 @@ function renderCorpusPanel(panel, data) {
   copyBtn.textContent = "Copy";
   copyBtn.addEventListener("click", async () => {
     try {
-      await tauri.core.invoke("copy_text", { text: data.message || "" });
+      await tauri.core.invoke("copy_text", { text: copyText });
       copyBtn.textContent = "Copied ✓";
       copyBtn.disabled = true;
       setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
     } catch (e) { showToast({ kind: "failure", title: "Couldn't copy", body: "Try again." }); }
   });
   bar.appendChild(copyBtn);
-  const polishBtn = document.createElement("button");
-  polishBtn.type = "button";
-  polishBtn.className = "sop-polish";
-  polishBtn.textContent = data.polished ? "Plain text" : "Polish with AI";
-  polishBtn.addEventListener("click", async () => {
-    _corpusPolish = !data.polished;
-    await loadCorpusStateOfPlay(panel);
-  });
-  bar.appendChild(polishBtn);
-  if (data.polished) {
+  if (data.maturity) {
     const t = document.createElement("span");
-    t.className = "sop-polished-tag";
-    t.textContent = "AI-polished";
+    t.className = "sop-maturity-tag";
+    t.textContent = String(data.maturity);
     bar.appendChild(t);
   }
   panel.appendChild(bar);
-  const msg = document.createElement("pre");
-  msg.className = "sop-message";
-  msg.textContent = data.message || "";
-  panel.appendChild(msg);
-  // Phase B — inline digest edit (corpus altitude).
-  attachDigestEditor({ panel, bar, msg, scope: "corpus", subject: "corpus", label: "the org", message: data.message || "", editsEnabled: data.editsEnabled });
-  // (WP-Priority-Operator — the Focus rail now lives on the Today surface, loaded
-  // independently of State-of-Play; see renderTodayPriority.)
+
+  const proseWrap = document.createElement("div");
+  proseWrap.className = "sop-prose-wrap";
+  renderSoPProse(proseWrap, data, {});
+  panel.appendChild(proseWrap);
+
+  // Phase B — inline digest edit (forest altitude). Editor edits the flattened
+  // copy text; lead element is the prose wrapper.
+  attachDigestEditor({ panel, bar, msg: proseWrap, scope: "forest", subject: "forest", label: "the org", message: copyText, editsEnabled: data.editsEnabled });
 }
 
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
