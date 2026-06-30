@@ -2695,6 +2695,10 @@ async function enterLogView() {
   // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
   // independently of the State-of-Play digest. Additive + silent if the flag's off.
   loadTodayPriority();
+
+  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list, just below the Focus
+  // rail. Additive + silent: renders nothing when grouped vigilance data is absent.
+  loadStalledChaseList();
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -3193,6 +3197,335 @@ async function loadTodayPriority() {
   const items = Array.isArray(res.items) ? res.items : [];
   if (items.length === 0 || !container) return;
   renderTodayPriority(container, res);
+}
+
+// ───────── WP-Job-Vigilance-Wave2 — Focus chase-list (Stalled / Chasing) ─────────
+//
+// The headline vigilance surface. Stalled jobs render as ranked cards on Today,
+// alongside the Focus priority rail — where the user looks for "what now," NOT in
+// a separate tab. The view is PURE RENDER: detection / rollup / ranking / gating /
+// receipts are all server-side and derived-at-read (GET /api/vigilance/voids?
+// grouped=1). We only display the payload + join the heat band from jobHeat
+// (GET /api/decision-log?full=1).
+//
+// Two-axis discipline (brief §4, load-bearing): heat band AND stalled-ness are
+// DISTINCT chips, never collapsed to one number. A pure surfaceScore sort buries a
+// silent-but-low-priority promise (Angelica's 35d hotlist = jobHeat 0.23 quiet);
+// the "silent Nd / N waiting" chips keep stalled-ness visible independently. Jobs
+// whose heat band is monitor/quiet (and not high-surfaceScore) drop to the
+// Watching-tab "Low-impact waiting" drawer rather than crowding the Focus top.
+
+// Band-gate: which bands count as "primary chase" (vs the low-impact drawer).
+const STALLED_PRIMARY_BANDS = new Set(["act_now", "verify", "soon"]);
+// surfaceScore floor that promotes a low-band job into the primary chase-list
+// anyway (so a high-stall low-heat job isn't silently dropped from Focus). Tunable
+// in-app per the G4b ~8-primary finding on Trisha's corpus.
+const STALLED_SURFACE_FLOOR = 0.5;
+
+// Namespaced to avoid the existing top-level BAND_LABEL (which lacks `quiet`).
+const STALLED_BAND_LABEL = {
+  act_now: "Act now",
+  verify: "Verify",
+  soon: "Soon",
+  monitor: "Monitor",
+  quiet: "Quiet",
+};
+
+// True when a stalled job belongs in the primary Focus chase-list (vs the
+// Watching-tab low-impact drawer). Band-gate OR high surfaceScore.
+function stalledIsPrimary(job, band) {
+  if (band && STALLED_PRIMARY_BANDS.has(band)) return true;
+  return (job.surfaceScore || 0) >= STALLED_SURFACE_FLOOR;
+}
+
+// Max ageDays across a stalled job's scoredVoids — the "oldest Nd silent" figure.
+function stalledMaxAge(job) {
+  const ages = (job.scoredVoids || []).map((v) => v.ageDays).filter((n) => typeof n === "number");
+  return ages.length ? Math.max(...ages) : null;
+}
+
+// The cached grouped vigilance payload + the jobHeat/jobNames join, so the
+// Watching ledger can reuse the same grouped data without a second fetch.
+let _vigilanceGrouped = null; // { stalledJobs, receipts, jobCount, rawVoidCount } | null
+let _vigilanceJobHeat = {};   // jobKey -> { band, heat, ... }
+let _vigilanceJobNames = {};  // jobKey -> canonical name
+
+// Fetch the grouped vigilance payload + the full decision-log (for jobHeat/jobNames).
+// Returns null when grouped data is absent (flag off / old backend) so callers can
+// degrade cleanly. Caches into the _vigilance* module state for ledger reuse.
+async function fetchVigilanceGrouped() {
+  let voidData;
+  try {
+    voidData = await tauri.core.invoke("fetch_vigilance_voids", { grouped: true });
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids(grouped) failed:", err);
+    return null;
+  }
+  const grouped = voidData && voidData.grouped;
+  if (!grouped || !Array.isArray(grouped.stalledJobs)) {
+    // Feature-detect: no grouped object → flag off / old backend. Degrade silently.
+    _vigilanceGrouped = null;
+    return { voidData, grouped: null };
+  }
+  _vigilanceGrouped = grouped;
+
+  // Join the heat band from the full decision-log (free — jobHeat + jobNames).
+  try {
+    const full = await tauri.core.invoke("fetch_decision_log_full");
+    _vigilanceJobHeat = (full && full.jobHeat) || {};
+    _vigilanceJobNames = (full && full.jobNames) || {};
+  } catch (err) {
+    console.warn("[main] fetch_decision_log_full (vigilance join) failed:", err);
+    _vigilanceJobHeat = {};
+    _vigilanceJobNames = {};
+  }
+  return { voidData, grouped };
+}
+
+// Band for a stalled job, joined client-side from jobHeat (StalledJob carries no
+// band field — only jobP0). Tries the bare key and the job:-prefixed key.
+function stalledBand(jobKey) {
+  const jh = _vigilanceJobHeat[jobKey] || _vigilanceJobHeat["job:" + jobKey] || _vigilanceJobHeat[String(jobKey).replace(/^job:/, "")];
+  return jh && jh.band ? jh.band : null;
+}
+
+// Canonical display name for a stalled job (jobNames join; falls back to slug).
+function stalledName(jobKey) {
+  return (
+    _vigilanceJobNames[jobKey] ||
+    _vigilanceJobNames["job:" + jobKey] ||
+    _vigilanceJobNames[String(jobKey).replace(/^job:/, "")] ||
+    prettySlug(String(jobKey).replace(/^job:/, ""))
+  );
+}
+
+// Load + render the Stalled / Chasing chase-list on Today. Additive + silent:
+// renders nothing (and no error) when grouped data is absent.
+async function loadStalledChaseList() {
+  const container = document.getElementById("log-stalled-sections");
+  if (container) container.innerHTML = "";
+  if (!container) return;
+  const result = await fetchVigilanceGrouped();
+  if (!result || !result.grouped) return; // feature-detect: nothing to render
+  const grouped = result.grouped;
+  const jobs = Array.isArray(grouped.stalledJobs) ? grouped.stalledJobs.slice() : [];
+  if (!jobs.length) return;
+
+  // Receipt lookup by jobKey for the "Why stalled" drawer.
+  const receiptByJob = new Map();
+  for (const r of grouped.receipts || []) receiptByJob.set(r.jobKey, r);
+
+  // Sort by surfaceScore desc (the chase-list rank), then partition into primary
+  // chase vs low-impact (the latter is surfaced in the Watching ledger, not here).
+  jobs.sort((a, b) => (b.surfaceScore || 0) - (a.surfaceScore || 0));
+  const primary = jobs.filter((j) => stalledIsPrimary(j, stalledBand(j.jobKey)));
+  if (!primary.length) return;
+
+  const section = makeCollapsible("Stalled / Chasing", primary.length, true);
+  const sub = document.createElement("div");
+  sub.className = "priority-sub";
+  sub.textContent = "Promises stalled on someone else — what's waiting, who's on the hook, how long it's been silent.";
+  section.body.appendChild(sub);
+
+  for (const job of primary) {
+    section.body.appendChild(renderStalledJobCard(job, receiptByJob.get(job.jobKey) || null));
+  }
+  container.appendChild(section.section);
+}
+
+// One stalled-job card: name + two-axis chips + "{voidCount} open / oldest Nd
+// silent" + the top void's render string + a "Why stalled" drawer (the receipt).
+function renderStalledJobCard(job, receipt) {
+  const card = document.createElement("div");
+  card.className = "priority-card stalled-card";
+
+  const band = stalledBand(job.jobKey);
+  const maxAge = stalledMaxAge(job);
+
+  // Top row: job name + two-axis chips (heat band AND stalled-ness — distinct).
+  const top = document.createElement("div");
+  top.className = "priority-card-top stalled-top";
+  const name = document.createElement("span");
+  name.className = "stalled-jobname";
+  name.textContent = stalledName(job.jobKey);
+  top.appendChild(name);
+
+  // Axis 1 — priority/heat band (joined from jobHeat).
+  if (band) {
+    const heatChip = document.createElement("span");
+    heatChip.className = "stalled-chip stalled-chip-band stalled-band-" + band;
+    heatChip.textContent = STALLED_BAND_LABEL[band] || band;
+    top.appendChild(heatChip);
+  }
+  // Axis 2 — stalled-ness (silent Nd), ALWAYS shown, independent of heat. This is
+  // the augmented-urgency signal: a chronically-silent promise stays visible even
+  // when base priority (heat) is low. Brief §4.1/§4.2 — do not collapse to one number.
+  if (typeof maxAge === "number") {
+    const silentChip = document.createElement("span");
+    silentChip.className = "stalled-chip stalled-chip-silent";
+    silentChip.textContent = `Silent ${maxAge}d`;
+    top.appendChild(silentChip);
+  }
+  card.appendChild(top);
+
+  // Count line: "{voidCount} open / oldest Nd silent".
+  const countLine = document.createElement("div");
+  countLine.className = "stalled-count";
+  const parts = [`${job.voidCount} open`];
+  if (typeof maxAge === "number") parts.push(`oldest ${maxAge}d silent`);
+  if (job.blockerCount) parts.push(`${job.blockerCount} downstream blocked`);
+  countLine.textContent = parts.join(" · ");
+  card.appendChild(countLine);
+
+  // The top void's verify-framed render string ("Waiting on …") — prefer the
+  // server-authored copy. Drawn from the receipt's first void, falling back to
+  // scoredVoids order.
+  const topVoid = receipt && Array.isArray(receipt.voids) && receipt.voids.length ? receipt.voids[0] : null;
+  if (topVoid && topVoid.render) {
+    const headline = document.createElement("p");
+    headline.className = "stalled-headline";
+    headline.textContent = topVoid.render;
+    card.appendChild(headline);
+  }
+
+  // "Why stalled" drawer — the typed JobVigilanceReceipt graph, no LLM prose.
+  if (receipt) {
+    card.appendChild(renderWhyStalledDrawer(receipt));
+  }
+
+  return card;
+}
+
+// The "Why stalled" drawer: a server-grounded typed graph — the waiting-on
+// records per void, the per-void score breakdown, and the typed blockageEdges.
+// NO LLM-generated prose (brief §3.1 / ship gate G2).
+function renderWhyStalledDrawer(receipt) {
+  const wrap = document.createElement("div");
+  wrap.className = "stalled-drawer";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stalled-drawer-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.textContent = "Why stalled";
+
+  const body = document.createElement("div");
+  body.className = "stalled-drawer-body";
+  body.hidden = true;
+
+  toggle.addEventListener("click", () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.textContent = open ? "Hide why stalled" : "Why stalled";
+  });
+
+  // Per-void breakdown: motif + owner + age + waiting-on records + score.
+  const voids = Array.isArray(receipt.voids) ? receipt.voids : [];
+  if (voids.length) {
+    const vList = document.createElement("ul");
+    vList.className = "stalled-void-list";
+    for (const v of voids) {
+      const li = document.createElement("li");
+      li.className = "stalled-void";
+
+      const head = document.createElement("div");
+      head.className = "stalled-void-head";
+      const motif = v.motif ? `<span class="stalled-motif">${escapeHtml(stalledMotifLabel(v.motif))}</span>` : "";
+      const owner = vvIsNamedSlug(v.owner) ? ` · ${escapeHtml(vvHumanizeSlug(v.owner))}` : "";
+      const age = typeof v.ageDays === "number" ? ` · ${v.ageDays}d silent` : "";
+      head.innerHTML = `${motif}${owner}${age}`;
+      li.appendChild(head);
+
+      // Verify-framed render line (server-authored) or the summary.
+      const line = document.createElement("p");
+      line.className = "stalled-void-summary";
+      line.textContent = v.render || v.summary || "";
+      li.appendChild(line);
+
+      // Citation-checked verbatim, ONLY when verified (trust property).
+      if (v.verbatim && v.verbatimVerified) {
+        const q = document.createElement("blockquote");
+        q.className = "stalled-void-quote";
+        q.textContent = `“${v.verbatim}”`;
+        li.appendChild(q);
+      }
+
+      // Waiting-on records (the enabling records this void is blocked behind).
+      const waitingOn = Array.isArray(v.waitingOn) ? v.waitingOn : [];
+      if (waitingOn.length) {
+        const wo = document.createElement("div");
+        wo.className = "stalled-waiting";
+        const lab = document.createElement("span");
+        lab.className = "stalled-waiting-label";
+        lab.textContent = "Waiting on";
+        wo.appendChild(lab);
+        const ul = document.createElement("ul");
+        ul.className = "stalled-waiting-list";
+        for (const w of waitingOn) {
+          const wli = document.createElement("li");
+          wli.textContent = w.summary || w.recordId || "";
+          ul.appendChild(wli);
+        }
+        wo.appendChild(ul);
+        li.appendChild(wo);
+      }
+
+      // Per-void score breakdown (residual / blockage / severity / total) — the
+      // typed numbers, shown plainly for the audit trail (not narrated).
+      const sc = v.score || {};
+      if (sc && (sc.total != null || sc.residual != null)) {
+        const score = document.createElement("div");
+        score.className = "stalled-score";
+        const fmt = (n) => (typeof n === "number" ? n.toFixed(2) : "—");
+        score.textContent = `score ${fmt(sc.total)} (residual ${fmt(sc.residual)} · blockage ${fmt(sc.blockage)} · severity ${fmt(sc.severity)})`;
+        li.appendChild(score);
+      }
+
+      vList.appendChild(li);
+    }
+    body.appendChild(vList);
+  }
+
+  // Typed blockage edges: dependent → blocker, with status.
+  const edges = Array.isArray(receipt.blockageEdges) ? receipt.blockageEdges : [];
+  if (edges.length) {
+    const eHead = document.createElement("div");
+    eHead.className = "stalled-edges-head";
+    eHead.textContent = "Blocking dependencies";
+    body.appendChild(eHead);
+    const eList = document.createElement("ul");
+    eList.className = "stalled-edges-list";
+    for (const e of edges) {
+      const eli = document.createElement("li");
+      eli.className = "stalled-edge";
+      const status = e.status ? ` <span class="stalled-edge-status">(${escapeHtml(e.status)})</span>` : "";
+      eli.innerHTML =
+        `<span class="stalled-edge-dep">${escapeHtml(e.dependentSummary || e.dependentRecordId || "")}</span>` +
+        ` <span class="stalled-edge-arrow">needs</span> ` +
+        `<span class="stalled-edge-blk">${escapeHtml(e.blockerSummary || e.blockerRecordId || "")}</span>${status}`;
+      eList.appendChild(eli);
+    }
+    body.appendChild(eList);
+  }
+
+  wrap.append(toggle, body);
+  return wrap;
+}
+
+// Human-readable motif label. Motif keys come from the server (M1/M2 family);
+// fall back to a prettified slug for any future motif.
+const STALLED_MOTIF_LABEL = {
+  "m1-promise": "Promise outstanding",
+  "m2-blocked": "Blocked dependency",
+  "m3-contradiction": "Unresolved conflict",
+  egress: "Awaiting reply",
+  "contradicts-unresolved": "Needs reconciliation",
+  "depends-on-incomplete": "Blocked dependency",
+  "overdue-silent": "Overdue · silent",
+};
+function stalledMotifLabel(motif) {
+  return STALLED_MOTIF_LABEL[motif] || prettySlug(String(motif || ""));
 }
 
 async function sendPriorityGesture(item, gestureType, reason, snoozeUntil, handoffNote) {

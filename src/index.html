@@ -603,6 +603,13 @@
            the State-of-Play button). main.js fills these via renderTodayPriority. -->
       <div id="log-priority-sections"></div>
 
+      <!-- WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list. The headline
+           vigilance surface lives here on Today (where you look for "what now"),
+           not in the Watching tab. Populated from GET /api/vigilance/voids?grouped=1
+           joined with jobHeat/jobNames from GET /api/decision-log?full=1.
+           Additive + silent: empty (no node) when grouped data is absent. -->
+      <div id="log-stalled-sections"></div>
+
       <!-- "Everything else" — the prior Today content (needs-attention, conflicts,
            workload), grouped under one collapsible. -->
       <section class="log-collapse" id="log-everything-section" hidden>
