@@ -6292,11 +6292,29 @@ function buildActionBadge(rec, ctx) {
 // items, and a ready-to-send note with Copy. Deterministic (no LLM). Reuses the
 // dismiss-menu single-open infra (_openReasonMenu / closeDismissReasonMenu).
 function buildShareDraft(rec, related, who) {
-  const lead = who ? `Hi ${who.split(/[ ,]/)[0]},\n\n` : "";
-  let body = "Looping you in on a decision: " + (rec.summary || "");
-  const back = related.find((r) => ["Resolves", "Replaces", "Depends on", "Relates to"].includes(r.phrase));
-  if (back) body += `\n\nContext — this ${back.phrase.toLowerCase()}: “${shortenSummary(back.summary, 80)}”.`;
-  return lead + body;
+  const firstName = who ? who.split(/[ ,]/)[0] : "";
+  const summary = (rec.summary || "").trim();
+  const verbatim = (rec.verbatim || "").trim();
+  const lines = [];
+  if (firstName) lines.push(`Hi ${firstName},`, "");
+  lines.push("Sharing a decision from our recent work:");
+  lines.push("");
+  lines.push("• " + summary);
+  // The decision in its own words (the source line), so the note carries WHAT
+  // was decided, not just the one-line label. Skipped when it just echoes it.
+  if (verbatim && verbatim.toLowerCase() !== summary.toLowerCase()) {
+    lines.push("");
+    lines.push("What was decided: “" + shortenSummary(verbatim, 240) + "”");
+  }
+  // The single most useful tie-back to prior work, if any.
+  const VERB = { Resolves: "This resolves", Replaces: "This replaces", Unblocks: "This unblocks", "Depends on": "This depends on", "Relates to": "Related to" };
+  const ctxItem = related.find((r) => VERB[r.phrase]);
+  if (ctxItem) {
+    lines.push("");
+    lines.push(`${VERB[ctxItem.phrase]}: ${shortenSummary(ctxItem.summary, 120)}`);
+  }
+  lines.push("", "Happy to talk it through.");
+  return lines.join("\n");
 }
 
 function openShareMenu(anchorBtn, rec, ctx) {
