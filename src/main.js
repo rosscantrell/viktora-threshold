@@ -2469,10 +2469,21 @@ function renderVoidCard(v, opts) {
   const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
   actions.append(snooze, dismiss);
 
+  // Resolve the void's anchor record once — used by both the source badge and
+  // the "Draft follow-up" action below.
+  const anchorRec = vvVoidRecord(v);
+
+  // WP-Job-Vigilance-Wave2 UI (change 4) — "Draft follow-up": resolve the void's
+  // anchor record → owner, then stage the same owner→recipient outbox draft the
+  // Log's decision cards use (draftFollowUpFromRecord). Shown only when the record
+  // resolves AND has an owner (mirror the Log guard: no owner → nothing to draft).
+  if (anchorRec && anchorRec.owner) {
+    actions.appendChild(vvActionBtn("Draft follow-up", () => draftFollowUpFromRecord(anchorRec)));
+  }
+
   // WP-Job-Vigilance-Wave2 UI (change 3) — link to the original captured item.
   // Reuse renderSourceBadge: anchor record → documentId → the source-reader panel
   // the Log opens. No badge when the doc/metadata isn't loaded (invisible-by-absence).
-  const anchorRec = vvVoidRecord(v);
   if (anchorRec && anchorRec.documentId) {
     appendSourceBadge(actions, anchorRec.documentId, anchorRec.verbatim);
   }
