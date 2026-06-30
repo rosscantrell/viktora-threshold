@@ -5667,6 +5667,11 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // P4 (c) — recordId → job: key for hot-list records only; By-project re-points
     // these to job chips, leaving broad-corpus records on document-project grouping.
     recordJobs: data && data.recordJobs ? data.recordJobs : {},
+    // WP-Subject-Aware-Project-Chips — recordId → canonical project slugs the
+    // record is actually ABOUT (subject ∩ doc.projects, server-derived). Present
+    // only when the server sends it (full=1); absent → chips fall back to the
+    // source document's full project tag set (docProjects) byte-equal to before.
+    recordProjects: data && data.recordProjects ? data.recordProjects : null,
     // WP-Work-Forest top altitude — the CoordinationFrameCompiler forest (top
     // frames → workstreams) + geography/topic facets. Present only when
     // COORDINATION_FRAMES_ENABLED on the server; absent → flat job grouping.
@@ -6136,7 +6141,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
+  const { items, docProjects, recordProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -6316,7 +6321,7 @@ function renderDecisions() {
     }
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
-      if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
+      if (rec) body.appendChild(renderDecisionCard(rec, it.state, resolveCardProjects(rec, recordProjects, docProjects)));
     }
 
     head.addEventListener("click", () => {
@@ -6363,6 +6368,22 @@ const ACTION_KIND_LABEL = {
   stale_commitment: "Stale",
   follow_up: "Follow-up",
 };
+
+/** WP-Subject-Aware-Project-Chips — pick the project slugs to render as chips
+ *  on a decision/commitment card. Prefer the server's per-record subject-aware
+ *  set (`recordProjects[recordId]` — what the record is ACTUALLY about); fall
+ *  back to the source document's full project tag set (`docProjects`) when the
+ *  server didn't send the field (older server) or has no entry for this record.
+ *  The fallback is byte-equal to the pre-WP behavior. Grouping is unaffected —
+ *  groupRecords still keys on docProjects (a different concern). */
+function resolveCardProjects(rec, recordProjects, docProjects) {
+  if (recordProjects && rec && rec.recordId) {
+    const rp = recordProjects[rec.recordId];
+    if (Array.isArray(rp)) return rp; // present (possibly empty → no chips, on purpose)
+  }
+  // Fallback: older server / field missing / no entry for this record.
+  return (docProjects && rec && docProjects.get(rec.documentId)) || [];
+}
 
 function renderDecisionCard(rec, recState, projects) {
   const card = document.createElement("div");
