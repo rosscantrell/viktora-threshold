@@ -2540,6 +2540,17 @@ code {
   padding-top: 2px;
 }
 
+/* Any link-button in a card footer flows in place — overrides the legacy global
+   `.btn-link { position:absolute; top:4px; right:0 }` that otherwise flings it to
+   the window's top-right (the same trap .receipts-entry-btn dodges individually).
+   Without this the Outbox "Dismiss" was rendered but invisible off-card. */
+.record-actions .btn-link {
+  position: static;
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--glass-link);
+}
+
 .receipts-entry-btn {
   /* Override the legacy global `.btn-link { position:absolute; top:4px; right:0 }`
      rule. These buttons live in flex footers (.log-row-actions / .record-actions)
@@ -3739,6 +3750,251 @@ code {
   border: 1px solid rgba(127, 179, 232, 0.3);
   color: var(--glass-link);
 }
+
+/* ── WP-Log-Card-Redesign (prototype) ──────────────────────────────────────
+ * Two-zone header (muted TYPE label + one color-coded ACTION badge), a "handle"
+ * line that carries the badge's object + jumps to it, labeled projects with an
+ * explicit "+N more", and a Share-draft popover for decisions-to-share. */
+.record-header-split {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.record-type-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+}
+.record-action-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.record-action-badge.is-blocked,
+.record-action-badge.is-overdue {
+  color: #ffd9a3;
+  background: rgba(255, 170, 60, 0.14);
+  border-color: rgba(255, 170, 60, 0.4);
+}
+.record-action-badge.is-conflict {
+  color: #ffb59a;
+  background: rgba(255, 96, 56, 0.14);
+  border-color: rgba(255, 96, 56, 0.42);
+}
+.record-action-badge.is-waiting,
+.record-action-badge.is-decision {
+  color: #d6e9ff;
+  background: rgba(56, 132, 255, 0.16);
+  border-color: rgba(56, 132, 255, 0.38);
+}
+.record-action-badge.is-neutral {
+  color: var(--glass-text-dim);
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+}
+/* Clickable pills (jump-to-related / open-share) — the pill IS the affordance. */
+button.record-action-badge {
+  font-family: inherit;
+  line-height: 1.3;
+}
+.record-action-badge.is-clickable {
+  cursor: pointer;
+  transition: filter 0.1s ease, box-shadow 0.1s ease;
+}
+/* A trailing caret so the pill reads as a button, not a label (Trisha 2026-06-29). */
+.record-action-badge.is-clickable::after {
+  content: "›";
+  margin-left: 5px;
+  font-weight: 400;
+  opacity: 0.65;
+}
+.record-action-badge.is-clickable:hover {
+  filter: brightness(1.18);
+  box-shadow: 0 0 0 1px currentColor inset;
+}
+/* Handle line — the clickable object under the title (jump / share). */
+.record-action-handle {
+  display: inline-block;
+  margin: 2px 0 0;
+  padding: 1px 0;
+  font: inherit;
+  font-size: 11.5px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--glass-text-dim);
+}
+.record-action-handle:hover { text-decoration: underline; }
+.record-action-handle.is-blocked { color: #ffc98a; }
+.record-action-handle.is-waiting,
+.record-action-handle.is-decision { color: #aacbff; }
+.record-action-handle.is-conflict { color: #ffb59a; }
+.record-rel-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.record-rel-meta .record-meta { margin: 0; }
+/* Jump target flash. */
+@keyframes record-card-flash {
+  0% { box-shadow: 0 0 0 2px rgba(56, 132, 255, 0.7); }
+  100% { box-shadow: 0 0 0 2px rgba(56, 132, 255, 0); }
+}
+.record-card-flash { animation: record-card-flash 1.5s ease-out; }
+/* Share-draft popover (extends the dismiss-reason menu) — roomy, sectioned. */
+.record-share-menu {
+  width: 344px;
+  max-width: 88vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  gap: 0;
+}
+.record-share-menu .record-reason-heading {
+  padding: 0 0 9px;
+  margin: 0 0 11px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.record-share-what {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--glass-text);
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+.record-share-ctxlabel {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--glass-text-faint);
+  margin: 0 0 5px;
+}
+.record-share-ctxitem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--glass-link);
+  background: none;
+  border: none;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.record-share-ctxitem:hover { text-decoration: underline; }
+/* Inline linked-record cards inside the dependency popover. */
+.record-linked-menu {
+  width: 344px;
+  max-width: 88vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  gap: 0;
+}
+.record-linked-menu .record-reason-heading {
+  padding: 0 0 9px;
+  margin: 0 0 7px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.linked-rec {
+  margin-top: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-surface);
+}
+.linked-rec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.linked-rec-type {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--glass-text-faint);
+}
+.linked-rec-type[data-type="decision"] { color: #a9c7ff; }
+.linked-rec-meta {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+}
+.linked-rec-summary {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--glass-text);
+}
+.linked-rec-jump {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 0;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--glass-link);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.linked-rec-jump:hover { text-decoration: underline; }
+.record-share-draft {
+  display: block;
+  width: 100%;
+  margin: 13px 0 0;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--glass-text);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-top: 1px solid var(--glass-border);
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+  min-height: 84px;
+  overflow-y: hidden;
+}
+.record-share-draft:focus {
+  outline: none;
+  border-color: rgba(56, 132, 255, 0.5);
+}
+.record-share-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.record-share-send {
+  padding: 6px 14px;
+  color: #eaf2ff;
+  background: rgba(56, 132, 255, 0.32);
+  border: 1px solid rgba(56, 132, 255, 0.55);
+  border-radius: 7px;
+}
+.record-share-send:hover { background: rgba(56, 132, 255, 0.46); }
+.record-share-copy {
+  padding: 6px 14px;
+  color: var(--glass-text-dim);
+  background: transparent;
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+}
+.record-share-copy:hover { background: var(--glass-surface); }
 
 .decisions-status {
   font-size: 12px;

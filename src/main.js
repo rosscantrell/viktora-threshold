@@ -105,6 +105,9 @@ const VIEWS = [
   "view-entity-card",
   // WP-THRESHOLD-DECISION-ORG — Decisions browser (by project, filterable)
   "view-decisions",
+  // WP-Outlook-Writeback — staged Outbox surface (registered here so showView()
+  // can actually un-hide it; without this the view stays hidden = blank screen).
+  "view-outbox",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -6353,16 +6356,424 @@ function renderDecisions() {
 const BAND_LABEL = { act_now: "Act now", verify: "Verify", soon: "Soon", monitor: "Monitor" };
 
 // WP-Priority-Frame-Integration step 5 — ActionCandidateView mode labels.
-const ACTION_KIND_LABEL = {
-  commitment_due: "Commitment",
-  decision_needed: "Decision needed",
-  decision_to_broadcast: "Decision to share",
-  blocked_work: "Blocked",
-  dependency_to_unblock: "Others waiting",
-  contradiction_to_resolve: "Conflict",
-  stale_commitment: "Stale",
-  follow_up: "Follow-up",
+// ───────── WP-Log-Card-Redesign ─────────────────────────────────────────────
+// One ACTION badge per card, color-coded by urgency, that carries its object —
+// what it's blocked on, how many wait, when it was due — plus a "handle" line
+// that jumps to the related record, and a Share draft for decisions-to-share.
+// All derived from data already in _decisionsCtx (actionKinds, edges, byId).
+// commitment_due / follow_up get no badge (they'd echo the type label + due).
+const ACTION_BADGE_CLASS = {
+  blocked_work: "is-blocked",
+  stale_commitment: "is-overdue",
+  contradiction_to_resolve: "is-conflict",
+  dependency_to_unblock: "is-waiting",
+  decision_needed: "is-decision",
+  decision_to_broadcast: "is-neutral",
 };
+
+function shortenSummary(s, max) {
+  s = (s || "").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:]+$/, "") + "…";
+}
+
+function recordById(ctx, id) {
+  return id && ctx.byId ? ctx.byId.get(id) : null;
+}
+
+// depends_on edges (recordA depends on recordB — A blocked, B the unblocker).
+function dependencyEdges(ctx) {
+  return (ctx.edges || []).filter((e) => e.kind === "depends_on" && e.status !== "dismissed");
+}
+
+// Reveal a record's card: expand its group if collapsed, scroll to it, flash.
+function jumpToRecord(recordId) {
+  if (!recordId) return;
+  const sel = window.CSS && CSS.escape ? CSS.escape(recordId) : recordId;
+  const target = document.querySelector(`.decision-card[data-record-id="${sel}"]`);
+  if (!target) return;
+  const body = target.closest(".decisions-group-body");
+  if (body && body.hidden) {
+    body.hidden = false;
+    const head = body.parentElement && body.parentElement.querySelector("[aria-expanded]");
+    if (head) {
+      head.setAttribute("aria-expanded", "true");
+      const chev = head.querySelector(".decisions-group-chevron");
+      if (chev) chev.textContent = "▾";
+    }
+  }
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.remove("record-card-flash");
+  void target.offsetWidth;
+  target.classList.add("record-card-flash");
+  setTimeout(() => target.classList.remove("record-card-flash"), 1600);
+}
+
+// Prior corpus items this record links to (for the Share context). recordA is
+// the acting/later/dependent end of the directional edge kinds.
+function relatedItemsFor(rec, ctx) {
+  const out = [];
+  for (const e of ctx.edges || []) {
+    if (e.status === "dismissed") continue;
+    const isA = e.recordA === rec.recordId;
+    const isB = e.recordB === rec.recordId;
+    if (!isA && !isB) continue;
+    const other = recordById(ctx, isA ? e.recordB : e.recordA);
+    if (!other) continue;
+    let phrase;
+    switch (e.kind) {
+      case "resolves": phrase = isA ? "Resolves" : "Resolved by"; break;
+      case "supersedes": phrase = isA ? "Replaces" : "Replaced by"; break;
+      case "depends_on": phrase = isA ? "Depends on" : "Unblocks"; break;
+      case "duplicates": phrase = "Duplicate of"; break;
+      case "contradicts": phrase = "Conflicts with"; break;
+      default: phrase = "Relates to";
+    }
+    out.push({ phrase, otherId: other.recordId, summary: other.summary || "" });
+  }
+  return out;
+}
+
+// The action pill itself is the affordance — clickable when it has an object:
+// blocked/waiting/conflict jump to the related record, decision-to-share opens
+// the draft. The object detail lives in the pill's tooltip (title), so there is
+// no separate line. A pill with no action is a plain span.
+function makeBadge(cls, text, opts) {
+  opts = opts || {};
+  const el = document.createElement(opts.onClick ? "button" : "span");
+  el.className = "record-action-badge " + cls + (opts.onClick ? " is-clickable" : "");
+  el.textContent = text;
+  if (opts.title) el.title = opts.title;
+  if (opts.onClick) {
+    el.type = "button";
+    el.addEventListener("click", (e) => { e.stopPropagation(); opts.onClick(el, e); });
+  }
+  return el;
+}
+
+function buildActionBadge(rec, ctx) {
+  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
+  if (!ak || !ak.kind) return null;
+  const cls = ACTION_BADGE_CLASS[ak.kind];
+  if (!cls) return null; // commitment_due / follow_up — no badge
+  const deps = dependencyEdges(ctx);
+
+  if (ak.kind === "blocked_work") {
+    const e = deps.find((d) => d.recordA === rec.recordId);
+    const blocker = e && recordById(ctx, e.recordB);
+    if (blocker) {
+      return makeBadge("is-blocked", "Blocked", {
+        title: "Blocked by: " + (blocker.summary || "") + " — click to see it",
+        onClick: (el) => openLinkedMenu(el, "This is blocked by", [blocker]),
+      });
+    }
+    return makeBadge("is-blocked", "Blocked");
+  }
+  if (ak.kind === "dependency_to_unblock") {
+    const waiters = deps.filter((d) => d.recordB === rec.recordId);
+    const recs = waiters.map((d) => recordById(ctx, d.recordA)).filter(Boolean);
+    const label = recs.length ? `${recs.length} waiting` : "Others waiting";
+    if (recs.length) {
+      const noun = recs.length === 1 ? "item is" : "items are";
+      return makeBadge("is-waiting", label, {
+        title: `${recs.length} ${noun} waiting on this — click to see ${recs.length === 1 ? "it" : "them"}`,
+        onClick: (el) => openLinkedMenu(el, `Waiting on this (${recs.length})`, recs),
+      });
+    }
+    return makeBadge("is-waiting", label);
+  }
+  if (ak.kind === "stale_commitment") {
+    return makeBadge("is-overdue", rec.due ? "Overdue · due " + formatDueDate(rec.due) : "Overdue");
+  }
+  if (ak.kind === "contradiction_to_resolve") {
+    const e = (ctx.edges || []).find(
+      (d) => d.kind === "contradicts" && d.status !== "dismissed" &&
+        (d.recordA === rec.recordId || d.recordB === rec.recordId),
+    );
+    const other = e && recordById(ctx, e.recordA === rec.recordId ? e.recordB : e.recordA);
+    if (other) {
+      return makeBadge("is-conflict", "Conflict", {
+        title: "Conflicts with: " + (other.summary || "") + " — click to see it",
+        onClick: (el) => openLinkedMenu(el, "Conflicts with", [other]),
+      });
+    }
+    return makeBadge("is-conflict", "Conflict");
+  }
+  if (ak.kind === "decision_needed") {
+    return makeBadge("is-decision", "Decision needed");
+  }
+  if (ak.kind === "decision_to_broadcast") {
+    // Action verb, not a noun label (Trisha 2026-06-29: "decision to share" read
+    // like a label; needs to look like a button that does something).
+    return makeBadge("is-decision", "Share decision", {
+      title: "Click to draft a note sharing this decision",
+      onClick: (el) => openShareMenu(el, rec, ctx),
+    });
+  }
+  return null;
+}
+
+// Share-draft popover: what the decision is, how it ties back to prior corpus
+// items, and a ready-to-send note with Copy. Deterministic (no LLM). Reuses the
+// dismiss-menu single-open infra (_openReasonMenu / closeDismissReasonMenu).
+function buildShareDraft(rec, related, who) {
+  const firstName = who ? who.split(/[ ,]/)[0] : "";
+  const summary = (rec.summary || "").trim();
+  const verbatim = (rec.verbatim || "").trim();
+  const lines = [];
+  if (firstName) lines.push(`Hi ${firstName},`, "");
+  lines.push("Sharing a decision from our recent work:");
+  lines.push("");
+  lines.push("• " + summary);
+  // The decision in its own words (the source line), so the note carries WHAT
+  // was decided, not just the one-line label. Skipped when it just echoes it.
+  if (verbatim && verbatim.toLowerCase() !== summary.toLowerCase()) {
+    lines.push("");
+    lines.push("What was decided: “" + verbatim + "”");
+  }
+  // The single most useful tie-back to prior work, if any. Full text — this is an
+  // email draft, not a chip; nothing here should be truncated with an ellipsis.
+  const VERB = { Resolves: "This resolves", Replaces: "This replaces", Unblocks: "This unblocks", "Depends on": "This depends on", "Relates to": "Related to" };
+  const ctxItem = related.find((r) => VERB[r.phrase]);
+  if (ctxItem) {
+    lines.push("");
+    lines.push(`${VERB[ctxItem.phrase]}: ${ctxItem.summary}`);
+  }
+  lines.push("", "Happy to talk it through.");
+  return lines.join("\n");
+}
+
+// WP-Edit-Capture — record how the user changed our generated share draft, as a
+// retained event on the decision-log overlay (same /edit event log as the inline
+// field edits). Best-effort: a capture failure must never block the share. Only
+// the delta is a signal — an unchanged draft says our generation was good enough.
+async function captureShareDraftEdit(rec, generated, finalText, action) {
+  if (!rec || !rec.recordId) return;
+  const from = (generated || "").trim();
+  const to = (finalText || "").trim();
+  if (!to || from === to) return;
+  try {
+    await tauri.core.invoke("edit_record", {
+      recordId: rec.recordId,
+      editType: "share_draft",
+      edits: [{ field: "share_draft", from: generated, to: finalText, type: "share_draft", action }],
+    });
+  } catch (e) {
+    console.warn("[main] share-draft edit capture failed (non-blocking):", e);
+  }
+}
+
+// Shared viewport-fit positioning for the card popovers: open below the anchor
+// if there's room, flip above when not, else cap height + scroll on the larger
+// side. Keeps the content reachable on a small window.
+function positionPopover(menu, anchorBtn) {
+  const r = anchorBtn.getBoundingClientRect();
+  const margin = 8;
+  menu.style.position = "fixed";
+  menu.style.left = `${Math.round(Math.min(Math.max(margin, r.left), window.innerWidth - menu.offsetWidth - margin))}px`;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  const needed = menu.offsetHeight;
+  if (needed <= spaceBelow) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  } else if (needed <= spaceAbove) {
+    menu.style.top = `${Math.round(r.top - needed - 4)}px`;
+  } else if (spaceBelow >= spaceAbove) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.maxHeight = `${Math.round(spaceBelow)}px`;
+  } else {
+    menu.style.top = `${margin}px`;
+    menu.style.maxHeight = `${Math.round(spaceAbove)}px`;
+  }
+}
+
+// A compact read-only view of a linked record, shown inline in the dependency
+// popover so the relationship is visible in place — no jumping away (Trisha
+// 2026-06-29: the jump is disorienting with no way back).
+function renderLinkedRecord(rec) {
+  const row = document.createElement("div");
+  row.className = "linked-rec";
+  row.dataset.type = rec.type || "";
+  const head = document.createElement("div");
+  head.className = "linked-rec-head";
+  const t = document.createElement("span");
+  t.className = "linked-rec-type";
+  t.dataset.type = rec.type || "";
+  t.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(t);
+  const bits = [];
+  if (rec.owner) bits.push(prettySlug(rec.owner));
+  if (rec.due) bits.push("due " + formatDueDate(rec.due));
+  if (bits.length) {
+    const meta = document.createElement("span");
+    meta.className = "linked-rec-meta";
+    meta.textContent = bits.join(" · ");
+    head.appendChild(meta);
+  }
+  row.appendChild(head);
+  const sum = document.createElement("div");
+  sum.className = "linked-rec-summary";
+  sum.textContent = rec.summary || "";
+  row.appendChild(sum);
+  // Optional: jump to the item in the list (closes the popover first).
+  if (rec.recordId) {
+    const jump = document.createElement("button");
+    jump.type = "button";
+    jump.className = "linked-rec-jump";
+    jump.textContent = "Jump to item →";
+    jump.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeDismissReasonMenu();
+      jumpToRecord(rec.recordId);
+    });
+    row.appendChild(jump);
+  }
+  return row;
+}
+
+// Dependency popover — shows the blocker / waiting / conflicting record(s) inline
+// under the pill, anchored + viewport-fit. Reuses the single-open menu infra.
+function openLinkedMenu(anchorBtn, heading, recs) {
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+  recs = (recs || []).filter(Boolean);
+  if (!recs.length) return;
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu record-linked-menu";
+  menu.setAttribute("role", "dialog");
+
+  const h = document.createElement("div");
+  h.className = "record-reason-heading";
+  h.textContent = heading;
+  menu.appendChild(h);
+
+  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec));
+
+  document.body.appendChild(menu);
+  positionPopover(menu, anchorBtn);
+  _openReasonMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
+
+function openShareMenu(anchorBtn, rec, ctx) {
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+
+  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+  const who = rel && rel.counterparty ? rel.counterparty : null;
+  const related = relatedItemsFor(rec, ctx);
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu record-share-menu";
+  menu.setAttribute("role", "dialog");
+
+  const heading = document.createElement("div");
+  heading.className = "record-reason-heading";
+  heading.textContent = who ? "Share with " + who : "Share this decision";
+  menu.appendChild(heading);
+
+  const what = document.createElement("div");
+  what.className = "record-share-what";
+  what.textContent = rec.summary || "";
+  menu.appendChild(what);
+
+  if (related.length) {
+    const ctxLbl = document.createElement("div");
+    ctxLbl.className = "record-share-ctxlabel";
+    ctxLbl.textContent = "Relates to";
+    menu.appendChild(ctxLbl);
+    for (const r of related.slice(0, 3)) {
+      const other = recordById(ctx, r.otherId);
+      const line = document.createElement("button");
+      line.type = "button";
+      line.className = "record-share-ctxitem";
+      line.textContent = r.phrase + ": " + shortenSummary(r.summary, 56);
+      if (other) {
+        line.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openLinkedMenu(line, r.phrase, [other]);
+        });
+      }
+      menu.appendChild(line);
+    }
+  }
+
+  const draft = document.createElement("textarea");
+  draft.className = "record-share-draft";
+  draft.value = buildShareDraft(rec, related, who);
+  // Snapshot what WE generated, so a send/copy can record how the user changed it
+  // — the learning signal for how the engine's drafting is off (WP-Edit-Capture).
+  const generatedDraft = draft.value;
+  // Grow to fit the whole draft so nothing is clipped; the popover itself scrolls
+  // if the result is very tall. Re-runs as the user edits.
+  const autosizeDraft = () => {
+    draft.style.height = "auto";
+    draft.style.height = Math.min(draft.scrollHeight + 2, 700) + "px";
+  };
+  draft.addEventListener("input", autosizeDraft);
+  menu.appendChild(draft);
+
+  // Same two affordances as every other drafted email: stage it into the Outlook
+  // threshold queue (Outbox + add-in) via the shared producer path, or copy it.
+  const btnRow = document.createElement("div");
+  btnRow.className = "record-share-actions";
+
+  const send = document.createElement("button");
+  send.type = "button";
+  send.className = "record-reason-item record-share-send";
+  send.textContent = "Send to Outbox";
+  send.addEventListener("click", (e) => {
+    e.stopPropagation();
+    captureShareDraftEdit(rec, generatedDraft, draft.value, "outbox");
+    stageOutboxDraft({
+      id: "share:" + (rec.recordId || rec.summary || ""),
+      title: rec.summary ? "Share decision: " + rec.summary : "Share decision",
+      detail: draft.value,
+      detailGenerated: generatedDraft, // what we drafted, so the server can keep the delta
+      intent: "email",
+      executor: who || rec.owner || undefined,
+      sourceKind: "decision",
+      sourceLabel: rec.summary || rec.recordId || "",
+    });
+    closeDismissReasonMenu();
+  });
+  btnRow.appendChild(send);
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "record-reason-item record-share-copy";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", (e) => {
+    e.stopPropagation();
+    try { navigator.clipboard.writeText(draft.value); } catch (_) { draft.select(); document.execCommand("copy"); }
+    captureShareDraftEdit(rec, generatedDraft, draft.value, "copy");
+    copy.textContent = "Copied ✓";
+    setTimeout(() => { copy.textContent = "Copy"; }, 1200);
+  });
+  btnRow.appendChild(copy);
+
+  menu.appendChild(btnRow);
+
+  document.body.appendChild(menu);
+  autosizeDraft(); // size to content now that it's in the DOM, before positioning
+  positionPopover(menu, anchorBtn);
+  // Re-measure after layout settles (first pass can under-measure scrollHeight),
+  // then re-fit the popover to the viewport.
+  requestAnimationFrame(() => { autosizeDraft(); positionPopover(menu, anchorBtn); });
+  _openReasonMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
 
 function renderDecisionCard(rec, recState, projects) {
   const card = document.createElement("div");
@@ -6370,38 +6781,31 @@ function renderDecisionCard(rec, recState, projects) {
   card.dataset.type = rec.type || "";
   if (recState) card.dataset.state = recState;
 
-  const header = document.createElement("div");
-  header.className = "record-header";
-  const chip = document.createElement("span");
-  chip.className = "record-chip";
-  chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
-  header.appendChild(chip);
-
-  // step 5 — the action mode (Blocked / Decision needed / Conflict …).
+  // WP-Log-Card-Redesign — two-zone header: muted TYPE label (left) + one
+  // colored ACTION badge (right). A non-open record shows its lifecycle pill in
+  // the action slot instead.
   const ctx = _decisionsCtx || {};
-  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
-  if (ak && ACTION_KIND_LABEL[ak.kind] && ak.kind !== "follow_up") {
-    const kc = document.createElement("span");
-    kc.className = "record-kind-chip kind-" + ak.kind;
-    kc.textContent = ACTION_KIND_LABEL[ak.kind];
-    header.appendChild(kc);
-  }
-  // step 6 — the "who" (relationship) from the CommunicationRole substrate.
-  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
-  if (rel && rel.relationship) {
-    const rc = document.createElement("span");
-    rc.className = "record-rel-chip";
-    rc.textContent = rel.counterparty ? `${rel.relationship} · ${rel.counterparty}` : rel.relationship;
-    if (rel.why) rc.title = rel.why;
-    header.appendChild(rc);
-  }
-  if (recState && recState !== "open") {
+  card.dataset.recordId = rec.recordId || "";
+
+  const header = document.createElement("div");
+  header.className = "record-header record-header-split";
+
+  const typeLabel = document.createElement("span");
+  typeLabel.className = "record-type-label";
+  typeLabel.dataset.type = rec.type || "";
+  typeLabel.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  header.appendChild(typeLabel);
+
+  const isOpen = !recState || recState === "open";
+  if (!isOpen) {
     const pill = document.createElement("span");
     pill.className = "record-state-pill";
     pill.dataset.state = recState;
     pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
     header.appendChild(pill);
+  } else {
+    const badge = buildActionBadge(rec, ctx);
+    if (badge) header.appendChild(badge);
   }
   card.appendChild(header);
 
@@ -6410,11 +6814,24 @@ function renderDecisionCard(rec, recState, projects) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
+  // Relationship ("who") + owner·due on one line.
   {
+    const metaRow = document.createElement("div");
+    metaRow.className = "record-rel-meta";
+    const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+    if (rel && rel.relationship) {
+      const rc = document.createElement("span");
+      rc.className = "record-rel-chip";
+      const word = rel.relationship.charAt(0).toUpperCase() + rel.relationship.slice(1);
+      rc.textContent = rel.counterparty ? `${word} · ${rel.counterparty}` : word;
+      if (rel.relationshipWhy || rel.why) rc.title = rel.relationshipWhy || rel.why;
+      metaRow.appendChild(rc);
+    }
     const meta = document.createElement("p");
     meta.className = "record-meta";
     const segCount = buildRecordMetaSegments(meta, rec);
-    if (segCount) card.appendChild(meta);
+    if (segCount) metaRow.appendChild(meta);
+    if (metaRow.childNodes.length) card.appendChild(metaRow);
   }
 
   // Per-record project chips removed: they showed the source document's flat tag
@@ -8150,7 +8567,14 @@ async function enterOutboxView() {
 
   const items = Array.isArray(data && data.items) ? data.items : [];
   if (listEl) {
-    for (const item of items) listEl.appendChild(renderOutboxCard(item));
+    // Guard each card so one malformed item can't silently blank the whole list.
+    for (const item of items) {
+      try {
+        listEl.appendChild(renderOutboxCard(item));
+      } catch (e) {
+        console.warn("[main] renderOutboxCard failed for", item && item.id, e);
+      }
+    }
   }
   if (statusEl) {
     if (items.length === 0) {
@@ -8185,7 +8609,7 @@ async function enterOutboxView() {
 // ProducerActionItem (owner → executor) and POSTs via the outbox_propose IPC.
 // The staged draft then appears in the Outbox surface + the Outlook add-in.
 async function draftFollowUpFromRecord(rec) {
-  const item = {
+  await stageOutboxDraft({
     id: "rec:" + (rec.recordId || rec.summary || ""),
     title: rec.summary ? "Follow up: " + rec.summary : "Follow up",
     detail: rec.summary || "",
@@ -8194,25 +8618,29 @@ async function draftFollowUpFromRecord(rec) {
     dueDate: rec.due || undefined,
     sourceKind: rec.type === "decision" ? "decision" : "commitment",
     sourceLabel: rec.summary || rec.recordId || "",
-  };
+  });
+}
+
+// Shared producer-staging path: POST one ProducerActionItem via outbox_propose
+// so it lands in the Outbox surface + the Outlook add-in. Used by the follow-up
+// control AND the decision Share draft — one path, identical toast feedback.
+async function stageOutboxDraft(item) {
   try {
     const res = await tauri.core.invoke("outbox_propose", { items: [item] });
     const created = (res && Array.isArray(res.created) && res.created.length) || 0;
-    if (created > 0) {
-      showToast({
-        kind: "success",
-        title: "Draft staged",
-        body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
-      });
-    } else {
-      showToast({
-        kind: "success",
-        title: "Already staged",
-        body: "This follow-up is already in your Outbox.",
-      });
-    }
+    showToast(
+      created > 0
+        ? {
+            kind: "success",
+            title: "Draft staged",
+            body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
+          }
+        : { kind: "success", title: "Already staged", body: "This draft is already in your Outbox." },
+    );
+    return true;
   } catch (err) {
     showToast({ kind: "error", title: "Couldn't stage draft", body: String(err) });
+    return false;
   }
 }
 
