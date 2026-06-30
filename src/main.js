@@ -6118,18 +6118,7 @@ function renderDecisions() {
 const BAND_LABEL = { act_now: "Act now", verify: "Verify", soon: "Soon", monitor: "Monitor" };
 
 // WP-Priority-Frame-Integration step 5 — ActionCandidateView mode labels.
-const ACTION_KIND_LABEL = {
-  commitment_due: "Commitment",
-  decision_needed: "Decision needed",
-  decision_to_broadcast: "Decision to share",
-  blocked_work: "Blocked",
-  dependency_to_unblock: "Others waiting",
-  contradiction_to_resolve: "Conflict",
-  stale_commitment: "Stale",
-  follow_up: "Follow-up",
-};
-
-// ───────── WP-Log-Card-Redesign (prototype) ─────────────────────────────────
+// ───────── WP-Log-Card-Redesign ─────────────────────────────────────────────
 // One ACTION badge per card, color-coded by urgency, that carries its object —
 // what it's blocked on, how many wait, when it was due — plus a "handle" line
 // that jumps to the related record, and a Share draft for decisions-to-share.
