@@ -2062,12 +2062,27 @@ async fn outbox_propose(
 /// rendered server-side. Same auth + posture as fetch_decision_log. The engine
 /// returns an empty list (not an error) when the feature is off, so the view
 /// degrades to an empty state rather than an error.
+///
+/// WP-Job-Vigilance-Wave2 — optional `grouped` param appends `?grouped=1`, which
+/// (when JOB_VIGILANCE_ENABLED) augments the response with a `grouped` object
+/// (stalledJobs + receipts + jobCount/rawVoidCount). The flat `voids`/`arrived`
+/// arrays are unchanged, so existing callers can omit `grouped` (defaults false)
+/// for byte-identical behavior. The query string is not part of the
+/// THRESHOLD_APP_PATTERN gate regex, so `?grouped=1` is already allowed.
 #[tauri::command]
 async fn fetch_vigilance_voids(
     state: tauri::State<'_, AppState>,
+    grouped: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let cfg = current_config(&state)?;
-    let url = format!("{}/api/vigilance/voids", cfg.base_url.trim_end_matches('/'));
+    let url = if grouped.unwrap_or(false) {
+        format!(
+            "{}/api/vigilance/voids?grouped=1",
+            cfg.base_url.trim_end_matches('/')
+        )
+    } else {
+        format!("{}/api/vigilance/voids", cfg.base_url.trim_end_matches('/'))
+    };
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(15))

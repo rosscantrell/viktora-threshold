@@ -2323,23 +2323,141 @@ function vvHumanizeSlug(s) {
   return (s || "").split("-").map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
-function renderVoidCard(v) {
+// WP-Job-Vigilance-Wave2 UI — resolve a void to its anchor RECORD id. The backend
+// carries the record either as the void's anchor (anchorType "record") or via the
+// blocked-record context; prefer the explicit anchor, fall back to the blocked id.
+function vvVoidRecordId(v) {
+  if (v && v.anchorType === "record" && v.anchorId) return v.anchorId;
+  const blocked = v && v.context && v.context.blocked;
+  return (blocked && blocked.recordId) || (v && v.anchorId) || "";
+}
+
+// The full record for a void (from the decision-log join), or null when absent.
+function vvVoidRecord(v) {
+  const rid = vvVoidRecordId(v);
+  return rid ? _vigilanceRecordsById.get(rid) || null : null;
+}
+
+// Build the work-forest breadcrumb (frame › workstream › job) for a void, mirroring
+// the hierarchy the Log groups by: recordId → recordJobs[jobKey] → jobNames (job),
+// then the frame whose jobKeys contains it (workstream = a frame with a parent;
+// top frame = its root). Returns a breadcrumb element, or null when the record
+// doesn't resolve to a job (degrade silently — same as the Log's "Unframed").
+function vvBuildHierarchy(v) {
+  const rid = vvVoidRecordId(v);
+  if (!rid) return null;
+  const jobKey = _vigilanceRecordJobs[rid];
+  if (!jobKey) return null;
+
+  // Job name (canonical, jobNames join; falls back to prettified slug).
+  const jobName = stalledName(jobKey);
+
+  // Frame chain: find the frame owning this job, then walk parentFid to the root.
+  const byFid = new Map(_vigilanceFrames.map((f) => [f.fid, f]));
+  let owning = null;
+  for (const f of _vigilanceFrames) {
+    if (Array.isArray(f.jobKeys) && f.jobKeys.includes(jobKey)) { owning = f; break; }
+  }
+  let topFrame = owning, wsName = null;
+  if (owning && owning.parentFid != null) {
+    wsName = owning.name; // the owning frame is a workstream under a top frame
+    let c = owning, n = 0;
+    while (c && c.parentFid != null && n++ < 50) c = byFid.get(c.parentFid) || null;
+    topFrame = c || owning;
+  }
+
+  // Render as the same breadcrumb wayfinding the Log uses: Frame › Workstream › Job.
+  const crumb = document.createElement("p");
+  crumb.className = "watching-hierarchy";
+  const parts = [];
+  if (topFrame && topFrame.name) parts.push(topFrame.name);
+  if (wsName && wsName !== (topFrame && topFrame.name)) parts.push(wsName);
+  parts.push(jobName);
+  crumb.textContent = parts.join(" › ");
+  return crumb;
+}
+
+function renderVoidCard(v, opts) {
   const card = document.createElement("div");
   card.className = "record-card watching-card";
   card.dataset.license = v.license || "";
   const ctx = v.context || { waitingOn: [] };
   const waitingOn = Array.isArray(ctx.waitingOn) ? ctx.waitingOn : [];
+  // WP-Job-Vigilance-Wave2 — silent-days joined from grouped.scoredVoids (the
+  // flat void carries forward-looking whenDays, not the stalled "N days silent").
+  const ageDays = opts && typeof opts.ageDays === "number" ? opts.ageDays : null;
 
-  // Compact meta row at the TOP: trigger pill + cadence.
+  // WP-Job-Vigilance-Wave2 UI — two-zone header (mirrors the Log decision card's
+  // `record-header record-header-split`): the trigger/motif meta sits LEFT, and an
+  // optional top-right ACTION badge ("Draft follow-up") sits RIGHT. Placing the
+  // trigger at top-right (not the mid-card action row) makes positionPopover anchor
+  // its inline editor cleanly, exactly like the Log's "Share decision ›".
+  const header = document.createElement("div");
+  header.className = "record-header record-header-split watching-header";
+
+  // Compact meta zone (LEFT): trigger pill + motif + cadence + silent-Nd.
   const meta = document.createElement("div");
   meta.className = "watching-meta";
-  const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  // WP-Job-Vigilance-Wave2 UI (change 1) — fold a ROUNDED whole-day silent count
+  // into the trigger pill's existing neutral styling ("Overdue · silent · 25d")
+  // rather than a standalone red raw-float span. Keeps the duration signal; kills
+  // the red score Ross flagged.
+  let label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  if (ageDays != null) {
+    label += ` · ${Math.round(ageDays)}d`;
+  }
   let metaHtml = `<span class="watching-pill">${escapeHtml(label)}</span>`;
-  if (typeof v.whenDays === "number") {
+  // Motif (additive, server-side) — the graph-shape that detected this void.
+  if (v.motif) {
+    metaHtml += `<span class="watching-motif">${escapeHtml(stalledMotifLabel(v.motif))}</span>`;
+  }
+  if (ageDays == null && typeof v.whenDays === "number") {
     metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
   }
   meta.innerHTML = metaHtml;
-  card.appendChild(meta);
+  header.appendChild(meta);
+
+  // Resolve the void's anchor record once — used by the top-right follow-up badge
+  // and (below) the source badge in the action row.
+  const anchorRec = vvVoidRecord(v);
+
+  // WP-Job-Vigilance-Wave2 UI (change 4) — top-right "Draft follow-up" ACTION badge,
+  // mirroring the Log's "Share decision ›" placement + treatment exactly: a
+  // makeBadge("is-decision", …, { onClick }) so it gets the blue is-decision style +
+  // is-clickable hover + the CSS `›` caret (no bordered pill). Clicking opens the
+  // SAME inline editable-draft editor (openShareMenu + buildFollowUpDraft) from
+  // b224956 — only the trigger's DOM position/treatment changed. Shown only when the
+  // record resolves AND has an owner (mirror the Log guard: no owner → nothing to draft).
+  if (anchorRec && anchorRec.owner) {
+    header.appendChild(
+      makeBadge("is-decision", "Draft follow-up", {
+        title: "Draft a note following up on this outstanding promise",
+        onClick: (el) =>
+          openShareMenu(
+            el,
+            anchorRec,
+            // Minimal ctx: byId for tie-back lookups; no edges/relationship cached on
+            // the vigilance surface, so related-items + counterparty resolve empty
+            // (a clean nudge to the owner, no decision tie-backs).
+            { byId: _vigilanceRecordsById, edges: [], recordRelationship: {} },
+            {
+              draftBuilder: buildFollowUpDraft,
+              heading: (w) => "Follow up with " + (w ? w : prettySlug(anchorRec.owner)),
+              title: (r) => (r.summary ? "Follow up: " + r.summary : "Follow up"),
+              sourceKind: anchorRec.type === "decision" ? "decision" : "commitment",
+              idPrefix: "followup:",
+            },
+          ),
+      }),
+    );
+  }
+  card.appendChild(header);
+
+  // WP-Job-Vigilance-Wave2 UI (change 2) — work-forest breadcrumb (frame › job),
+  // the same hierarchy the Log shows, so a card reads in org context. Null (and
+  // omitted) when the void's record doesn't resolve to a job — degrade silently.
+  const hierarchy = vvBuildHierarchy(v);
+  if (hierarchy) card.appendChild(hierarchy);
 
   // Headline: what this is actually about (the present/blocked record), or the
   // server's one-line render when there's no record context (e.g. a sent digest).
@@ -2394,6 +2512,13 @@ function renderVoidCard(v) {
   const snooze = vvActionBtn("Snooze 7d", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
   const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
   actions.append(snooze, dismiss);
+
+  // WP-Job-Vigilance-Wave2 UI (change 3) — link to the original captured item.
+  // Reuse renderSourceBadge: anchor record → documentId → the source-reader panel
+  // the Log opens. No badge when the doc/metadata isn't loaded (invisible-by-absence).
+  if (anchorRec && anchorRec.documentId) {
+    appendSourceBadge(actions, anchorRec.documentId, anchorRec.verbatim);
+  }
 
   for (const [reason, label] of [["handling-it", "Handling it"], ["not-watching", "Not watching"], ["not-real", "Not real"]]) {
     reasons.appendChild(vvActionBtn(label, () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason })));
@@ -2477,9 +2602,22 @@ async function enterWatchingView() {
   if (arrivedSection) arrivedSection.hidden = true;
   if (emptyEl) emptyEl.hidden = true;
 
-  let data;
+  // WP-Job-Vigilance-Wave2 — the Watching tab is now the passive LEDGER. Fetch
+  // ?grouped=1 so we can (a) join silent-Nd onto the flat void cards and (b)
+  // split off the "Low-impact waiting" drawer (monitor/quiet-band + singleton
+  // voids the Focus chase-list suppresses). Feature-detects: when `grouped` is
+  // absent the ledger renders exactly today's flat behavior (ship gate G4).
+  // WP-Job-Vigilance-Wave2 UI — load the documentId→doc map so void cards can
+  // render the source badge (open/link to the original captured item). Best-effort;
+  // a failure just leaves badges absent (renderSourceBadge no-ops without _docsById).
+  await loadDocsMap();
+
+  let data, grouped;
   try {
-    data = await tauri.core.invoke("fetch_vigilance_voids");
+    const result = await fetchVigilanceGrouped();
+    if (!result) throw new Error("vigilance fetch failed");
+    data = result.voidData;
+    grouped = result.grouped; // null when flag off / old backend
   } catch (err) {
     console.warn("[main] fetch_vigilance_voids failed:", err);
     if (statusEl) {
@@ -2495,6 +2633,27 @@ async function enterWatchingView() {
 
   const voids = Array.isArray(data && data.voids) ? data.voids : [];
   const arrived = Array.isArray(data && data.arrived) ? data.arrived : [];
+
+  // Build the silent-Nd join (voidId -> ageDays) and the low-impact voidId set
+  // from grouped. Low-impact = voids on stalled jobs that DON'T make the primary
+  // chase-list (monitor/quiet band & low surfaceScore) OR singleton jobs.
+  const ageByVoid = new Map();
+  const lowImpactVoidIds = new Set();
+  if (grouped && Array.isArray(grouped.stalledJobs)) {
+    for (const job of grouped.stalledJobs) {
+      const isPrimary = stalledIsPrimary(job, stalledBand(job.jobKey));
+      const isSingleton = (job.voidCount || 0) <= 1 && !(job.blockerCount || 0);
+      for (const sv of job.scoredVoids || []) {
+        if (typeof sv.ageDays === "number") ageByVoid.set(sv.voidId, sv.ageDays);
+        if (!isPrimary || isSingleton) lowImpactVoidIds.add(sv.voidId);
+      }
+    }
+  }
+
+  // Partition the flat voids into the primary ledger vs the low-impact drawer.
+  const primaryVoids = voids.filter((v) => !lowImpactVoidIds.has(v.voidId));
+  const lowImpactVoids = voids.filter((v) => lowImpactVoidIds.has(v.voidId));
+
   if (subEl) {
     subEl.textContent =
       voids.length > 0
@@ -2508,9 +2667,25 @@ async function enterWatchingView() {
     arrivedSection.hidden = false;
   }
 
-  // Still-open voids.
+  // Still-open voids — primary list (each with motif + silent-Nd join).
   if (listEl) {
-    for (const v of voids) listEl.appendChild(renderVoidCard(v));
+    for (const v of primaryVoids) {
+      listEl.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+    }
+
+    // "Low-impact waiting" drawer — the monitor/quiet + singleton voids the Focus
+    // chase-list suppresses. Present for completeness/audit, collapsed by default.
+    if (lowImpactVoids.length) {
+      const drawer = makeCollapsible("Low-impact waiting", lowImpactVoids.length, false);
+      const note = document.createElement("p");
+      note.className = "watching-drawer-note";
+      note.textContent = "Lower-priority promises still being watched — not crowding the Focus chase-list.";
+      drawer.body.appendChild(note);
+      for (const v of lowImpactVoids) {
+        drawer.body.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+      }
+      listEl.appendChild(drawer.section);
+    }
   }
   // Empty state only when there's nothing open AND nothing recently arrived.
   if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
@@ -2695,6 +2870,10 @@ async function enterLogView() {
   // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
   // independently of the State-of-Play digest. Additive + silent if the flag's off.
   loadTodayPriority();
+
+  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list, just below the Focus
+  // rail. Additive + silent: renders nothing when grouped vigilance data is absent.
+  loadStalledChaseList();
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -3193,6 +3372,354 @@ async function loadTodayPriority() {
   const items = Array.isArray(res.items) ? res.items : [];
   if (items.length === 0 || !container) return;
   renderTodayPriority(container, res);
+}
+
+// ───────── WP-Job-Vigilance-Wave2 — Focus chase-list (Stalled / Chasing) ─────────
+//
+// The headline vigilance surface. Stalled jobs render as ranked cards on Today,
+// alongside the Focus priority rail — where the user looks for "what now," NOT in
+// a separate tab. The view is PURE RENDER: detection / rollup / ranking / gating /
+// receipts are all server-side and derived-at-read (GET /api/vigilance/voids?
+// grouped=1). We only display the payload + join the heat band from jobHeat
+// (GET /api/decision-log?full=1).
+//
+// Two-axis discipline (brief §4, load-bearing): heat band AND stalled-ness are
+// DISTINCT chips, never collapsed to one number. A pure surfaceScore sort buries a
+// silent-but-low-priority promise (Angelica's 35d hotlist = jobHeat 0.23 quiet);
+// the "silent Nd / N waiting" chips keep stalled-ness visible independently. Jobs
+// whose heat band is monitor/quiet (and not high-surfaceScore) drop to the
+// Watching-tab "Low-impact waiting" drawer rather than crowding the Focus top.
+
+// Band-gate: which bands count as "primary chase" (vs the low-impact drawer).
+const STALLED_PRIMARY_BANDS = new Set(["act_now", "verify", "soon"]);
+// surfaceScore floor that promotes a low-band job into the primary chase-list
+// anyway (so a high-stall low-heat job isn't silently dropped from Focus). Tunable
+// in-app per the G4b ~8-primary finding on Trisha's corpus.
+const STALLED_SURFACE_FLOOR = 0.5;
+
+// Namespaced to avoid the existing top-level BAND_LABEL (which lacks `quiet`).
+const STALLED_BAND_LABEL = {
+  act_now: "Act now",
+  verify: "Verify",
+  soon: "Soon",
+  monitor: "Monitor",
+  quiet: "Quiet",
+};
+
+// True when a stalled job belongs in the primary Focus chase-list (vs the
+// Watching-tab low-impact drawer). Band-gate OR high surfaceScore.
+function stalledIsPrimary(job, band) {
+  if (band && STALLED_PRIMARY_BANDS.has(band)) return true;
+  return (job.surfaceScore || 0) >= STALLED_SURFACE_FLOOR;
+}
+
+// Max ageDays across a stalled job's scoredVoids — the "oldest Nd silent" figure.
+function stalledMaxAge(job) {
+  const ages = (job.scoredVoids || []).map((v) => v.ageDays).filter((n) => typeof n === "number");
+  return ages.length ? Math.max(...ages) : null;
+}
+
+// The cached grouped vigilance payload + the jobHeat/jobNames join, so the
+// Watching ledger can reuse the same grouped data without a second fetch.
+let _vigilanceGrouped = null; // { stalledJobs, receipts, jobCount, rawVoidCount } | null
+let _vigilanceJobHeat = {};   // jobKey -> { band, heat, ... }
+let _vigilanceJobNames = {};  // jobKey -> canonical name
+// WP-Job-Vigilance-Wave2 UI — the same work-forest substrate the Log uses, so a
+// Watching card can render the frame › workstream › job breadcrumb + resolve its
+// anchor record (→ documentId for the source badge, → owner for "Draft follow-up").
+let _vigilanceFrames = [];        // CoordinationFrame[] (fid, name, parentFid, jobKeys, state)
+let _vigilanceRecordJobs = {};    // recordId -> "job:..." key
+let _vigilanceRecordsById = new Map(); // recordId -> record
+
+// Fetch the grouped vigilance payload + the full decision-log (for jobHeat/jobNames).
+// Returns null when grouped data is absent (flag off / old backend) so callers can
+// degrade cleanly. Caches into the _vigilance* module state for ledger reuse.
+async function fetchVigilanceGrouped() {
+  let voidData;
+  try {
+    voidData = await tauri.core.invoke("fetch_vigilance_voids", { grouped: true });
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids(grouped) failed:", err);
+    return null;
+  }
+  const grouped = voidData && voidData.grouped;
+  if (!grouped || !Array.isArray(grouped.stalledJobs)) {
+    // Feature-detect: no grouped object → flag off / old backend. Degrade silently.
+    _vigilanceGrouped = null;
+    return { voidData, grouped: null };
+  }
+  _vigilanceGrouped = grouped;
+
+  // Join the heat band from the full decision-log (free — jobHeat + jobNames).
+  try {
+    const full = await tauri.core.invoke("fetch_decision_log_full");
+    _vigilanceJobHeat = (full && full.jobHeat) || {};
+    _vigilanceJobNames = (full && full.jobNames) || {};
+    // WP-Job-Vigilance-Wave2 UI — also keep the work-forest hierarchy + the
+    // record join so each Watching card can show its frame › job breadcrumb,
+    // link to the source document, and draft a follow-up to the owner.
+    _vigilanceFrames = Array.isArray(full && full.frames) ? full.frames : [];
+    _vigilanceRecordJobs = (full && full.recordJobs) || {};
+    _vigilanceRecordsById = new Map();
+    for (const it of Array.isArray(full && full.records) ? full.records : []) {
+      const rec = it && it.record ? it.record : it;
+      if (rec && rec.recordId) _vigilanceRecordsById.set(rec.recordId, rec);
+    }
+  } catch (err) {
+    console.warn("[main] fetch_decision_log_full (vigilance join) failed:", err);
+    _vigilanceJobHeat = {};
+    _vigilanceJobNames = {};
+    _vigilanceFrames = [];
+    _vigilanceRecordJobs = {};
+    _vigilanceRecordsById = new Map();
+  }
+  return { voidData, grouped };
+}
+
+// Band for a stalled job, joined client-side from jobHeat (StalledJob carries no
+// band field — only jobP0). Tries the bare key and the job:-prefixed key.
+function stalledBand(jobKey) {
+  const jh = _vigilanceJobHeat[jobKey] || _vigilanceJobHeat["job:" + jobKey] || _vigilanceJobHeat[String(jobKey).replace(/^job:/, "")];
+  return jh && jh.band ? jh.band : null;
+}
+
+// Canonical display name for a stalled job (jobNames join; falls back to slug).
+function stalledName(jobKey) {
+  return (
+    _vigilanceJobNames[jobKey] ||
+    _vigilanceJobNames["job:" + jobKey] ||
+    _vigilanceJobNames[String(jobKey).replace(/^job:/, "")] ||
+    prettySlug(String(jobKey).replace(/^job:/, ""))
+  );
+}
+
+// Load + render the Stalled / Chasing chase-list on Today. Additive + silent:
+// renders nothing (and no error) when grouped data is absent.
+async function loadStalledChaseList() {
+  const container = document.getElementById("log-stalled-sections");
+  if (container) container.innerHTML = "";
+  if (!container) return;
+  const result = await fetchVigilanceGrouped();
+  if (!result || !result.grouped) return; // feature-detect: nothing to render
+  const grouped = result.grouped;
+  const jobs = Array.isArray(grouped.stalledJobs) ? grouped.stalledJobs.slice() : [];
+  if (!jobs.length) return;
+
+  // Receipt lookup by jobKey for the "Why stalled" drawer.
+  const receiptByJob = new Map();
+  for (const r of grouped.receipts || []) receiptByJob.set(r.jobKey, r);
+
+  // Sort by surfaceScore desc (the chase-list rank), then partition into primary
+  // chase vs low-impact (the latter is surfaced in the Watching ledger, not here).
+  jobs.sort((a, b) => (b.surfaceScore || 0) - (a.surfaceScore || 0));
+  const primary = jobs.filter((j) => stalledIsPrimary(j, stalledBand(j.jobKey)));
+  if (!primary.length) return;
+
+  const section = makeCollapsible("Stalled / Chasing", primary.length, true);
+  const sub = document.createElement("div");
+  sub.className = "priority-sub";
+  sub.textContent = "Promises stalled on someone else — what's waiting, who's on the hook, how long it's been silent.";
+  section.body.appendChild(sub);
+
+  for (const job of primary) {
+    section.body.appendChild(renderStalledJobCard(job, receiptByJob.get(job.jobKey) || null));
+  }
+  container.appendChild(section.section);
+}
+
+// One stalled-job card: name + two-axis chips + "{voidCount} open / oldest Nd
+// silent" + the top void's render string + a "Why stalled" drawer (the receipt).
+function renderStalledJobCard(job, receipt) {
+  const card = document.createElement("div");
+  card.className = "priority-card stalled-card";
+
+  const band = stalledBand(job.jobKey);
+  const maxAge = stalledMaxAge(job);
+
+  // Top row: job name + two-axis chips (heat band AND stalled-ness — distinct).
+  const top = document.createElement("div");
+  top.className = "priority-card-top stalled-top";
+  const name = document.createElement("span");
+  name.className = "stalled-jobname";
+  name.textContent = stalledName(job.jobKey);
+  top.appendChild(name);
+
+  // Axis 1 — priority/heat band (joined from jobHeat).
+  if (band) {
+    const heatChip = document.createElement("span");
+    heatChip.className = "stalled-chip stalled-chip-band stalled-band-" + band;
+    heatChip.textContent = STALLED_BAND_LABEL[band] || band;
+    top.appendChild(heatChip);
+  }
+  // Axis 2 — stalled-ness (silent Nd), ALWAYS shown, independent of heat. This is
+  // the augmented-urgency signal: a chronically-silent promise stays visible even
+  // when base priority (heat) is low. Brief §4.1/§4.2 — do not collapse to one number.
+  if (typeof maxAge === "number") {
+    const silentChip = document.createElement("span");
+    silentChip.className = "stalled-chip stalled-chip-silent";
+    silentChip.textContent = `Silent ${maxAge}d`;
+    top.appendChild(silentChip);
+  }
+  card.appendChild(top);
+
+  // Count line: "{voidCount} open / oldest Nd silent".
+  const countLine = document.createElement("div");
+  countLine.className = "stalled-count";
+  const parts = [`${job.voidCount} open`];
+  if (typeof maxAge === "number") parts.push(`oldest ${maxAge}d silent`);
+  if (job.blockerCount) parts.push(`${job.blockerCount} downstream blocked`);
+  countLine.textContent = parts.join(" · ");
+  card.appendChild(countLine);
+
+  // The top void's verify-framed render string ("Waiting on …") — prefer the
+  // server-authored copy. Drawn from the receipt's first void, falling back to
+  // scoredVoids order.
+  const topVoid = receipt && Array.isArray(receipt.voids) && receipt.voids.length ? receipt.voids[0] : null;
+  if (topVoid && topVoid.render) {
+    const headline = document.createElement("p");
+    headline.className = "stalled-headline";
+    headline.textContent = topVoid.render;
+    card.appendChild(headline);
+  }
+
+  // "Why stalled" drawer — the typed JobVigilanceReceipt graph, no LLM prose.
+  if (receipt) {
+    card.appendChild(renderWhyStalledDrawer(receipt));
+  }
+
+  return card;
+}
+
+// The "Why stalled" drawer: a server-grounded typed graph — the waiting-on
+// records per void, the per-void score breakdown, and the typed blockageEdges.
+// NO LLM-generated prose (brief §3.1 / ship gate G2).
+function renderWhyStalledDrawer(receipt) {
+  const wrap = document.createElement("div");
+  wrap.className = "stalled-drawer";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "stalled-drawer-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.textContent = "Why stalled";
+
+  const body = document.createElement("div");
+  body.className = "stalled-drawer-body";
+  body.hidden = true;
+
+  toggle.addEventListener("click", () => {
+    const open = body.hidden;
+    body.hidden = !open;
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.textContent = open ? "Hide why stalled" : "Why stalled";
+  });
+
+  // Per-void breakdown: motif + owner + age + waiting-on records + score.
+  const voids = Array.isArray(receipt.voids) ? receipt.voids : [];
+  if (voids.length) {
+    const vList = document.createElement("ul");
+    vList.className = "stalled-void-list";
+    for (const v of voids) {
+      const li = document.createElement("li");
+      li.className = "stalled-void";
+
+      const head = document.createElement("div");
+      head.className = "stalled-void-head";
+      const motif = v.motif ? `<span class="stalled-motif">${escapeHtml(stalledMotifLabel(v.motif))}</span>` : "";
+      const owner = vvIsNamedSlug(v.owner) ? ` · ${escapeHtml(vvHumanizeSlug(v.owner))}` : "";
+      const age = typeof v.ageDays === "number" ? ` · ${v.ageDays}d silent` : "";
+      head.innerHTML = `${motif}${owner}${age}`;
+      li.appendChild(head);
+
+      // Verify-framed render line (server-authored) or the summary.
+      const line = document.createElement("p");
+      line.className = "stalled-void-summary";
+      line.textContent = v.render || v.summary || "";
+      li.appendChild(line);
+
+      // Citation-checked verbatim, ONLY when verified (trust property).
+      if (v.verbatim && v.verbatimVerified) {
+        const q = document.createElement("blockquote");
+        q.className = "stalled-void-quote";
+        q.textContent = `“${v.verbatim}”`;
+        li.appendChild(q);
+      }
+
+      // Waiting-on records (the enabling records this void is blocked behind).
+      const waitingOn = Array.isArray(v.waitingOn) ? v.waitingOn : [];
+      if (waitingOn.length) {
+        const wo = document.createElement("div");
+        wo.className = "stalled-waiting";
+        const lab = document.createElement("span");
+        lab.className = "stalled-waiting-label";
+        lab.textContent = "Waiting on";
+        wo.appendChild(lab);
+        const ul = document.createElement("ul");
+        ul.className = "stalled-waiting-list";
+        for (const w of waitingOn) {
+          const wli = document.createElement("li");
+          wli.textContent = w.summary || w.recordId || "";
+          ul.appendChild(wli);
+        }
+        wo.appendChild(ul);
+        li.appendChild(wo);
+      }
+
+      // Per-void score breakdown (residual / blockage / severity / total) — the
+      // typed numbers, shown plainly for the audit trail (not narrated).
+      const sc = v.score || {};
+      if (sc && (sc.total != null || sc.residual != null)) {
+        const score = document.createElement("div");
+        score.className = "stalled-score";
+        const fmt = (n) => (typeof n === "number" ? n.toFixed(2) : "—");
+        score.textContent = `score ${fmt(sc.total)} (residual ${fmt(sc.residual)} · blockage ${fmt(sc.blockage)} · severity ${fmt(sc.severity)})`;
+        li.appendChild(score);
+      }
+
+      vList.appendChild(li);
+    }
+    body.appendChild(vList);
+  }
+
+  // Typed blockage edges: dependent → blocker, with status.
+  const edges = Array.isArray(receipt.blockageEdges) ? receipt.blockageEdges : [];
+  if (edges.length) {
+    const eHead = document.createElement("div");
+    eHead.className = "stalled-edges-head";
+    eHead.textContent = "Blocking dependencies";
+    body.appendChild(eHead);
+    const eList = document.createElement("ul");
+    eList.className = "stalled-edges-list";
+    for (const e of edges) {
+      const eli = document.createElement("li");
+      eli.className = "stalled-edge";
+      const status = e.status ? ` <span class="stalled-edge-status">(${escapeHtml(e.status)})</span>` : "";
+      eli.innerHTML =
+        `<span class="stalled-edge-dep">${escapeHtml(e.dependentSummary || e.dependentRecordId || "")}</span>` +
+        ` <span class="stalled-edge-arrow">needs</span> ` +
+        `<span class="stalled-edge-blk">${escapeHtml(e.blockerSummary || e.blockerRecordId || "")}</span>${status}`;
+      eList.appendChild(eli);
+    }
+    body.appendChild(eList);
+  }
+
+  wrap.append(toggle, body);
+  return wrap;
+}
+
+// Human-readable motif label. Motif keys come from the server (M1/M2 family);
+// fall back to a prettified slug for any future motif.
+const STALLED_MOTIF_LABEL = {
+  "m1-promise": "Promise outstanding",
+  "m2-blocked": "Blocked dependency",
+  "m3-contradiction": "Unresolved conflict",
+  egress: "Awaiting reply",
+  "contradicts-unresolved": "Needs reconciliation",
+  "depends-on-incomplete": "Blocked dependency",
+  "overdue-silent": "Overdue · silent",
+};
+function stalledMotifLabel(motif) {
+  return STALLED_MOTIF_LABEL[motif] || prettySlug(String(motif || ""));
 }
 
 async function sendPriorityGesture(item, gestureType, reason, snoozeUntil, handoffNote) {
@@ -6545,6 +7072,30 @@ function buildShareDraft(rec, related, who) {
   return lines.join("\n");
 }
 
+// WP-Job-Vigilance-Wave2 UI — the follow-up flavour of the share draft: a nudge to
+// the person we're waiting on about the outstanding promise, rather than a
+// decision broadcast. Same deterministic shape as buildShareDraft; consumed by
+// openShareMenu via the draftBuilder opt so the editor UI is reused unchanged.
+function buildFollowUpDraft(rec, _related, who) {
+  // Prefer the record owner (the person who made the promise) for the greeting.
+  const target = who || rec.owner || "";
+  const firstName = target ? prettySlug(target).split(/[ ,]/)[0] : "";
+  const summary = (rec.summary || "").trim();
+  const verbatim = (rec.verbatim || "").trim();
+  const lines = [];
+  if (firstName) lines.push(`Hi ${firstName},`, "");
+  lines.push("Following up on this — wanted to check where it stands:");
+  lines.push("");
+  if (summary) lines.push("• " + summary);
+  // The promise in its own words (the source line), when it adds beyond the label.
+  if (verbatim && verbatim.toLowerCase() !== summary.toLowerCase()) {
+    lines.push("");
+    lines.push("Original note: “" + verbatim + "”");
+  }
+  lines.push("", "No rush if it's in hand — just let me know the status when you get a chance.");
+  return lines.join("\n");
+}
+
 // WP-Edit-Capture — record how the user changed our generated share draft, as a
 // retained event on the decision-log overlay (same /edit event log as the inline
 // field edits). Best-effort: a capture failure must never block the share. Only
@@ -6662,7 +7213,20 @@ function openLinkedMenu(anchorBtn, heading, recs) {
   }, 0);
 }
 
-function openShareMenu(anchorBtn, rec, ctx) {
+// The inline editable-draft popover. Default mode is the Log's "Share decision"
+// flow; `opts` GENERALIZES it so other surfaces (e.g. the Watching follow-up)
+// reuse the SAME editor UI with their own draft text + titling instead of forking
+// it. opts: { draftBuilder(rec, related, who)->string, heading(who)->string,
+// title(rec)->string, sourceKind, idPrefix }. Omitted fields fall back to the
+// decision-share defaults, so the existing Log call site is unchanged in behavior.
+function openShareMenu(anchorBtn, rec, ctx, opts) {
+  opts = opts || {};
+  const draftBuilder = opts.draftBuilder || buildShareDraft;
+  const headingFor = opts.heading || ((w) => (w ? "Share with " + w : "Share this decision"));
+  const titleFor = opts.title || ((r) => (r.summary ? "Share decision: " + r.summary : "Share decision"));
+  const sourceKind = opts.sourceKind || "decision";
+  const idPrefix = opts.idPrefix || "share:";
+
   const wasOpen = !!_openReasonMenu;
   closeDismissReasonMenu();
   if (wasOpen) return;
@@ -6677,7 +7241,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
 
   const heading = document.createElement("div");
   heading.className = "record-reason-heading";
-  heading.textContent = who ? "Share with " + who : "Share this decision";
+  heading.textContent = headingFor(who);
   menu.appendChild(heading);
 
   const what = document.createElement("div");
@@ -6708,7 +7272,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
 
   const draft = document.createElement("textarea");
   draft.className = "record-share-draft";
-  draft.value = buildShareDraft(rec, related, who);
+  draft.value = draftBuilder(rec, related, who);
   // Snapshot what WE generated, so a send/copy can record how the user changed it
   // — the learning signal for how the engine's drafting is off (WP-Edit-Capture).
   const generatedDraft = draft.value;
@@ -6734,13 +7298,13 @@ function openShareMenu(anchorBtn, rec, ctx) {
     e.stopPropagation();
     captureShareDraftEdit(rec, generatedDraft, draft.value, "outbox");
     stageOutboxDraft({
-      id: "share:" + (rec.recordId || rec.summary || ""),
-      title: rec.summary ? "Share decision: " + rec.summary : "Share decision",
+      id: idPrefix + (rec.recordId || rec.summary || ""),
+      title: titleFor(rec),
       detail: draft.value,
       detailGenerated: generatedDraft, // what we drafted, so the server can keep the delta
       intent: "email",
       executor: who || rec.owner || undefined,
-      sourceKind: "decision",
+      sourceKind,
       sourceLabel: rec.summary || rec.recordId || "",
     });
     closeDismissReasonMenu();

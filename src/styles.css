@@ -1807,6 +1807,17 @@ code {
 }
 
 /* Compact meta row: pill + cadence, at the top. */
+/* WP-Job-Vigilance-Wave2 UI — two-zone card header mirroring the Log decision
+   card's record-header-split: trigger/motif meta LEFT, the "Draft follow-up"
+   action badge top-RIGHT. The meta keeps its own row layout as the left zone. */
+.watching-header {
+  margin-bottom: 4px;
+}
+.watching-header .watching-meta {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .watching-meta {
   display: flex;
   align-items: center;
@@ -1829,6 +1840,28 @@ code {
 .watching-when {
   font-size: 11px;
   color: var(--glass-text-dim);
+}
+/* WP-Job-Vigilance-Wave2 — motif (graph-shape that detected the void). The
+   stalled-ness silent-days signal now folds (rounded, neutral) into the trigger
+   pill itself — no standalone red score. */
+.watching-motif {
+  font-size: 10.5px;
+  color: var(--glass-text-dim);
+}
+/* WP-Job-Vigilance-Wave2 UI — work-forest breadcrumb (frame › workstream › job),
+   the same hierarchy the Log groups by, rendered as quiet wayfinding context. */
+.watching-hierarchy {
+  margin: 1px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--glass-text-dim);
+  letter-spacing: 0.01em;
+  word-break: break-word;
+}
+.watching-drawer-note {
+  font-size: 11.5px;
+  color: var(--glass-text-faint);
+  margin: 4px 0 8px;
 }
 
 /* Headline — what the void is about. */
