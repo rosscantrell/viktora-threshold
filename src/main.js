@@ -3308,6 +3308,49 @@ function wireSopLensToggle() {
   });
 }
 
+// ───────── WP-WorkForest-Native-SoP (UI-3) — Frame SoP, on Decisions frame headers ─────────
+//
+// A "state of play" affordance on Project/Suggested frame headers (maturity-gated —
+// Facet/Needs-evidence frames are too thin to digest). Clicking toggles an inline
+// expansion that lazy-loads the Frame SoP digest via fetch_sop(level='frame', id=fid).
+// Mirrors the Job SoP / entity-Definition lazy-load shape: fetch once, cache on the
+// panel element, toggle visibility thereafter. Additive + silent — when the endpoint
+// returns {available:false} or no prose, the affordance quietly removes itself.
+
+// Maturity gate — only Project/Suggested frames get a Frame SoP affordance.
+function frameSoPEligible(frame) {
+  return !!frame && !frame.__unframed && (frame.state === "Project" || frame.state === "Suggested");
+}
+
+// Render a Frame SoP digest into an inline panel. Compact (no licence footnote) so
+// the expansion stays light beneath the frame header. Lazy: fetches on first open,
+// caches its result on the panel's dataset, reuses the cached DOM on later toggles.
+// Returns true when the panel now holds prose, false when there was nothing to show
+// (the caller then quietly retires the trigger).
+async function renderFrameSoP(panel, fid) {
+  if (panel.dataset.loaded === "1") return true; // already populated — toggle only
+  panel.innerHTML = '<div class="sop-status">Composing this frame’s state of play…</div>';
+  const data = await loadSoP("frame", fid, null);
+  if (!data) {
+    panel.dataset.loaded = "empty";
+    panel.innerHTML = "";
+    return false;
+  }
+  panel.dataset.loaded = "1";
+  panel.innerHTML = "";
+  if (data.maturity) {
+    const tag = document.createElement("div");
+    tag.className = "sop-maturity-tag";
+    tag.textContent = String(data.maturity);
+    panel.appendChild(tag);
+  }
+  const body = document.createElement("div");
+  body.className = "sop-frame-body";
+  renderSoPProse(body, data, { compact: true });
+  panel.appendChild(body);
+  return true;
+}
+
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
 // rendered on the PER-PERSON digest and scoped to the viewer (`viewerSlug`):
 //   owner-side  — decisions the viewer made that touch someone who wasn't there → "consider looping in X"
@@ -5859,6 +5902,42 @@ function buildFrameHeader(frame) {
     el.appendChild(heat);
   }
   if (frame.state !== "Project") el.classList.add("frame-header-soft");
+  // UI-3 — Frame SoP affordance. Maturity-gated to Project/Suggested frames (the
+  // ones mature enough to digest). Built below; the trigger sits inline in the
+  // header row, the panel is a full-width child that stacks beneath when expanded.
+  let sopToggle = null, sopPanel = null;
+  if (frameSoPEligible(frame) && frame.fid != null) {
+    sopToggle = document.createElement("span");
+    sopToggle.className = "sop-frame-toggle";
+    sopToggle.setAttribute("role", "button");
+    sopToggle.tabIndex = 0;
+    sopToggle.setAttribute("aria-expanded", "false");
+    sopToggle.title = "State of play for this frame";
+    sopToggle.textContent = "State of play";
+
+    sopPanel = document.createElement("div");
+    sopPanel.className = "sop-frame-panel";
+    sopPanel.hidden = true;
+
+    const toggle = async () => {
+      const open = sopToggle.getAttribute("aria-expanded") === "true";
+      if (open) {
+        sopToggle.setAttribute("aria-expanded", "false");
+        sopPanel.hidden = true;
+        return;
+      }
+      // Opening — lazy-load on first expand; retire the trigger if nothing came back.
+      sopToggle.setAttribute("aria-expanded", "true");
+      sopPanel.hidden = false;
+      const ok = await renderFrameSoP(sopPanel, frame.fid);
+      if (!ok) { sopToggle.remove(); sopPanel.remove(); }
+    };
+    sopToggle.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    sopToggle.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); toggle(); }
+    });
+    el.appendChild(sopToggle);
+  }
   // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
   const edit = document.createElement("span");
   edit.className = "frame-edit-btn";
@@ -5868,6 +5947,8 @@ function buildFrameHeader(frame) {
   edit.title = "Rename, change type, or merge";
   edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frame); });
   el.appendChild(edit);
+  // Full-width inline SoP panel stacks last, beneath the header row (flex-basis:100%).
+  if (sopPanel) el.appendChild(sopPanel);
   return el;
 }
 function buildWsHeader(name) {
