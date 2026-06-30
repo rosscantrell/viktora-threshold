@@ -3351,6 +3351,44 @@ async function renderFrameSoP(panel, fid) {
   return true;
 }
 
+// ───────── WP-WorkForest-Native-SoP (UI-4) — Job SoP, lazy on job rows ─────────
+//
+// The collapsible job rows already exist (Focus rail renderJobGroup + Decisions
+// project-lens job groups). On expand, lazy-load the Job SoP digest — the
+// missing-middle per-job prose + action line — via fetch_sop(level='job', id=jobKey).
+// Mirrors the entity-Definition lazy-load (lazyEntityDefinition): fetch once per
+// jobKey, cache the promise, and render the resolved prose into a calm inline block.
+// Additive + silent — when there's no digest, the block simply never appears.
+
+const _jobSoPCache = new Map(); // jobKey -> Promise<SoP payload | null>
+
+// Lazy fetch + cache of a Job SoP payload. Returns the full payload (so the caller
+// can render prose + sections), or null when unavailable / unreachable.
+function lazyJobSoP(jobKey) {
+  if (_jobSoPCache.has(jobKey)) return _jobSoPCache.get(jobKey);
+  const p = loadSoP("job", jobKey, null).catch(() => null);
+  _jobSoPCache.set(jobKey, p);
+  return p;
+}
+
+// UI-4 — append a Job SoP digest to a (collapsed) job-row body. Inserts a hidden
+// block first, then reveals it once the lazy fetch resolves with prose — so a job
+// with no digest shows nothing extra and the layout never jumps before content.
+// Placed at the TOP of the body (before the action cards) as the per-job overview.
+function appendJobSoP(body, jobKey) {
+  if (!body || !jobKey) return;
+  const block = document.createElement("div");
+  block.className = "sop-job-panel";
+  block.hidden = true;
+  // Keep it first in the body even though the cards may already be appended.
+  body.insertBefore(block, body.firstChild);
+  lazyJobSoP(jobKey).then((data) => {
+    if (!data) return; // silent — no digest for this job
+    renderSoPProse(block, data, { compact: true });
+    block.hidden = false;
+  });
+}
+
 // WP-Cohesion-Operators — "worth looping in" rail (deterministic INFORM operator),
 // rendered on the PER-PERSON digest and scoped to the viewer (`viewerSlug`):
 //   owner-side  — decisions the viewer made that touch someone who wasn't there → "consider looping in X"
@@ -4161,6 +4199,8 @@ function renderJobGroup(parentJob, jobHeader, items) {
         }
         body.appendChild(card);
       }
+      // UI-4 — the per-job overview prose, lazy-loaded above the cards.
+      if (parentJob) appendJobSoP(body, parentJob);
     },
   });
 }
@@ -7089,12 +7129,24 @@ function renderDecisions() {
       if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
     }
 
+    // UI-4 — Job SoP digest on Decisions project-lens job groups. The group key is
+    // `job:<slug>` (the jobKey). Lazy: injected on first expand (not at render time,
+    // so we don't fan out a fetch per job on every list paint).
+    const jobSoPEligible = _decisionsLens === "project" && !grp.muted && /^job:/.test(grp.key || "");
+    let jobSoPDone = false;
+    const ensureJobSoP = () => {
+      if (jobSoPDone || !jobSoPEligible) return;
+      jobSoPDone = true;
+      appendJobSoP(body, grp.key);
+    };
+    if (expanded) ensureJobSoP(); // already open on render — load now
+
     head.addEventListener("click", () => {
       const willExpand = body.hidden;
       body.hidden = !willExpand;
       head.setAttribute("aria-expanded", willExpand ? "true" : "false");
       chev.textContent = willExpand ? "▾" : "▸";
-      if (willExpand) _decisionsExpanded.add(grp.key);
+      if (willExpand) { _decisionsExpanded.add(grp.key); ensureJobSoP(); }
       else _decisionsExpanded.delete(grp.key);
     });
 
