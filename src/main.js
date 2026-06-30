@@ -2336,15 +2336,20 @@ function renderVoidCard(v, opts) {
   // Compact meta row at the TOP: trigger pill + motif + cadence + silent-Nd.
   const meta = document.createElement("div");
   meta.className = "watching-meta";
-  const label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  // WP-Job-Vigilance-Wave2 UI (change 1) — fold a ROUNDED whole-day silent count
+  // into the trigger pill's existing neutral styling ("Overdue · silent · 25d")
+  // rather than a standalone red raw-float span. Keeps the duration signal; kills
+  // the red score Ross flagged.
+  let label = VOID_TRIGGER_LABEL[v.trigger] || v.trigger || "Watching";
+  if (ageDays != null) {
+    label += ` · ${Math.round(ageDays)}d`;
+  }
   let metaHtml = `<span class="watching-pill">${escapeHtml(label)}</span>`;
   // Motif (additive, server-side) — the graph-shape that detected this void.
   if (v.motif) {
     metaHtml += `<span class="watching-motif">${escapeHtml(stalledMotifLabel(v.motif))}</span>`;
   }
-  if (ageDays != null) {
-    metaHtml += `<span class="watching-silent">${ageDays}d silent</span>`;
-  } else if (typeof v.whenDays === "number") {
+  if (ageDays == null && typeof v.whenDays === "number") {
     metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
   }
   meta.innerHTML = metaHtml;
