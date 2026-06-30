@@ -3855,7 +3855,8 @@ button.record-action-badge {
   border-radius: 8px;
   resize: vertical;
   box-sizing: border-box;
-  min-height: 150px;
+  min-height: 84px;
+  overflow-y: hidden;
 }
 .record-share-draft:focus {
   outline: none;

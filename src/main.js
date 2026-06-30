@@ -6439,8 +6439,14 @@ function openShareMenu(anchorBtn, rec, ctx) {
 
   const draft = document.createElement("textarea");
   draft.className = "record-share-draft";
-  draft.rows = 4;
   draft.value = buildShareDraft(rec, related, who);
+  // Grow to fit the whole draft so nothing is clipped; the popover itself scrolls
+  // if the result is very tall. Re-runs as the user edits.
+  const autosizeDraft = () => {
+    draft.style.height = "auto";
+    draft.style.height = Math.min(draft.scrollHeight + 2, 460) + "px";
+  };
+  draft.addEventListener("input", autosizeDraft);
   menu.appendChild(draft);
 
   // Same two affordances as every other drafted email: stage it into the Outlook
@@ -6482,6 +6488,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
   menu.appendChild(btnRow);
 
   document.body.appendChild(menu);
+  autosizeDraft(); // size to content now that it's in the DOM, before positioning
   positionPopover(menu, anchorBtn);
   _openReasonMenu = menu;
   setTimeout(() => {
