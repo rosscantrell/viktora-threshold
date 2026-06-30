@@ -6237,24 +6237,22 @@ function buildActionBadge(rec, ctx) {
     const e = deps.find((d) => d.recordA === rec.recordId);
     const blocker = e && recordById(ctx, e.recordB);
     if (blocker) {
-      const due = blocker.due ? " · due " + formatDueDate(blocker.due) : "";
       return makeBadge("is-blocked", "Blocked", {
-        title: "Blocked on " + (blocker.summary || "") + due + " — click to view",
-        onClick: () => jumpToRecord(blocker.recordId),
+        title: "Blocked by: " + (blocker.summary || "") + " — click to see it",
+        onClick: (el) => openLinkedMenu(el, "This is blocked by", [blocker]),
       });
     }
     return makeBadge("is-blocked", "Blocked");
   }
   if (ak.kind === "dependency_to_unblock") {
     const waiters = deps.filter((d) => d.recordB === rec.recordId);
-    const label = waiters.length ? `${waiters.length} waiting` : "Others waiting";
-    const first = waiters[0] && recordById(ctx, waiters[0].recordA);
-    if (first) {
-      const who = first.owner ? prettySlug(first.owner) + "’s " : "";
-      const extra = waiters.length > 1 ? ` (+${waiters.length - 1} more)` : "";
+    const recs = waiters.map((d) => recordById(ctx, d.recordA)).filter(Boolean);
+    const label = recs.length ? `${recs.length} waiting` : "Others waiting";
+    if (recs.length) {
+      const noun = recs.length === 1 ? "item is" : "items are";
       return makeBadge("is-waiting", label, {
-        title: "Unblocks " + who + (first.summary || "") + extra + " — click to view",
-        onClick: () => jumpToRecord(first.recordId),
+        title: `${recs.length} ${noun} waiting on this — click to see ${recs.length === 1 ? "it" : "them"}`,
+        onClick: (el) => openLinkedMenu(el, `Waiting on this (${recs.length})`, recs),
       });
     }
     return makeBadge("is-waiting", label);
@@ -6270,8 +6268,8 @@ function buildActionBadge(rec, ctx) {
     const other = e && recordById(ctx, e.recordA === rec.recordId ? e.recordB : e.recordA);
     if (other) {
       return makeBadge("is-conflict", "Conflict", {
-        title: "Conflicts with " + (other.summary || "") + " — click to view",
-        onClick: () => jumpToRecord(other.recordId),
+        title: "Conflicts with: " + (other.summary || "") + " — click to see it",
+        onClick: (el) => openLinkedMenu(el, "Conflicts with", [other]),
       });
     }
     return makeBadge("is-conflict", "Conflict");
@@ -6280,8 +6278,10 @@ function buildActionBadge(rec, ctx) {
     return makeBadge("is-decision", "Decision needed");
   }
   if (ak.kind === "decision_to_broadcast") {
-    return makeBadge("is-decision", "Decision to share", {
-      title: "Click to draft a share note",
+    // Action verb, not a noun label (Trisha 2026-06-29: "decision to share" read
+    // like a label; needs to look like a button that does something).
+    return makeBadge("is-decision", "Share decision", {
+      title: "Click to draft a note sharing this decision",
       onClick: (el) => openShareMenu(el, rec, ctx),
     });
   }
@@ -6317,6 +6317,90 @@ function buildShareDraft(rec, related, who) {
   return lines.join("\n");
 }
 
+// Shared viewport-fit positioning for the card popovers: open below the anchor
+// if there's room, flip above when not, else cap height + scroll on the larger
+// side. Keeps the content reachable on a small window.
+function positionPopover(menu, anchorBtn) {
+  const r = anchorBtn.getBoundingClientRect();
+  const margin = 8;
+  menu.style.position = "fixed";
+  menu.style.left = `${Math.round(Math.min(Math.max(margin, r.left), window.innerWidth - menu.offsetWidth - margin))}px`;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  const needed = menu.offsetHeight;
+  if (needed <= spaceBelow) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  } else if (needed <= spaceAbove) {
+    menu.style.top = `${Math.round(r.top - needed - 4)}px`;
+  } else if (spaceBelow >= spaceAbove) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.maxHeight = `${Math.round(spaceBelow)}px`;
+  } else {
+    menu.style.top = `${margin}px`;
+    menu.style.maxHeight = `${Math.round(spaceAbove)}px`;
+  }
+}
+
+// A compact read-only view of a linked record, shown inline in the dependency
+// popover so the relationship is visible in place — no jumping away (Trisha
+// 2026-06-29: the jump is disorienting with no way back).
+function renderLinkedRecord(rec) {
+  const row = document.createElement("div");
+  row.className = "linked-rec";
+  row.dataset.type = rec.type || "";
+  const head = document.createElement("div");
+  head.className = "linked-rec-head";
+  const t = document.createElement("span");
+  t.className = "linked-rec-type";
+  t.dataset.type = rec.type || "";
+  t.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(t);
+  const bits = [];
+  if (rec.owner) bits.push(prettySlug(rec.owner));
+  if (rec.due) bits.push("due " + formatDueDate(rec.due));
+  if (bits.length) {
+    const meta = document.createElement("span");
+    meta.className = "linked-rec-meta";
+    meta.textContent = bits.join(" · ");
+    head.appendChild(meta);
+  }
+  row.appendChild(head);
+  const sum = document.createElement("div");
+  sum.className = "linked-rec-summary";
+  sum.textContent = rec.summary || "";
+  row.appendChild(sum);
+  return row;
+}
+
+// Dependency popover — shows the blocker / waiting / conflicting record(s) inline
+// under the pill, anchored + viewport-fit. Reuses the single-open menu infra.
+function openLinkedMenu(anchorBtn, heading, recs) {
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+  recs = (recs || []).filter(Boolean);
+  if (!recs.length) return;
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu record-linked-menu";
+  menu.setAttribute("role", "dialog");
+
+  const h = document.createElement("div");
+  h.className = "record-reason-heading";
+  h.textContent = heading;
+  menu.appendChild(h);
+
+  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec));
+
+  document.body.appendChild(menu);
+  positionPopover(menu, anchorBtn);
+  _openReasonMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
+
 function openShareMenu(anchorBtn, rec, ctx) {
   const wasOpen = !!_openReasonMenu;
   closeDismissReasonMenu();
@@ -6345,12 +6429,10 @@ function openShareMenu(anchorBtn, rec, ctx) {
     ctxLbl.className = "record-share-ctxlabel";
     ctxLbl.textContent = "Relates to";
     menu.appendChild(ctxLbl);
-    for (const r of related.slice(0, 4)) {
-      const line = document.createElement("button");
-      line.type = "button";
+    for (const r of related.slice(0, 3)) {
+      const line = document.createElement("div");
       line.className = "record-share-ctxitem";
       line.textContent = r.phrase + ": " + shortenSummary(r.summary, 48);
-      line.addEventListener("click", (e) => { e.stopPropagation(); closeDismissReasonMenu(); jumpToRecord(r.otherId); });
       menu.appendChild(line);
     }
   }
@@ -6400,26 +6482,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
   menu.appendChild(btnRow);
 
   document.body.appendChild(menu);
-  // Fit to viewport: open below the pill if there's room, else flip above; if it
-  // fits neither way, cap the height on the larger side and let the body scroll.
-  const r = anchorBtn.getBoundingClientRect();
-  const margin = 8;
-  menu.style.position = "fixed";
-  menu.style.left = `${Math.round(Math.min(Math.max(margin, r.left), window.innerWidth - menu.offsetWidth - margin))}px`;
-  const spaceBelow = window.innerHeight - r.bottom - margin;
-  const spaceAbove = r.top - margin;
-  const needed = menu.offsetHeight;
-  if (needed <= spaceBelow) {
-    menu.style.top = `${Math.round(r.bottom + 4)}px`;
-  } else if (needed <= spaceAbove) {
-    menu.style.top = `${Math.round(r.top - needed - 4)}px`;
-  } else if (spaceBelow >= spaceAbove) {
-    menu.style.top = `${Math.round(r.bottom + 4)}px`;
-    menu.style.maxHeight = `${Math.round(spaceBelow)}px`;
-  } else {
-    menu.style.top = `${margin}px`;
-    menu.style.maxHeight = `${Math.round(spaceAbove)}px`;
-  }
+  positionPopover(menu, anchorBtn);
   _openReasonMenu = menu;
   setTimeout(() => {
     document.addEventListener("click", _onOutsideReasonClick, true);
