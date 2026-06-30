@@ -2387,7 +2387,15 @@ function renderVoidCard(v, opts) {
   // flat void carries forward-looking whenDays, not the stalled "N days silent").
   const ageDays = opts && typeof opts.ageDays === "number" ? opts.ageDays : null;
 
-  // Compact meta row at the TOP: trigger pill + motif + cadence + silent-Nd.
+  // WP-Job-Vigilance-Wave2 UI — two-zone header (mirrors the Log decision card's
+  // `record-header record-header-split`): the trigger/motif meta sits LEFT, and an
+  // optional top-right ACTION badge ("Draft follow-up") sits RIGHT. Placing the
+  // trigger at top-right (not the mid-card action row) makes positionPopover anchor
+  // its inline editor cleanly, exactly like the Log's "Share decision ›".
+  const header = document.createElement("div");
+  header.className = "record-header record-header-split watching-header";
+
+  // Compact meta zone (LEFT): trigger pill + motif + cadence + silent-Nd.
   const meta = document.createElement("div");
   meta.className = "watching-meta";
   // WP-Job-Vigilance-Wave2 UI (change 1) — fold a ROUNDED whole-day silent count
@@ -2407,7 +2415,43 @@ function renderVoidCard(v, opts) {
     metaHtml += `<span class="watching-when">expected within ~${v.whenDays}d</span>`;
   }
   meta.innerHTML = metaHtml;
-  card.appendChild(meta);
+  header.appendChild(meta);
+
+  // Resolve the void's anchor record once — used by the top-right follow-up badge
+  // and (below) the source badge in the action row.
+  const anchorRec = vvVoidRecord(v);
+
+  // WP-Job-Vigilance-Wave2 UI (change 4) — top-right "Draft follow-up" ACTION badge,
+  // mirroring the Log's "Share decision ›" placement + treatment exactly: a
+  // makeBadge("is-decision", …, { onClick }) so it gets the blue is-decision style +
+  // is-clickable hover + the CSS `›` caret (no bordered pill). Clicking opens the
+  // SAME inline editable-draft editor (openShareMenu + buildFollowUpDraft) from
+  // b224956 — only the trigger's DOM position/treatment changed. Shown only when the
+  // record resolves AND has an owner (mirror the Log guard: no owner → nothing to draft).
+  if (anchorRec && anchorRec.owner) {
+    header.appendChild(
+      makeBadge("is-decision", "Draft follow-up", {
+        title: "Draft a note following up on this outstanding promise",
+        onClick: (el) =>
+          openShareMenu(
+            el,
+            anchorRec,
+            // Minimal ctx: byId for tie-back lookups; no edges/relationship cached on
+            // the vigilance surface, so related-items + counterparty resolve empty
+            // (a clean nudge to the owner, no decision tie-backs).
+            { byId: _vigilanceRecordsById, edges: [], recordRelationship: {} },
+            {
+              draftBuilder: buildFollowUpDraft,
+              heading: (w) => "Follow up with " + (w ? w : prettySlug(anchorRec.owner)),
+              title: (r) => (r.summary ? "Follow up: " + r.summary : "Follow up"),
+              sourceKind: anchorRec.type === "decision" ? "decision" : "commitment",
+              idPrefix: "followup:",
+            },
+          ),
+      }),
+    );
+  }
+  card.appendChild(header);
 
   // WP-Job-Vigilance-Wave2 UI (change 2) — work-forest breadcrumb (frame › job),
   // the same hierarchy the Log shows, so a card reads in org context. Null (and
@@ -2468,37 +2512,6 @@ function renderVoidCard(v, opts) {
   const snooze = vvActionBtn("Snooze 7d", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
   const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
   actions.append(snooze, dismiss);
-
-  // Resolve the void's anchor record once — used by both the source badge and
-  // the "Draft follow-up" action below.
-  const anchorRec = vvVoidRecord(v);
-
-  // WP-Job-Vigilance-Wave2 UI (change 4) — "Draft follow-up": open the SAME inline
-  // editable-draft editor the Log's "Share decision" uses (openShareMenu), anchored
-  // to this button, so the user reviews/edits the nudge BEFORE sending to Outbox or
-  // copying — not the fire-and-forget Outbox stage. The draft is follow-up-flavoured
-  // (buildFollowUpDraft) and titled/keyed as a follow-up. Shown only when the record
-  // resolves AND has an owner (mirror the Log guard: no owner → nothing to draft).
-  if (anchorRec && anchorRec.owner) {
-    const followUpBtn = vvActionBtn("Draft follow-up", () => {
-      openShareMenu(
-        followUpBtn,
-        anchorRec,
-        // Minimal ctx: byId for tie-back lookups; no edges/relationship cached on
-        // the vigilance surface, so related-items + counterparty resolve empty
-        // (a clean nudge to the owner, no decision tie-backs).
-        { byId: _vigilanceRecordsById, edges: [], recordRelationship: {} },
-        {
-          draftBuilder: buildFollowUpDraft,
-          heading: (w) => "Follow up with " + (w ? w : prettySlug(anchorRec.owner)),
-          title: (r) => (r.summary ? "Follow up: " + r.summary : "Follow up"),
-          sourceKind: anchorRec.type === "decision" ? "decision" : "commitment",
-          idPrefix: "followup:",
-        },
-      );
-    });
-    actions.appendChild(followUpBtn);
-  }
 
   // WP-Job-Vigilance-Wave2 UI (change 3) — link to the original captured item.
   // Reuse renderSourceBadge: anchor record → documentId → the source-reader panel

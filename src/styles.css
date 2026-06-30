@@ -1807,6 +1807,17 @@ code {
 }
 
 /* Compact meta row: pill + cadence, at the top. */
+/* WP-Job-Vigilance-Wave2 UI — two-zone card header mirroring the Log decision
+   card's record-header-split: trigger/motif meta LEFT, the "Draft follow-up"
+   action badge top-RIGHT. The meta keeps its own row layout as the left zone. */
+.watching-header {
+  margin-bottom: 4px;
+}
+.watching-header .watching-meta {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .watching-meta {
   display: flex;
   align-items: center;
