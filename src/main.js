@@ -6129,44 +6129,266 @@ const ACTION_KIND_LABEL = {
   follow_up: "Follow-up",
 };
 
+// ───────── WP-Log-Card-Redesign (prototype) ─────────────────────────────────
+// One ACTION badge per card, color-coded by urgency, that carries its object —
+// what it's blocked on, how many wait, when it was due — plus a "handle" line
+// that jumps to the related record, and a Share draft for decisions-to-share.
+// All derived from data already in _decisionsCtx (actionKinds, edges, byId).
+// commitment_due / follow_up get no badge (they'd echo the type label + due).
+const ACTION_BADGE_CLASS = {
+  blocked_work: "is-blocked",
+  stale_commitment: "is-overdue",
+  contradiction_to_resolve: "is-conflict",
+  dependency_to_unblock: "is-waiting",
+  decision_needed: "is-decision",
+  decision_to_broadcast: "is-neutral",
+};
+
+function shortenSummary(s, max) {
+  s = (s || "").trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:]+$/, "") + "…";
+}
+
+function recordById(ctx, id) {
+  return id && ctx.byId ? ctx.byId.get(id) : null;
+}
+
+// depends_on edges (recordA depends on recordB — A blocked, B the unblocker).
+function dependencyEdges(ctx) {
+  return (ctx.edges || []).filter((e) => e.kind === "depends_on" && e.status !== "dismissed");
+}
+
+// Reveal a record's card: expand its group if collapsed, scroll to it, flash.
+function jumpToRecord(recordId) {
+  if (!recordId) return;
+  const sel = window.CSS && CSS.escape ? CSS.escape(recordId) : recordId;
+  const target = document.querySelector(`.decision-card[data-record-id="${sel}"]`);
+  if (!target) return;
+  const body = target.closest(".decisions-group-body");
+  if (body && body.hidden) {
+    body.hidden = false;
+    const head = body.parentElement && body.parentElement.querySelector("[aria-expanded]");
+    if (head) {
+      head.setAttribute("aria-expanded", "true");
+      const chev = head.querySelector(".decisions-group-chevron");
+      if (chev) chev.textContent = "▾";
+    }
+  }
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.remove("record-card-flash");
+  void target.offsetWidth;
+  target.classList.add("record-card-flash");
+  setTimeout(() => target.classList.remove("record-card-flash"), 1600);
+}
+
+// Prior corpus items this record links to (for the Share context). recordA is
+// the acting/later/dependent end of the directional edge kinds.
+function relatedItemsFor(rec, ctx) {
+  const out = [];
+  for (const e of ctx.edges || []) {
+    if (e.status === "dismissed") continue;
+    const isA = e.recordA === rec.recordId;
+    const isB = e.recordB === rec.recordId;
+    if (!isA && !isB) continue;
+    const other = recordById(ctx, isA ? e.recordB : e.recordA);
+    if (!other) continue;
+    let phrase;
+    switch (e.kind) {
+      case "resolves": phrase = isA ? "Resolves" : "Resolved by"; break;
+      case "supersedes": phrase = isA ? "Replaces" : "Replaced by"; break;
+      case "depends_on": phrase = isA ? "Depends on" : "Unblocks"; break;
+      case "duplicates": phrase = "Duplicate of"; break;
+      case "contradicts": phrase = "Conflicts with"; break;
+      default: phrase = "Relates to";
+    }
+    out.push({ phrase, otherId: other.recordId, summary: other.summary || "" });
+  }
+  return out;
+}
+
+function makeJumpHandle(cls, text, targetId) {
+  const a = document.createElement("button");
+  a.type = "button";
+  a.className = "record-action-handle " + cls;
+  a.textContent = text + " →";
+  a.addEventListener("click", (e) => { e.stopPropagation(); jumpToRecord(targetId); });
+  return a;
+}
+
+function makeShareHandle(rec, ctx) {
+  const a = document.createElement("button");
+  a.type = "button";
+  a.className = "record-action-handle is-decision";
+  a.textContent = "Share this decision →";
+  a.addEventListener("click", (e) => { e.stopPropagation(); openShareMenu(a, rec, ctx); });
+  return a;
+}
+
+// The action affordance: a short colored badge + an optional handle line (jump
+// link or Share opener). Either may be null. The engine already picks one kind
+// per record, so there is at most one badge.
+function buildActionAffordance(rec, ctx) {
+  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
+  if (!ak || !ak.kind) return { badge: null, handle: null };
+  const cls = ACTION_BADGE_CLASS[ak.kind];
+  if (!cls) return { badge: null, handle: null }; // commitment_due / follow_up
+
+  const deps = dependencyEdges(ctx);
+  let badgeText = ACTION_KIND_LABEL[ak.kind] || "";
+  let handle = null;
+
+  if (ak.kind === "blocked_work") {
+    badgeText = "Blocked";
+    const e = deps.find((d) => d.recordA === rec.recordId);
+    const blocker = e && recordById(ctx, e.recordB);
+    if (blocker) {
+      const due = blocker.due ? " · due " + formatDueDate(blocker.due) : "";
+      handle = makeJumpHandle("is-blocked", "↳ Blocked on " + shortenSummary(blocker.summary, 40) + due, blocker.recordId);
+    }
+  } else if (ak.kind === "dependency_to_unblock") {
+    const waiters = deps.filter((d) => d.recordB === rec.recordId);
+    badgeText = waiters.length ? `${waiters.length} waiting` : "Others waiting";
+    const first = waiters[0] && recordById(ctx, waiters[0].recordA);
+    if (first) {
+      const who = first.owner ? prettySlug(first.owner) + "’s " : "";
+      const extra = waiters.length > 1 ? ` (+${waiters.length - 1} more)` : "";
+      handle = makeJumpHandle("is-waiting", "↳ Unblocks " + who + shortenSummary(first.summary, 36) + extra, first.recordId);
+    }
+  } else if (ak.kind === "stale_commitment") {
+    badgeText = rec.due ? "Overdue · due " + formatDueDate(rec.due) : "Overdue";
+  } else if (ak.kind === "contradiction_to_resolve") {
+    badgeText = "Conflict";
+    const e = (ctx.edges || []).find(
+      (d) => d.kind === "contradicts" && d.status !== "dismissed" &&
+        (d.recordA === rec.recordId || d.recordB === rec.recordId),
+    );
+    const other = e && recordById(ctx, e.recordA === rec.recordId ? e.recordB : e.recordA);
+    if (other) handle = makeJumpHandle("is-conflict", "↳ Conflicts with " + shortenSummary(other.summary, 40), other.recordId);
+  } else if (ak.kind === "decision_to_broadcast") {
+    badgeText = "Decision to share";
+    handle = makeShareHandle(rec, ctx);
+  }
+
+  const badge = document.createElement("span");
+  badge.className = "record-action-badge " + cls;
+  badge.textContent = badgeText;
+  if (ak.why) badge.title = ak.why;
+  return { badge, handle };
+}
+
+// Share-draft popover: what the decision is, how it ties back to prior corpus
+// items, and a ready-to-send note with Copy. Deterministic (no LLM). Reuses the
+// dismiss-menu single-open infra (_openReasonMenu / closeDismissReasonMenu).
+function buildShareDraft(rec, related, who) {
+  const lead = who ? `Hi ${who.split(/[ ,]/)[0]},\n\n` : "";
+  let body = "Looping you in on a decision: " + (rec.summary || "");
+  const back = related.find((r) => ["Resolves", "Replaces", "Depends on", "Relates to"].includes(r.phrase));
+  if (back) body += `\n\nContext — this ${back.phrase.toLowerCase()}: “${shortenSummary(back.summary, 80)}”.`;
+  return lead + body;
+}
+
+function openShareMenu(anchorBtn, rec, ctx) {
+  const wasOpen = !!_openReasonMenu;
+  closeDismissReasonMenu();
+  if (wasOpen) return;
+
+  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+  const who = rel && rel.counterparty ? rel.counterparty : null;
+  const related = relatedItemsFor(rec, ctx);
+
+  const menu = document.createElement("div");
+  menu.className = "record-reason-menu record-share-menu";
+  menu.setAttribute("role", "dialog");
+
+  const heading = document.createElement("div");
+  heading.className = "record-reason-heading";
+  heading.textContent = who ? "Share with " + who : "Share this decision";
+  menu.appendChild(heading);
+
+  const what = document.createElement("div");
+  what.className = "record-share-what";
+  what.textContent = rec.summary || "";
+  menu.appendChild(what);
+
+  if (related.length) {
+    const ctxLbl = document.createElement("div");
+    ctxLbl.className = "record-share-ctxlabel";
+    ctxLbl.textContent = "Relates to";
+    menu.appendChild(ctxLbl);
+    for (const r of related.slice(0, 4)) {
+      const line = document.createElement("button");
+      line.type = "button";
+      line.className = "record-share-ctxitem";
+      line.textContent = r.phrase + ": " + shortenSummary(r.summary, 48);
+      line.addEventListener("click", (e) => { e.stopPropagation(); closeDismissReasonMenu(); jumpToRecord(r.otherId); });
+      menu.appendChild(line);
+    }
+  }
+
+  const draft = document.createElement("textarea");
+  draft.className = "record-share-draft";
+  draft.rows = 4;
+  draft.value = buildShareDraft(rec, related, who);
+  menu.appendChild(draft);
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "record-reason-item record-share-copy";
+  copy.textContent = "Copy draft";
+  copy.addEventListener("click", (e) => {
+    e.stopPropagation();
+    try { navigator.clipboard.writeText(draft.value); } catch (_) { draft.select(); document.execCommand("copy"); }
+    copy.textContent = "Copied ✓";
+    setTimeout(() => { copy.textContent = "Copy draft"; }, 1200);
+  });
+  menu.appendChild(copy);
+
+  document.body.appendChild(menu);
+  const r = anchorBtn.getBoundingClientRect();
+  menu.style.position = "fixed";
+  menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  menu.style.left = `${Math.round(Math.max(8, r.left))}px`;
+  _openReasonMenu = menu;
+  setTimeout(() => {
+    document.addEventListener("click", _onOutsideReasonClick, true);
+    document.addEventListener("keydown", _onReasonMenuKeydown, true);
+  }, 0);
+}
+
 function renderDecisionCard(rec, recState, projects) {
   const card = document.createElement("div");
   card.className = "record-card decision-card";
   card.dataset.type = rec.type || "";
   if (recState) card.dataset.state = recState;
 
-  const header = document.createElement("div");
-  header.className = "record-header";
-  const chip = document.createElement("span");
-  chip.className = "record-chip";
-  chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
-  header.appendChild(chip);
-
-  // step 5 — the action mode (Blocked / Decision needed / Conflict …).
+  // WP-Log-Card-Redesign — two-zone header: muted TYPE label (left) + one
+  // colored ACTION badge (right). A non-open record shows its lifecycle pill in
+  // the action slot instead.
   const ctx = _decisionsCtx || {};
-  const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
-  if (ak && ACTION_KIND_LABEL[ak.kind] && ak.kind !== "follow_up") {
-    const kc = document.createElement("span");
-    kc.className = "record-kind-chip kind-" + ak.kind;
-    kc.textContent = ACTION_KIND_LABEL[ak.kind];
-    header.appendChild(kc);
-  }
-  // step 6 — the "who" (relationship) from the CommunicationRole substrate.
-  const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
-  if (rel && rel.relationship) {
-    const rc = document.createElement("span");
-    rc.className = "record-rel-chip";
-    rc.textContent = rel.counterparty ? `${rel.relationship} · ${rel.counterparty}` : rel.relationship;
-    if (rel.why) rc.title = rel.why;
-    header.appendChild(rc);
-  }
-  if (recState && recState !== "open") {
+  card.dataset.recordId = rec.recordId || "";
+
+  const header = document.createElement("div");
+  header.className = "record-header record-header-split";
+
+  const typeLabel = document.createElement("span");
+  typeLabel.className = "record-type-label";
+  typeLabel.dataset.type = rec.type || "";
+  typeLabel.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  header.appendChild(typeLabel);
+
+  const affordance = buildActionAffordance(rec, ctx);
+  const isOpen = !recState || recState === "open";
+  if (!isOpen) {
     const pill = document.createElement("span");
     pill.className = "record-state-pill";
     pill.dataset.state = recState;
     pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
     header.appendChild(pill);
+  } else if (affordance.badge) {
+    header.appendChild(affordance.badge);
   }
   card.appendChild(header);
 
@@ -6175,21 +6397,48 @@ function renderDecisionCard(rec, recState, projects) {
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
 
+  // The action "handle" — jump-to-blocker / unblocks / share — under the title.
+  if (isOpen && affordance.handle) card.appendChild(affordance.handle);
+
+  // Relationship ("who") + owner·due on one line.
   {
+    const metaRow = document.createElement("div");
+    metaRow.className = "record-rel-meta";
+    const rel = ctx.recordRelationship && ctx.recordRelationship[rec.recordId];
+    if (rel && rel.relationship) {
+      const rc = document.createElement("span");
+      rc.className = "record-rel-chip";
+      const word = rel.relationship.charAt(0).toUpperCase() + rel.relationship.slice(1);
+      rc.textContent = rel.counterparty ? `${word} · ${rel.counterparty}` : word;
+      if (rel.relationshipWhy || rel.why) rc.title = rel.relationshipWhy || rel.why;
+      metaRow.appendChild(rc);
+    }
     const meta = document.createElement("p");
     meta.className = "record-meta";
     const segCount = buildRecordMetaSegments(meta, rec);
-    if (segCount) card.appendChild(meta);
+    if (segCount) metaRow.appendChild(meta);
+    if (metaRow.childNodes.length) card.appendChild(metaRow);
   }
 
   if (projects && projects.length) {
     const chips = document.createElement("div");
     chips.className = "decision-projects";
-    for (const p of projects.slice(0, 3)) {
+    const lbl = document.createElement("span");
+    lbl.className = "decision-projects-label";
+    lbl.textContent = "Projects";
+    chips.appendChild(lbl);
+    const shown = projects.slice(0, 3);
+    for (const p of shown) {
       const pc = document.createElement("span");
       pc.className = "decision-project-chip";
       pc.textContent = prettySlug(p);
       chips.appendChild(pc);
+    }
+    if (projects.length > shown.length) {
+      const more = document.createElement("span");
+      more.className = "decision-project-more";
+      more.textContent = `+${projects.length - shown.length} more`;
+      chips.appendChild(more);
     }
     card.appendChild(chips);
   }
