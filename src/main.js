@@ -6417,17 +6417,10 @@ function renderDecisionCard(rec, recState, projects) {
     if (segCount) card.appendChild(meta);
   }
 
-  if (projects && projects.length) {
-    const chips = document.createElement("div");
-    chips.className = "decision-projects";
-    for (const p of projects.slice(0, 3)) {
-      const pc = document.createElement("span");
-      pc.className = "decision-project-chip";
-      pc.textContent = prettySlug(p);
-      chips.appendChild(pc);
-    }
-    card.appendChild(chips);
-  }
+  // Per-record project chips removed: they showed the source document's flat tag
+  // list, which collided with the top-level "projects" (frames) hierarchy and was
+  // misleading. A record is already shown under its project (frame) + job, so the
+  // chip row was redundant. (`projects` param kept for call-site compatibility.)
 
   // Actions: drill-down to Receipts (when the record has a subject) + Dismiss.
   const actions = document.createElement("div");
