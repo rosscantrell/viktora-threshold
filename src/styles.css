@@ -3693,6 +3693,19 @@ code {
   background: var(--glass-surface);
   border-color: var(--glass-border);
 }
+/* Clickable pills (jump-to-related / open-share) — the pill IS the affordance. */
+button.record-action-badge {
+  font-family: inherit;
+  line-height: 1.3;
+}
+.record-action-badge.is-clickable {
+  cursor: pointer;
+  transition: filter 0.1s ease, box-shadow 0.1s ease;
+}
+.record-action-badge.is-clickable:hover {
+  filter: brightness(1.18);
+  box-shadow: 0 0 0 1px currentColor inset;
+}
 /* Handle line — the clickable object under the title (jump / share). */
 .record-action-handle {
   display: inline-block;
@@ -3739,7 +3752,12 @@ code {
 }
 .record-card-flash { animation: record-card-flash 1.5s ease-out; }
 /* Share-draft popover (extends the dismiss-reason menu). */
-.record-share-menu { width: 320px; max-width: 86vw; }
+.record-share-menu {
+  width: 320px;
+  max-width: 86vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
 .record-share-what {
   font-size: 12.5px;
   color: var(--glass-text);

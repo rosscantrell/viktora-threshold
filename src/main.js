@@ -6209,74 +6209,83 @@ function relatedItemsFor(rec, ctx) {
   return out;
 }
 
-function makeJumpHandle(cls, text, targetId) {
-  const a = document.createElement("button");
-  a.type = "button";
-  a.className = "record-action-handle " + cls;
-  a.textContent = text + " →";
-  a.addEventListener("click", (e) => { e.stopPropagation(); jumpToRecord(targetId); });
-  return a;
+// The action pill itself is the affordance — clickable when it has an object:
+// blocked/waiting/conflict jump to the related record, decision-to-share opens
+// the draft. The object detail lives in the pill's tooltip (title), so there is
+// no separate line. A pill with no action is a plain span.
+function makeBadge(cls, text, opts) {
+  opts = opts || {};
+  const el = document.createElement(opts.onClick ? "button" : "span");
+  el.className = "record-action-badge " + cls + (opts.onClick ? " is-clickable" : "");
+  el.textContent = text;
+  if (opts.title) el.title = opts.title;
+  if (opts.onClick) {
+    el.type = "button";
+    el.addEventListener("click", (e) => { e.stopPropagation(); opts.onClick(el, e); });
+  }
+  return el;
 }
 
-function makeShareHandle(rec, ctx) {
-  const a = document.createElement("button");
-  a.type = "button";
-  a.className = "record-action-handle is-decision";
-  a.textContent = "Share this decision →";
-  a.addEventListener("click", (e) => { e.stopPropagation(); openShareMenu(a, rec, ctx); });
-  return a;
-}
-
-// The action affordance: a short colored badge + an optional handle line (jump
-// link or Share opener). Either may be null. The engine already picks one kind
-// per record, so there is at most one badge.
-function buildActionAffordance(rec, ctx) {
+function buildActionBadge(rec, ctx) {
   const ak = ctx.actionKinds && ctx.actionKinds[rec.recordId];
-  if (!ak || !ak.kind) return { badge: null, handle: null };
+  if (!ak || !ak.kind) return null;
   const cls = ACTION_BADGE_CLASS[ak.kind];
-  if (!cls) return { badge: null, handle: null }; // commitment_due / follow_up
-
+  if (!cls) return null; // commitment_due / follow_up — no badge
   const deps = dependencyEdges(ctx);
-  let badgeText = ACTION_KIND_LABEL[ak.kind] || "";
-  let handle = null;
 
   if (ak.kind === "blocked_work") {
-    badgeText = "Blocked";
     const e = deps.find((d) => d.recordA === rec.recordId);
     const blocker = e && recordById(ctx, e.recordB);
     if (blocker) {
       const due = blocker.due ? " · due " + formatDueDate(blocker.due) : "";
-      handle = makeJumpHandle("is-blocked", "↳ Blocked on " + shortenSummary(blocker.summary, 40) + due, blocker.recordId);
+      return makeBadge("is-blocked", "Blocked", {
+        title: "Blocked on " + (blocker.summary || "") + due + " — click to view",
+        onClick: () => jumpToRecord(blocker.recordId),
+      });
     }
-  } else if (ak.kind === "dependency_to_unblock") {
+    return makeBadge("is-blocked", "Blocked");
+  }
+  if (ak.kind === "dependency_to_unblock") {
     const waiters = deps.filter((d) => d.recordB === rec.recordId);
-    badgeText = waiters.length ? `${waiters.length} waiting` : "Others waiting";
+    const label = waiters.length ? `${waiters.length} waiting` : "Others waiting";
     const first = waiters[0] && recordById(ctx, waiters[0].recordA);
     if (first) {
       const who = first.owner ? prettySlug(first.owner) + "’s " : "";
       const extra = waiters.length > 1 ? ` (+${waiters.length - 1} more)` : "";
-      handle = makeJumpHandle("is-waiting", "↳ Unblocks " + who + shortenSummary(first.summary, 36) + extra, first.recordId);
+      return makeBadge("is-waiting", label, {
+        title: "Unblocks " + who + (first.summary || "") + extra + " — click to view",
+        onClick: () => jumpToRecord(first.recordId),
+      });
     }
-  } else if (ak.kind === "stale_commitment") {
-    badgeText = rec.due ? "Overdue · due " + formatDueDate(rec.due) : "Overdue";
-  } else if (ak.kind === "contradiction_to_resolve") {
-    badgeText = "Conflict";
+    return makeBadge("is-waiting", label);
+  }
+  if (ak.kind === "stale_commitment") {
+    return makeBadge("is-overdue", rec.due ? "Overdue · due " + formatDueDate(rec.due) : "Overdue");
+  }
+  if (ak.kind === "contradiction_to_resolve") {
     const e = (ctx.edges || []).find(
       (d) => d.kind === "contradicts" && d.status !== "dismissed" &&
         (d.recordA === rec.recordId || d.recordB === rec.recordId),
     );
     const other = e && recordById(ctx, e.recordA === rec.recordId ? e.recordB : e.recordA);
-    if (other) handle = makeJumpHandle("is-conflict", "↳ Conflicts with " + shortenSummary(other.summary, 40), other.recordId);
-  } else if (ak.kind === "decision_to_broadcast") {
-    badgeText = "Decision to share";
-    handle = makeShareHandle(rec, ctx);
+    if (other) {
+      return makeBadge("is-conflict", "Conflict", {
+        title: "Conflicts with " + (other.summary || "") + " — click to view",
+        onClick: () => jumpToRecord(other.recordId),
+      });
+    }
+    return makeBadge("is-conflict", "Conflict");
   }
-
-  const badge = document.createElement("span");
-  badge.className = "record-action-badge " + cls;
-  badge.textContent = badgeText;
-  if (ak.why) badge.title = ak.why;
-  return { badge, handle };
+  if (ak.kind === "decision_needed") {
+    return makeBadge("is-decision", "Decision needed");
+  }
+  if (ak.kind === "decision_to_broadcast") {
+    return makeBadge("is-decision", "Decision to share", {
+      title: "Click to draft a share note",
+      onClick: (el) => openShareMenu(el, rec, ctx),
+    });
+  }
+  return null;
 }
 
 // Share-draft popover: what the decision is, how it ties back to prior corpus
@@ -6347,10 +6356,26 @@ function openShareMenu(anchorBtn, rec, ctx) {
   menu.appendChild(copy);
 
   document.body.appendChild(menu);
+  // Fit to viewport: open below the pill if there's room, else flip above; if it
+  // fits neither way, cap the height on the larger side and let the body scroll.
   const r = anchorBtn.getBoundingClientRect();
+  const margin = 8;
   menu.style.position = "fixed";
-  menu.style.top = `${Math.round(r.bottom + 4)}px`;
-  menu.style.left = `${Math.round(Math.max(8, r.left))}px`;
+  menu.style.left = `${Math.round(Math.min(Math.max(margin, r.left), window.innerWidth - menu.offsetWidth - margin))}px`;
+  const spaceBelow = window.innerHeight - r.bottom - margin;
+  const spaceAbove = r.top - margin;
+  const needed = menu.offsetHeight;
+  if (needed <= spaceBelow) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+  } else if (needed <= spaceAbove) {
+    menu.style.top = `${Math.round(r.top - needed - 4)}px`;
+  } else if (spaceBelow >= spaceAbove) {
+    menu.style.top = `${Math.round(r.bottom + 4)}px`;
+    menu.style.maxHeight = `${Math.round(spaceBelow)}px`;
+  } else {
+    menu.style.top = `${margin}px`;
+    menu.style.maxHeight = `${Math.round(spaceAbove)}px`;
+  }
   _openReasonMenu = menu;
   setTimeout(() => {
     document.addEventListener("click", _onOutsideReasonClick, true);
@@ -6379,7 +6404,6 @@ function renderDecisionCard(rec, recState, projects) {
   typeLabel.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   header.appendChild(typeLabel);
 
-  const affordance = buildActionAffordance(rec, ctx);
   const isOpen = !recState || recState === "open";
   if (!isOpen) {
     const pill = document.createElement("span");
@@ -6387,8 +6411,9 @@ function renderDecisionCard(rec, recState, projects) {
     pill.dataset.state = recState;
     pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
     header.appendChild(pill);
-  } else if (affordance.badge) {
-    header.appendChild(affordance.badge);
+  } else {
+    const badge = buildActionBadge(rec, ctx);
+    if (badge) header.appendChild(badge);
   }
   card.appendChild(header);
 
@@ -6396,9 +6421,6 @@ function renderDecisionCard(rec, recState, projects) {
   summary.className = "record-summary";
   summary.textContent = rec.summary || "";
   card.appendChild(summary);
-
-  // The action "handle" — jump-to-blocker / unblocks / share — under the title.
-  if (isOpen && affordance.handle) card.appendChild(affordance.handle);
 
   // Relationship ("who") + owner·due on one line.
   {
