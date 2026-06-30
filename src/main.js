@@ -2473,12 +2473,31 @@ function renderVoidCard(v, opts) {
   // the "Draft follow-up" action below.
   const anchorRec = vvVoidRecord(v);
 
-  // WP-Job-Vigilance-Wave2 UI (change 4) — "Draft follow-up": resolve the void's
-  // anchor record → owner, then stage the same owner→recipient outbox draft the
-  // Log's decision cards use (draftFollowUpFromRecord). Shown only when the record
+  // WP-Job-Vigilance-Wave2 UI (change 4) — "Draft follow-up": open the SAME inline
+  // editable-draft editor the Log's "Share decision" uses (openShareMenu), anchored
+  // to this button, so the user reviews/edits the nudge BEFORE sending to Outbox or
+  // copying — not the fire-and-forget Outbox stage. The draft is follow-up-flavoured
+  // (buildFollowUpDraft) and titled/keyed as a follow-up. Shown only when the record
   // resolves AND has an owner (mirror the Log guard: no owner → nothing to draft).
   if (anchorRec && anchorRec.owner) {
-    actions.appendChild(vvActionBtn("Draft follow-up", () => draftFollowUpFromRecord(anchorRec)));
+    const followUpBtn = vvActionBtn("Draft follow-up", () => {
+      openShareMenu(
+        followUpBtn,
+        anchorRec,
+        // Minimal ctx: byId for tie-back lookups; no edges/relationship cached on
+        // the vigilance surface, so related-items + counterparty resolve empty
+        // (a clean nudge to the owner, no decision tie-backs).
+        { byId: _vigilanceRecordsById, edges: [], recordRelationship: {} },
+        {
+          draftBuilder: buildFollowUpDraft,
+          heading: (w) => "Follow up with " + (w ? w : prettySlug(anchorRec.owner)),
+          title: (r) => (r.summary ? "Follow up: " + r.summary : "Follow up"),
+          sourceKind: anchorRec.type === "decision" ? "decision" : "commitment",
+          idPrefix: "followup:",
+        },
+      );
+    });
+    actions.appendChild(followUpBtn);
   }
 
   // WP-Job-Vigilance-Wave2 UI (change 3) — link to the original captured item.
@@ -7040,6 +7059,30 @@ function buildShareDraft(rec, related, who) {
   return lines.join("\n");
 }
 
+// WP-Job-Vigilance-Wave2 UI — the follow-up flavour of the share draft: a nudge to
+// the person we're waiting on about the outstanding promise, rather than a
+// decision broadcast. Same deterministic shape as buildShareDraft; consumed by
+// openShareMenu via the draftBuilder opt so the editor UI is reused unchanged.
+function buildFollowUpDraft(rec, _related, who) {
+  // Prefer the record owner (the person who made the promise) for the greeting.
+  const target = who || rec.owner || "";
+  const firstName = target ? prettySlug(target).split(/[ ,]/)[0] : "";
+  const summary = (rec.summary || "").trim();
+  const verbatim = (rec.verbatim || "").trim();
+  const lines = [];
+  if (firstName) lines.push(`Hi ${firstName},`, "");
+  lines.push("Following up on this — wanted to check where it stands:");
+  lines.push("");
+  if (summary) lines.push("• " + summary);
+  // The promise in its own words (the source line), when it adds beyond the label.
+  if (verbatim && verbatim.toLowerCase() !== summary.toLowerCase()) {
+    lines.push("");
+    lines.push("Original note: “" + verbatim + "”");
+  }
+  lines.push("", "No rush if it's in hand — just let me know the status when you get a chance.");
+  return lines.join("\n");
+}
+
 // WP-Edit-Capture — record how the user changed our generated share draft, as a
 // retained event on the decision-log overlay (same /edit event log as the inline
 // field edits). Best-effort: a capture failure must never block the share. Only
@@ -7157,7 +7200,20 @@ function openLinkedMenu(anchorBtn, heading, recs) {
   }, 0);
 }
 
-function openShareMenu(anchorBtn, rec, ctx) {
+// The inline editable-draft popover. Default mode is the Log's "Share decision"
+// flow; `opts` GENERALIZES it so other surfaces (e.g. the Watching follow-up)
+// reuse the SAME editor UI with their own draft text + titling instead of forking
+// it. opts: { draftBuilder(rec, related, who)->string, heading(who)->string,
+// title(rec)->string, sourceKind, idPrefix }. Omitted fields fall back to the
+// decision-share defaults, so the existing Log call site is unchanged in behavior.
+function openShareMenu(anchorBtn, rec, ctx, opts) {
+  opts = opts || {};
+  const draftBuilder = opts.draftBuilder || buildShareDraft;
+  const headingFor = opts.heading || ((w) => (w ? "Share with " + w : "Share this decision"));
+  const titleFor = opts.title || ((r) => (r.summary ? "Share decision: " + r.summary : "Share decision"));
+  const sourceKind = opts.sourceKind || "decision";
+  const idPrefix = opts.idPrefix || "share:";
+
   const wasOpen = !!_openReasonMenu;
   closeDismissReasonMenu();
   if (wasOpen) return;
@@ -7172,7 +7228,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
 
   const heading = document.createElement("div");
   heading.className = "record-reason-heading";
-  heading.textContent = who ? "Share with " + who : "Share this decision";
+  heading.textContent = headingFor(who);
   menu.appendChild(heading);
 
   const what = document.createElement("div");
@@ -7203,7 +7259,7 @@ function openShareMenu(anchorBtn, rec, ctx) {
 
   const draft = document.createElement("textarea");
   draft.className = "record-share-draft";
-  draft.value = buildShareDraft(rec, related, who);
+  draft.value = draftBuilder(rec, related, who);
   // Snapshot what WE generated, so a send/copy can record how the user changed it
   // — the learning signal for how the engine's drafting is off (WP-Edit-Capture).
   const generatedDraft = draft.value;
@@ -7229,13 +7285,13 @@ function openShareMenu(anchorBtn, rec, ctx) {
     e.stopPropagation();
     captureShareDraftEdit(rec, generatedDraft, draft.value, "outbox");
     stageOutboxDraft({
-      id: "share:" + (rec.recordId || rec.summary || ""),
-      title: rec.summary ? "Share decision: " + rec.summary : "Share decision",
+      id: idPrefix + (rec.recordId || rec.summary || ""),
+      title: titleFor(rec),
       detail: draft.value,
       detailGenerated: generatedDraft, // what we drafted, so the server can keep the delta
       intent: "email",
       executor: who || rec.owner || undefined,
-      sourceKind: "decision",
+      sourceKind,
       sourceLabel: rec.summary || rec.recordId || "",
     });
     closeDismissReasonMenu();
