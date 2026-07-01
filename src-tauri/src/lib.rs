@@ -3006,6 +3006,59 @@ async fn fetch_sop(
         .map_err(|e| format!("fetch_sop: parse response failed: {e}"))
 }
 
+/// WP-SoP-Team-Update-Compose — derive an OUTWARD team status update FROM a
+/// Work-Forest SoP digest. Proxies POST /api/state-of-play/compose with
+/// { level, id }. `level` is required; `id` is required for job/frame (omit for
+/// forest). Mirrors the edit_digest POST shape — bearer auth, base_url, 60s
+/// timeout. 404 (compose flag off) → {available:false} so the affordance stays
+/// hidden. Response: { level, id, draft, recipients:{to,cc,unresolved}, items,
+/// composeEnabled } (or { composeEnabled:false } on an empty digest).
+#[tauri::command]
+async fn compose_team_update(
+    state: tauri::State<'_, AppState>,
+    level: String,
+    id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if level.trim().is_empty() {
+        return Err("compose_team_update: empty level".into());
+    }
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/state-of-play/compose",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::Map::new();
+    body.insert("level".into(), serde_json::Value::String(level.trim().to_string()));
+    if let Some(id_val) = id.as_deref() {
+        if !id_val.trim().is_empty() {
+            body.insert("id".into(), serde_json::Value::String(id_val.trim().to_string()));
+        }
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("compose_team_update: parse response failed: {e}"))
+}
+
 /// WP-Priority-Operator HITL — record a natural calibration gesture (pin / unpin /
 /// dismiss / reorder) for one priority item. POSTs /api/decision-log/priority/gesture;
 /// the per-user weight vector is derived server-side from the gesture stream — never
@@ -6752,6 +6805,7 @@ pub fn run() {
             post_priority_gesture,
             // WP-WorkForest-Native-SoP — Work-Forest-native State of Play (job/frame/forest + lenses)
             fetch_sop,
+            compose_team_update,
             frame_edit,
             apply_to_similar,
             fetch_learned_suggestions,

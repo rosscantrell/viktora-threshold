@@ -3236,6 +3236,8 @@ function renderCorpusPanel(panel, data) {
   // Phase B — inline digest edit (forest altitude). Editor edits the flattened
   // copy text; lead element is the prose wrapper.
   attachDigestEditor({ panel, bar, msg: proseWrap, scope: "forest", subject: "forest", label: "the org", message: copyText, editsEnabled: data.editsEnabled });
+  // WP-SoP-Team-Update-Compose — the outward team-update affordance (forest scope).
+  attachComposeAffordance(panel, { level: "forest", id: null, data, label: "all work" });
 }
 
 // ───────── WP-WorkForest-Native-SoP (UI-1 + UI-6) — top-of-Today narrative ─────────
@@ -3350,6 +3352,9 @@ async function renderFrameSoP(panel, fid) {
   body.className = "sop-frame-body";
   renderSoPProse(body, data, { compact: true });
   panel.appendChild(body);
+  // WP-SoP-Team-Update-Compose — the outward team-update affordance (frame +
+  // workstream headers both route here). Additive; renders only when composeEnabled.
+  attachComposeAffordance(panel, { level: "frame", id: fid, data });
   return true;
 }
 
@@ -5369,6 +5374,11 @@ let _decisionsCtx = null;
 let _decisionsFilter = "all"; // all | open | resolved | superseded
 let _decisionsLens = "project"; // project | deadline | people
 let _decisionsExpanded = new Set(); // group keys the user has expanded (default: collapsed)
+// WP-Work-Forest — frame/workstream SECTION collapse (distinct from per-job group
+// expand above). Keyed by name (fids aren't stable across recompiles): "top:<name>"
+// collapses a whole project incl. its sub-frames; "ws:<top>|<name>" collapses one
+// sub-category. Empty = everything expanded (the prior behaviour).
+let _framesCollapsed = new Set();
 // WP-THRESHOLD-NAV — arrival context for the Log view. When Log is reached as a
 // drill-down from a Today state pill, this holds the return thunk (→ Today) so
 // the breadcrumb reads "Today › Log" and Back returns to Today, not Home. Null
@@ -5987,9 +5997,72 @@ function buildWsHeader(ws) {
   if (fid != null) {
     const sop = makeSoPToggle(fid, "State of play for this area");
     el.appendChild(sop.toggle);
+    // WP-Frame-HITL — sub-frames get the SAME gesture menu as top frames (Issue 4).
+    // Without it a nested area had no rename / merge / re-home affordance, so
+    // redundant sub-frames couldn't be combined. Appended after the SoP panel so the
+    // full-width panel still stacks last.
+    const edit = document.createElement("span");
+    edit.className = "frame-edit-btn";
+    edit.textContent = "⋯";
+    edit.setAttribute("role", "button");
+    edit.tabIndex = 0;
+    edit.title = "Rename, re-home, or merge";
+    edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, ws); });
+    el.appendChild(edit);
     el.appendChild(sop.panel);
   }
   return el;
+}
+// Prepend a collapse chevron to a frame/workstream section header. `key` is the
+// collapse key in _framesCollapsed; toggling it re-applies visibility over the flat
+// row list WITHOUT a full re-render (mirrors the per-job group chevron). Collapse is
+// remembered by name, so it survives the re-render every frame edit triggers.
+function makeSectionCollapsible(headerEl, key, listEl) {
+  const chev = document.createElement("span");
+  chev.className = "frame-collapse-chev";
+  chev.setAttribute("aria-hidden", "true");
+  chev.textContent = _framesCollapsed.has(key) ? "▸" : "▾";
+  headerEl.insertBefore(chev, headerEl.firstChild);
+  // The WHOLE header is the collapse target (matches the per-job group headers, and
+  // gives a big obvious hit area). Clicks on the header's own controls — State of
+  // play, the ⋯ menu and its popovers/panel — are excluded so they still work.
+  headerEl.classList.add("frame-section-collapsible");
+  headerEl.setAttribute("role", "button");
+  headerEl.tabIndex = 0;
+  headerEl.setAttribute("aria-expanded", _framesCollapsed.has(key) ? "false" : "true");
+  const toggle = () => {
+    if (_framesCollapsed.has(key)) _framesCollapsed.delete(key); else _framesCollapsed.add(key);
+    applyFrameCollapse(listEl);
+  };
+  headerEl.addEventListener("click", (ev) => {
+    if (ev.target.closest(".sop-frame-toggle, .sop-frame-panel, .frame-edit-btn, .frame-move-menu")) return;
+    toggle();
+  });
+  headerEl.addEventListener("keydown", (e) => {
+    if ((e.key === "Enter" || e.key === " ") && e.target === headerEl) { e.preventDefault(); toggle(); }
+  });
+}
+// Apply the current collapse state across the flat list: a collapsed top frame hides
+// its sub-frame headers and all its rows (header stays); a collapsed sub-frame hides
+// only its own rows (its header stays). Also refreshes each header's chevron glyph.
+function applyFrameCollapse(listEl) {
+  for (const el of Array.from(listEl.children)) {
+    const fn = el.dataset ? el.dataset.frameName : undefined;
+    const wn = el.dataset ? el.dataset.wsName : undefined;
+    const kind = el.dataset ? el.dataset.sectionHeader : undefined;
+    const topCollapsed = fn ? _framesCollapsed.has("top:" + fn) : false;
+    const wsCollapsed = fn && wn ? _framesCollapsed.has("ws:" + fn + "|" + wn) : false;
+    if (kind === "top" || kind === "ws") {
+      const self = kind === "top" ? topCollapsed : wsCollapsed;
+      const c = el.querySelector(".frame-collapse-chev");
+      if (c) c.textContent = self ? "▸" : "▾";
+      el.setAttribute("aria-expanded", self ? "false" : "true");
+      el.classList.toggle("frame-section-collapsed", !!self);
+    }
+    if (kind === "top") { el.hidden = false; continue; }      // a top-frame header is always visible
+    if (kind === "ws") { el.hidden = topCollapsed; continue; } // sub-frame header hides only if its project is collapsed
+    if (fn) el.hidden = topCollapsed || wsCollapsed;           // a job-group row
+  }
 }
 function buildFacetBar(facets) {
   if (!facets || !facets.length) return null;
@@ -6224,20 +6297,46 @@ async function dismissLearnedSuggestion(s) {
 // click reassigns the job; the move sticks and becomes evidence for the learner.
 // WP-Frame-HITL — the frame-header gesture menu: Rename / Mark-as-type / Merge,
 // all overlay-backed (replaces the legacy project-canon Combine/Rename).
-const FRAME_TYPE_CHOICES = [
-  ["project", "Project"], ["client", "Client"], ["initiative", "Initiative"],
-  ["workstream", "Workstream"], ["tracker", "Tracker"], ["topic", "Topic"], ["geography", "Geography"],
+// Plain-language definitions surfaced as tooltips on each type chip. Grounded in
+// the Work-Forest frame model (frame-compiler.ts): project/client/initiative are
+// top-level homes that hold jobs; workstream is a sub-body nested inside one of
+// those; topic/geography are lenses that TAG jobs across homes without owning them.
+const FRAME_TYPE_HELP = {
+  project: "A main line of work — a top-level category that holds jobs (directly or via workstreams).",
+  client: "A top-level category for a specific client's work.",
+  initiative: "A top-level category for a cross-cutting initiative.",
+  workstream: "A sub-area of work that lives INSIDE a top-level category — not on its own.",
+  topic: "A recurring subject that tags jobs across categories — a lens, not a home. Jobs stay under their category.",
+  geography: "A place (country/region) that tags jobs across categories — a lens, not a home. Jobs stay under their category.",
+};
+const FRAME_TYPE_LABEL = {
+  project: "Project", client: "Client", initiative: "Initiative",
+  workstream: "Workstream", topic: "Topic", geography: "Geography",
+};
+// The three tiers the flat chip row hid. "Tracker" is dropped — the backend never
+// honored it (it silently became "misc"), so offering it just misled.
+const FRAME_TYPE_TIERS = [
+  { label: "Top-level home", hint: "holds jobs; a top frame in the report", types: ["project", "client", "initiative"] },
+  { label: "Nested", hint: "lives inside a top-level home", types: ["workstream"] },
+  { label: "Lens", hint: "tags jobs across homes without owning them", types: ["topic", "geography"] },
 ];
 function positionMenu(menu, anchorEl) {
   document.body.appendChild(menu);
   const r = anchorEl.getBoundingClientRect();
   const vh = window.innerHeight, vw = window.innerWidth;
-  menu.style.maxHeight = `${vh - 16}px`;
-  const mh = Math.min(menu.offsetHeight, vh - 16);
+  const margin = 8;
+  // Provisional cap so offsetHeight is measured bounded, not unbounded-tall.
+  menu.style.maxHeight = `${vh - margin * 2}px`;
+  const mh = Math.min(menu.offsetHeight, vh - margin * 2);
+  // Prefer opening below the anchor; lift it up if that would overflow the bottom.
   let top = r.bottom + 4;
-  if (top + mh > vh - 8) top = Math.max(8, vh - mh - 8);
+  if (top + mh > vh - margin) top = Math.max(margin, vh - mh - margin);
   menu.style.top = `${top}px`;
-  menu.style.left = `${Math.max(8, Math.min(r.left, vw - 260))}px`;
+  menu.style.left = `${Math.max(margin, Math.min(r.left, vw - 260))}px`;
+  // FINAL: bound the menu to the space from its top to the viewport bottom, so the
+  // .frame-move-list (overflow-y:auto) is always fully scrollable and its last item
+  // (e.g. the bottom of a long "Merge into" list) is never clipped off-screen.
+  menu.style.maxHeight = `${vh - top - margin}px`;
   setTimeout(() => {
     document.addEventListener("click", function close(ev) {
       if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
@@ -6275,25 +6374,74 @@ function openFrameEditMenu(anchorEl, frame) {
   typeLbl.className = "frame-move-section";
   typeLbl.textContent = "Mark as type";
   list.appendChild(typeLbl);
-  const typeRow = document.createElement("div");
-  typeRow.className = "frame-type-row";
-  for (const [t, label] of FRAME_TYPE_CHOICES) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "frame-type-chip" + (frame.frameType === t ? " active" : "");
-    b.textContent = label;
-    b.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "mark_type", frameName: frame.name, frameType: t }); });
-    typeRow.appendChild(b);
+  // Grouped by the three tiers the model actually has (homes / nested / lenses) so
+  // the very different behaviors are legible — a flat chip row hid that marking a
+  // top frame as "Workstream" or "Geography" re-homes or de-homes it.
+  for (const tier of FRAME_TYPE_TIERS) {
+    const tierLbl = document.createElement("div");
+    tierLbl.className = "frame-type-tier-label";
+    tierLbl.textContent = tier.label;
+    tierLbl.title = tier.hint;
+    const hint = document.createElement("span");
+    hint.className = "frame-type-tier-hint";
+    hint.textContent = " — " + tier.hint;
+    tierLbl.appendChild(hint);
+    list.appendChild(tierLbl);
+    const typeRow = document.createElement("div");
+    typeRow.className = "frame-type-row";
+    for (const t of tier.types) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "frame-type-chip" + (frame.frameType === t ? " active" : "");
+      b.textContent = FRAME_TYPE_LABEL[t] || t;
+      if (FRAME_TYPE_HELP[t]) b.title = FRAME_TYPE_HELP[t];
+      b.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "mark_type", frameName: frame.name, frameType: t }); });
+      typeRow.appendChild(b);
+    }
+    list.appendChild(typeRow);
   }
-  list.appendChild(typeRow);
 
-  const others = frames.filter((f) => f.parentFid == null && f.name !== frame.name);
-  if (others.length) {
+  const isTop = frame.parentFid == null;
+  const topFrames = frames.filter((f) => f.parentFid == null && f.name !== frame.name);
+
+  // Re-home (Issue 3) — the `reparent` overlay event. Demote a top frame UNDER
+  // another ("everything Merck falls under Merck Above Brand"), move a sub-frame to a
+  // different parent, or promote one back to top-level. Unlike merge, the frame and
+  // its own jobs/children stay intact. Substrate-preserving (overlay only).
+  const rItems = [];
+  if (!isTop) rItems.push({ label: "↑ Promote to top-level", newParent: "" });
+  for (const t of topFrames) {
+    if (!isTop && frame.parentFid === t.fid) continue; // already under this parent
+    rItems.push({ label: t.name, newParent: t.name });
+  }
+  if (rItems.length) {
+    const rLbl = document.createElement("div");
+    rLbl.className = "frame-move-section";
+    rLbl.textContent = isTop ? "Make sub-category of…" : "Re-home under…";
+    list.appendChild(rLbl);
+    for (const ri of rItems) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "frame-move-item";
+      b.textContent = ri.label;
+      b.addEventListener("click", () => { menu.remove(); frameEdit({ eventType: "reparent", frameName: frame.name, newParentFrameName: ri.newParent }); });
+      list.appendChild(b);
+    }
+  }
+
+  // Merge into (Issue 4) — fold a redundant frame's jobs into a PEER, then drop it.
+  // Peers are same-tier: other top frames for a top frame; sibling sub-frames (same
+  // parent) for a nested one — so redundant sub-frames like "Vaccine Story Refresh" ≡
+  // "Vaccine Confidence & Narrative Refresh" can finally be combined.
+  const mergeTargets = isTop
+    ? topFrames
+    : frames.filter((f) => f.parentFid === frame.parentFid && f.name !== frame.name);
+  if (mergeTargets.length) {
     const mLbl = document.createElement("div");
     mLbl.className = "frame-move-section";
     mLbl.textContent = "Merge into";
     list.appendChild(mLbl);
-    for (const t of others) {
+    for (const t of mergeTargets) {
       const it = document.createElement("button");
       it.type = "button";
       it.className = "frame-move-item";
@@ -6323,15 +6471,51 @@ function openMovePicker(anchorEl, grp) {
   input.type = "text";
   input.placeholder = "+ New category…";
   input.className = "frame-move-new-input";
+  header.appendChild(input);
+
+  // Nesting scope (Issue 2). When the job already lives under a top frame, a new
+  // category shouldn't blindly land at the top level — Trisha's model is "everything
+  // Merck falls under Merck Above Brand." Offer "create UNDER <top>" (a workstream
+  // sub-frame, parentFrameName set) vs. "new top-level category," defaulting to
+  // nesting when a home exists. Backend honors parentFrameName (frame-overlay.ts).
+  const homeTop = grp._top;
+  let nestUnderTop = !!homeTop;
+  if (homeTop) {
+    const scope = document.createElement("div");
+    scope.className = "frame-move-scope";
+    const underChip = document.createElement("button");
+    underChip.type = "button";
+    underChip.className = "frame-type-chip active";
+    underChip.textContent = `Under ${homeTop.name}`;
+    underChip.title = `Create as a sub-category inside ${homeTop.name}`;
+    const topChip = document.createElement("button");
+    topChip.type = "button";
+    topChip.className = "frame-type-chip";
+    topChip.textContent = "New top-level";
+    topChip.title = "Create as a new top-level category";
+    const setScope = (nest) => {
+      nestUnderTop = nest;
+      underChip.classList.toggle("active", nest);
+      topChip.classList.toggle("active", !nest);
+      input.focus();
+    };
+    underChip.addEventListener("click", () => setScope(true));
+    topChip.addEventListener("click", () => setScope(false));
+    scope.appendChild(underChip);
+    scope.appendChild(topChip);
+    header.appendChild(scope);
+  }
   const go = async () => {
     const name = input.value.trim();
     if (!name) return;
     menu.remove();
-    await tauri.core.invoke("frame_edit", { edit: { eventType: "create_frame", frameName: name, frameType: "initiative" } });
+    const createEdit = nestUnderTop && homeTop
+      ? { eventType: "create_frame", frameName: name, frameType: "workstream", parentFrameName: homeTop.name }
+      : { eventType: "create_frame", frameName: name, frameType: "initiative" };
+    await tauri.core.invoke("frame_edit", { edit: createEdit });
     await frameEdit({ eventType: "move", jobKey: grp.key, toFrameName: name, sourceContext: { jobName: grp.label } });
   };
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
-  header.appendChild(input);
   menu.appendChild(header);
 
   // Scrollable list of existing destinations.
@@ -6782,6 +6966,185 @@ function renderDigestProposals(container, decomp, slug, label, panel) {
   }
 }
 
+// ── WP-SoP-Team-Update-Compose — "Compose update to team" on the SoP digest ──
+//
+// A SEPARATE, OUTWARD artifact derived off the (read-only) personal SoP digest:
+// derive → edit inline → send to Outbox (email/Teams) → capture the edits as diff
+// signal for the learning model. Reuses the existing compose/edit machinery — the
+// inline textarea + Save & analyze + renderDigestProposals from attachDigestEditor,
+// the outbox producer via stageOutboxDraft, and the forest-scope digest-edit
+// capture via edit_digest. Gated by the SoP payload's `composeEnabled` capability
+// flag (absent when SOP_COMPOSE_ENABLED is off ⇒ the affordance never renders, so
+// the personal SoP panels stay byte-equal). `subject` = the id (frame fid / job
+// key), or "forest" for the whole-forest scope.
+
+// Best-effort capture of the compose→final delta as a forest-scope digest edit
+// (editType 'digest' → the auto-compose voice channel + inform-set). Never blocks
+// the send. Skips an unchanged draft (an unchanged draft says our compose was good).
+async function captureComposeEdit(level, subject, generated, finalText) {
+  const from = (generated || "").trim();
+  const to = (finalText || "").trim();
+  if (!to || from === to) return null;
+  try {
+    return await tauri.core.invoke("edit_digest", { scope: level, subject: String(subject), systemDigest: generated, humanDigest: finalText });
+  } catch (e) {
+    console.warn("[main] compose edit capture failed (non-blocking):", e);
+    return null;
+  }
+}
+
+function teamUpdateTitle(level, subjectLabel) {
+  if (level === "forest") return "Update to the team: across all work";
+  return "Update to the team: " + (subjectLabel || "this area");
+}
+
+// Attach the "Compose update to team" affordance to a SoP panel. Additive: renders
+// nothing unless the SoP payload says composeEnabled (the capability gate).
+function attachComposeAffordance(panel, opts) {
+  opts = opts || {};
+  const { level, id, data, label } = opts;
+  if (!data || data.composeEnabled !== true) return; // capability gate — flag off ⇒ nothing
+  const ctx = {
+    level,
+    subject: id == null ? "forest" : String(id),
+    subjectLabel: label || (level === "forest" ? "all work" : "this area"),
+  };
+  const wrap = document.createElement("div");
+  wrap.className = "sop-compose";
+  panel.appendChild(wrap);
+  mountComposeStart(wrap, ctx);
+}
+
+// Seed (or re-seed, after Cancel) the collapsed "Compose update to team" button +
+// its click handler. On click: fetch the derived draft, then open the editor.
+function mountComposeStart(wrap, ctx) {
+  wrap.dataset.open = "";
+  wrap.innerHTML = "";
+  const startBtn = document.createElement("button");
+  startBtn.type = "button";
+  startBtn.className = "sop-action sop-compose-start";
+  startBtn.textContent = "Compose update to team";
+  wrap.appendChild(startBtn);
+  startBtn.addEventListener("click", async () => {
+    if (wrap.dataset.open === "1") return;
+    wrap.dataset.open = "1";
+    startBtn.disabled = true;
+    startBtn.textContent = "Composing update…";
+    let res;
+    try {
+      res = await tauri.core.invoke("compose_team_update", { level: ctx.level, id: ctx.subject === "forest" ? null : String(ctx.subject) });
+    } catch (e) {
+      mountComposeStart(wrap, ctx);
+      showToast({ kind: "failure", title: "Couldn't compose update", body: String(e) });
+      return;
+    }
+    if (!res || res.available === false || res.composeEnabled === false) {
+      wrap.innerHTML = '<div class="sop-status">No team update to compose for this area right now.</div>';
+      return;
+    }
+    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {} });
+  });
+}
+
+// Render the inline compose editor: resolved recipients, an editable draft, and
+// the send/analyze actions. Mirrors attachDigestEditor's textarea + the share
+// popover's two-button send row.
+function renderComposeEditor(wrap, ctx) {
+  wrap.dataset.open = "1";
+  wrap.innerHTML = "";
+  const generated = ctx.draft || "";
+
+  // Resolved recipients (server-side owners→To/Cc). Unresolved names surfaced,
+  // never dropped — the same affordance the outbox drafts use.
+  const rec = ctx.recipients || {};
+  const recEl = document.createElement("div");
+  recEl.className = "sop-compose-recipients";
+  const recLine = (label, arr, cls) => {
+    if (!arr || !arr.length) return;
+    const d = document.createElement("div");
+    d.className = "sop-compose-recipient-line" + (cls ? " " + cls : "");
+    d.textContent = label + ": " + arr.join(", ");
+    recEl.appendChild(d);
+  };
+  recLine("To", rec.to);
+  recLine("Cc", rec.cc);
+  recLine("Recipients to confirm (no address on file)", rec.unresolved, "sop-compose-unresolved");
+  if (!recEl.childElementCount) {
+    recEl.appendChild(Object.assign(document.createElement("div"), { className: "sop-compose-recipient-line sop-compose-unresolved", textContent: "Recipients to confirm" }));
+  }
+  wrap.appendChild(recEl);
+
+  const ta = document.createElement("textarea");
+  ta.className = "sop-edit-textarea sop-compose-textarea";
+  ta.rows = Math.min(22, Math.max(8, generated.split("\n").length + 1));
+  ta.value = generated;
+  wrap.appendChild(ta);
+
+  const proposals = document.createElement("div");
+  proposals.className = "sop-proposals";
+
+  const row = document.createElement("div");
+  // Match the record "Share this decision" popover: primary filled Send +
+  // bordered secondary actions (same classes → same look/color/feel).
+  row.className = "record-share-actions sop-compose-actions";
+  const mkBtn = (text, cls) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = text;
+    return b;
+  };
+
+  const analyze = mkBtn("Save & analyze", "record-share-copy");
+  analyze.addEventListener("click", async () => {
+    const human = ta.value;
+    if (human.trim() === generated.trim()) { proposals.innerHTML = '<div class="sop-status">No changes yet — edit the draft, then analyze.</div>'; return; }
+    proposals.innerHTML = '<div class="sop-status">Analyzing your edits…</div>';
+    try {
+      const r = await tauri.core.invoke("edit_digest", { scope: ctx.level, subject: String(ctx.subject), systemDigest: generated, humanDigest: human });
+      wrap.dataset.captured = human; // this exact value is now captured — don't double-capture on send
+      renderDigestProposals(proposals, r && r.decomposition, ctx.subject, ctx.subjectLabel, wrap);
+    } catch (e) {
+      proposals.innerHTML = "";
+      showToast({ kind: "failure", title: "Couldn't analyze edits", body: String(e) });
+    }
+  });
+
+  const send = async () => {
+    const finalText = ta.value;
+    if (!finalText.trim()) { showToast({ kind: "failure", title: "Nothing to send", body: "The update is empty." }); return; }
+    // Capture the compose→final delta once (skip if Save & analyze already logged this exact value).
+    if (wrap.dataset.captured !== finalText) {
+      await captureComposeEdit(ctx.level, ctx.subject, generated, finalText);
+      wrap.dataset.captured = finalText;
+    }
+    // Single send → the shared Outbox queue. stageOutboxDraft owns the toast.
+    await stageOutboxDraft({
+      id: "team-update:" + ctx.level + ":" + ctx.subject,
+      title: teamUpdateTitle(ctx.level, ctx.subjectLabel),
+      detail: finalText,
+      detailGenerated: generated,
+      intent: "email",
+      toRecipients: Array.isArray(rec.to) ? rec.to : undefined,
+      ccRecipients: Array.isArray(rec.cc) ? rec.cc : undefined,
+      sourceKind: "team-update",
+      sourceLabel: ctx.level + ":" + ctx.subject,
+    });
+  };
+
+  const sendBtn = mkBtn("Send to Outbox", "record-share-send");
+  sendBtn.addEventListener("click", () => send());
+  const cancel = mkBtn("Cancel", "record-share-copy");
+  cancel.addEventListener("click", () => mountComposeStart(wrap, ctx));
+
+  row.appendChild(sendBtn);
+  row.appendChild(analyze);
+  row.appendChild(cancel);
+  wrap.appendChild(row);
+  wrap.appendChild(proposals);
+  ta.focus();
+}
+
 // Team roster (slug → displayName) for the owner-reassign dropdown. Fetched once
 // from the batch digest and cached; refreshed lazily if empty.
 let _sopRoster = null;
@@ -7009,8 +7372,27 @@ function renderDecisions() {
 
   for (const grp of ordered) {
     // WP-Work-Forest — top-frame + workstream section headers (project lens only).
-    if (grp._frameHeader) listEl.appendChild(buildFrameHeader(grp._frameHeader));
-    if (grp._wsHeader) listEl.appendChild(buildWsHeader(grp._wsHeader));
+    // Real frames (not the "Unframed" bucket) get a collapse chevron so a whole
+    // project — or a single sub-category under it — can be folded away.
+    if (grp._frameHeader) {
+      const fh = buildFrameHeader(grp._frameHeader);
+      if (!grp._frameHeader.__unframed) {
+        fh.dataset.frameName = grp._frameHeader.name;
+        fh.dataset.sectionHeader = "top";
+        makeSectionCollapsible(fh, "top:" + grp._frameHeader.name, listEl);
+      }
+      listEl.appendChild(fh);
+    }
+    if (grp._wsHeader) {
+      const wh = buildWsHeader(grp._wsHeader);
+      const wsName = typeof grp._wsHeader === "object" ? grp._wsHeader.name : grp._wsHeader;
+      const topName = grp._top ? grp._top.name : "";
+      wh.dataset.frameName = topName;
+      wh.dataset.wsName = wsName;
+      wh.dataset.sectionHeader = "ws";
+      makeSectionCollapsible(wh, "ws:" + topName + "|" + wsName, listEl);
+      listEl.appendChild(wh);
+    }
 
     const decisions = grp.items.filter((it) => (it.record ? it.record.type : it.type) === "decision").length;
     const commitments = grp.items.length - decisions;
@@ -7018,7 +7400,8 @@ function renderDecisions() {
 
     const groupEl = document.createElement("div");
     groupEl.className = "decisions-group";
-    if (grp._wsName) groupEl.classList.add("decisions-group-nested");
+    if (grp._top) groupEl.dataset.frameName = grp._top.name;   // for section collapse
+    if (grp._wsName) { groupEl.classList.add("decisions-group-nested"); groupEl.dataset.wsName = grp._wsName; }
 
     // Clickable header — collapses/expands the group so the list reads as a
     // scannable overview of groups rather than one long scroll. Default collapsed.
@@ -7160,6 +7543,8 @@ function renderDecisions() {
     groupEl.appendChild(body);
     listEl.appendChild(groupEl);
   }
+  // Fold away any sections the user had collapsed (persists across frame-edit re-renders).
+  if (framed) applyFrameCollapse(listEl);
 }
 
 /** One compact card for the browser: type chip + state, summary, owner · due,
