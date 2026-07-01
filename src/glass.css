@@ -285,24 +285,41 @@ body {
  *    a soft text control (like .frame-edit-btn); the panel is a full-width child
  *    of the flex header that stacks beneath the badge/name row when expanded. ── */
 .sop-frame-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--glass-text-dim);
+  color: var(--glass-text);
   cursor: pointer;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   border: 1px solid var(--glass-border);
   background: var(--glass-surface);
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
+/* Disclosure chevron — the "this expands" affordance. Points right when collapsed,
+   rotates down when open. Makes the pill unmistakably an interactive toggle. */
+.sop-frame-toggle::before {
+  content: "\203A"; /* › */
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.75;
+  transition: transform 0.12s ease;
+}
 .sop-frame-toggle:hover {
   background: var(--glass-surface-hover);
   color: var(--glass-text);
+  border-color: var(--glass-text-dim);
 }
 .sop-frame-toggle[aria-expanded="true"] {
   color: var(--glass-accent);
   border-color: var(--glass-accent);
+}
+.sop-frame-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
 }
 .sop-frame-panel {
   flex-basis: 100%;
@@ -311,6 +328,13 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: var(--glass-radius-sm);
   background: var(--glass-surface);
+  /* Reset the workstream header's quieter label type (.frame-ws-header sets
+     font-weight:600 + letter-spacing:0.05em) so a workstream SoP renders with the
+     SAME prose weight/spacing as a top-level frame SoP — the digest body is prose,
+     not a label. */
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--glass-text);
 }
 .sop-frame-body {
   display: block;
@@ -867,6 +891,37 @@ body {
 }
 .sop-proposals:empty {
   display: none;
+}
+
+/* WP-SoP-Team-Update-Compose — the outward "Compose update to team" affordance on
+ * the SoP digest. Distinct from the personal digest editor, but shares the same
+ * .sop-* typography + token system (no re-fragmentation). */
+.sop-compose {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--glass-border);
+}
+.sop-compose-recipients {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--glass-text-dim, var(--glass-text));
+}
+.sop-compose-recipient-line {
+  opacity: 0.85;
+}
+.sop-compose-unresolved {
+  font-style: italic;
+  opacity: 0.7;
+}
+.sop-compose-textarea {
+  margin-top: 2px;
+}
+.sop-compose-actions {
+  flex-wrap: wrap;
 }
 
 /* TYPED-DIFF-CAPTURE Phase A — record-level inline editing (type / summary /

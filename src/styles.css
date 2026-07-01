@@ -2570,7 +2570,19 @@ code {
 .log-row-actions,
 .record-actions {
   display: flex;
-  padding-top: 2px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;          /* row-gap col-gap — even spacing + clean wrap */
+  padding-top: 8px;
+}
+/* The Watching-row footer carries the same control set — keep it identically
+   spaced so the CTAs read as one consistent family across surfaces. */
+.log-row-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding-top: 8px;
 }
 
 /* Any link-button in a card footer flows in place — overrides the legacy global
@@ -2677,25 +2689,28 @@ code {
    (Resolve carries margin-left:auto). Muted by default, brightening on hover,
    matching the reason-item treatment. */
 .record-action-btn {
-  align-self: flex-start;
-  border: 0;
-  background: transparent;
+  align-self: center;
+  /* Bordered-pill affordance so Resolve/Snooze read as clickable at rest, matching
+     the other secondary CTAs (Cancel/Copy) — no icon needed. */
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
   cursor: pointer;
-  padding: 1px 6px;
-  border-radius: 6px;
-  line-height: 1;
+  padding: 2px 9px;
+  border-radius: 999px;
+  line-height: 1.3;
   font-size: 11.5px;
-  color: var(--text-tertiary);
-  transition: color 0.12s ease, background 0.12s ease;
+  color: var(--glass-text-dim);
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
 }
 
-.record-resolve-btn {
-  margin-left: auto;
-}
+/* .record-resolve-btn no longer right-anchors: the action row now gap-spaces its
+   controls and only .record-dismiss-btn (the ✕) carries margin-left:auto to anchor
+   the right edge. Two competing auto-margins were what unbalanced the row. */
 
 .record-action-btn:hover {
-  color: #e8eaed;
-  background: var(--surface-2);
+  color: var(--glass-text);
+  background: var(--glass-surface-hover);
+  border-color: var(--glass-text-dim);
 }
 
 .record-action-btn:focus-visible {
@@ -3484,6 +3499,34 @@ code {
   margin: 14px 0 2px 14px;
 }
 .frame-ws-name { text-transform: uppercase; }
+/* Collapse chevron on frame + workstream section headers. Sits first (before the
+   badge/name); folds the whole project or a single sub-category. The whole header
+   is the click target (.frame-section-collapsible), so this is just the cue. */
+.frame-collapse-chev {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--glass-text-dim);
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+  margin-left: -2px;
+  user-select: none;
+  transition: color 0.12s ease;
+}
+.frame-ws-header .frame-collapse-chev { font-size: 12px; }
+/* These section rows set display:flex, which beats the UA [hidden]{display:none};
+   without these overrides, collapsing (el.hidden = true) would never hide them. */
+.frame-header[hidden],
+.frame-ws-header[hidden],
+.decisions-group[hidden] { display: none; }
+/* Collapsible section headers get an obvious pointer + hover, matching the per-job
+   group headers. */
+.frame-section-collapsible { cursor: pointer; }
+.frame-section-collapsible:hover { background: var(--glass-surface-hover); border-radius: 6px; }
+.frame-section-collapsible:hover .frame-collapse-chev { color: var(--glass-text); }
+/* When collapsed, hint that content is hidden (a resting-state affordance). */
+.frame-header.frame-section-collapsed .frame-collapse-chev,
+.frame-ws-header.frame-section-collapsed .frame-collapse-chev { color: var(--accent, #3884ff); }
 /* The on-demand SoP toggle keeps its normal case + dim color inside the
    uppercase workstream label. */
 .frame-ws-header .sop-frame-toggle { text-transform: none; letter-spacing: 0.02em; }
@@ -3704,6 +3747,18 @@ code {
   color: var(--glass-text-faint);
   padding: 8px 2px 4px;
 }
+/* Tier sub-labels inside "Mark as type" — quieter than the section header, with an
+   inline hint that explains what the tier does. */
+.frame-type-tier-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--glass-text-dim);
+  padding: 7px 2px 3px;
+}
+.frame-type-tier-hint {
+  font-weight: 400;
+  color: var(--glass-text-faint);
+}
 .frame-type-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px; }
 .frame-type-chip {
   font-size: 11px;
@@ -3729,6 +3784,8 @@ code {
 }
 .frame-edit-btn:hover { color: var(--glass-text); background: var(--glass-surface-hover); }
 .frame-move-new-row { padding: 4px 4px 2px; border-top: 1px solid var(--glass-border); margin-top: 4px; }
+/* Nested-vs-top scope toggle under the "New category" input (Issue 2). */
+.frame-move-scope { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 2px 2px; }
 .frame-move-new-input {
   width: 100%;
   font-size: 12px;
