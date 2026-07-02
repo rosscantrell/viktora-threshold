@@ -91,6 +91,8 @@ const VIEWS = [
   "view-tidbit",
   // WP-PLAUD-04a — Plaud Sync Queue
   "view-plaud-queue",
+  // WP-CASCADE-PRODUCTION WP-T1 — Proxy-fleet inbox queue
+  "view-proxy-queue",
   // WP-ONENOTE-EXPORT-04 — OneNote Browse
   "view-onenote-browse",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
@@ -321,6 +323,14 @@ async function bootstrap() {
     // Queue" item), land in the queue view.
     if (window.location.hash === "#plaud-queue") {
       enterPlaudQueueView();
+      return;
+    }
+
+    // WP-CASCADE-PRODUCTION WP-T1 — widget_expand("proxy-queue") (the ambient
+    // amber proxy badge or the right-click menu) navigates here with
+    // #proxy-queue. Render the proxy-fleet inbox.
+    if (window.location.hash === "#proxy-queue") {
+      enterProxyQueueView();
       return;
     }
 
@@ -10375,6 +10385,379 @@ async function handlePlaudSyncNow() {
   }
 }
 
+// ───────── WP-CASCADE-PRODUCTION WP-T1 — Proxy-fleet inbox ─────────
+//
+// The consumer surface for the nominate→filter→adjudicate→ratify pipeline: the
+// proxy fleet nominates typed proposals (merge / close / combine / chase /
+// escalate), each carrying an axes-agreement confidence. This view splits them
+// into two piles by that confidence and lets the user ratify one-tap.
+//
+// ONE card family (brief §2b.4): the "Wants your eye" cards are built on the
+// SAME `.record-card` chrome the decision-log uses (renderRecordCard's classes)
+// and reuse the gesture affordances — appendDismissControl / undoDismiss and the
+// toast+Undo pattern — rather than a second card framework.
+
+// The one-line question shown at the top of every proxy card, by kind. Matches
+// the brief's card-anatomy copy.
+const PROXY_KIND_QUESTIONS = {
+  merge: "Same commitment — merge?",
+  close: "Looks closed — mark resolved?",
+  combine: "Same initiative — combine?",
+  chase: "Approve this chase note?",
+  escalate: "Re-promised repeatedly — escalate?",
+};
+
+// Human labels for the routing-verdict chip.
+const PROXY_VERDICT_LABELS = {
+  DUPLICATE: "duplicate",
+  RECURRING: "recurring",
+  DISTINCT: "distinct",
+  RESOLVED_EVIDENCE: "resolved (evidence)",
+  RESTATEMENT: "restatement",
+  RELATED_ONLY: "related only",
+};
+
+// The confidence floor that sends an item to the "Filed confidently" pile when
+// the item didn't already carry a terminal status. High-band per the brief
+// (auto-band ≥0.90); adjudicate-band items land in "Wants your eye".
+const PROXY_FILED_CONFIDENCE = 0.9;
+
+/**
+ * Enter the proxy inbox. Loads the queue via fetch_proxy_queue (fixture-first;
+ * WP-E5 endpoint later) and renders the two piles. Failure-safe: an IPC error
+ * surfaces via showToast and leaves the empty state visible, like the Plaud
+ * queue.
+ */
+async function enterProxyQueueView() {
+  state.inWizard = false;
+  showView("view-proxy-queue");
+  setNav([{ label: "Proxy inbox" }], { back: () => goHome() });
+  await refreshProxyQueue();
+}
+
+/** Re-fetch + re-render both piles. Called on view-enter and on Refresh. */
+async function refreshProxyQueue() {
+  const attentionList = document.getElementById("proxy-attention-list");
+  const filedList = document.getElementById("proxy-filed-list");
+  const attentionPile = document.getElementById("proxy-pile-attention");
+  const filedPile = document.getElementById("proxy-pile-filed");
+  const emptyEl = document.getElementById("proxy-queue-empty");
+  const metaEl = document.getElementById("proxy-queue-meta");
+  if (!attentionList || !filedList || !emptyEl || !metaEl) return;
+
+  attentionList.innerHTML = "";
+  filedList.innerHTML = "";
+
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_proxy_queue");
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Couldn't load the proxy inbox",
+      body: String(err),
+    });
+    if (attentionPile) attentionPile.hidden = true;
+    if (filedPile) filedPile.hidden = true;
+    emptyEl.hidden = false;
+    metaEl.textContent = "";
+    return;
+  }
+
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+
+  // Terminal items (dismissed/undone) never surface. Split the rest by pile:
+  // "Filed confidently" = already-confirmed OR high-band pending; everything
+  // else ("Wants your eye") = pending in the adjudicate band.
+  const live = items.filter(
+    (it) => it && it.status !== "dismissed" && it.status !== "undone",
+  );
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+
+  // "Wants your eye" — full cards.
+  if (wantsEye.length) {
+    for (const item of wantsEye) {
+      attentionList.appendChild(renderProxyCard(item));
+    }
+    if (attentionPile) attentionPile.hidden = false;
+  } else if (attentionPile) {
+    attentionPile.hidden = true;
+  }
+
+  // "Filed confidently" — collapsed rows, undo per row.
+  if (filed.length) {
+    for (const item of filed) {
+      filedList.appendChild(renderProxyFiledRow(item));
+    }
+    if (filedPile) filedPile.hidden = false;
+    const headText = document.getElementById("proxy-filed-heading-text");
+    if (headText) {
+      headText.textContent = `Filed confidently · ${filed.length}`;
+    }
+  } else if (filedPile) {
+    filedPile.hidden = true;
+  }
+
+  // Empty state only when BOTH piles are empty.
+  const anything = wantsEye.length + filed.length;
+  emptyEl.hidden = anything > 0;
+
+  // Meta line: pending-count (what the amber badge counts).
+  const pending = live.filter((it) => it.status === "pending").length;
+  metaEl.textContent =
+    pending === 0
+      ? "Nothing waiting on you"
+      : pending === 1
+        ? "1 waiting on you"
+        : `${pending} waiting on you`;
+}
+
+/** Toggle the "Filed confidently" pile open/closed (collapsed by default). */
+function toggleProxyFiledPile() {
+  const toggle = document.getElementById("proxy-filed-toggle");
+  const list = document.getElementById("proxy-filed-list");
+  const chevron = toggle && toggle.querySelector(".proxy-pile-chevron");
+  if (!toggle || !list) return;
+  const open = list.hidden; // about to open if currently hidden
+  list.hidden = !open;
+  toggle.setAttribute("aria-expanded", String(open));
+  if (chevron) chevron.textContent = open ? "▾" : "▸";
+}
+
+/**
+ * Build one "Wants your eye" card. Reuses the record-card family:
+ *   - `.record-card` base chrome (same class renderRecordCard builds on)
+ *   - the `.record-actions` footer + appendDismissControl gesture affordance
+ *   - the confirm/undo toast pattern (mirrors dismissRecord → undoDismiss)
+ * On TOP of that shared chrome it adds the proxy-specific anatomy: a one-line
+ * question header and an evidence panel (verbatims, dates, owners, cosine band,
+ * routing verdicts). No innerHTML for server strings — createElement/textContent
+ * throughout (same discipline as the rest of the card family).
+ */
+function renderProxyCard(item) {
+  const ev = (item && item.evidence) || {};
+  const card = document.createElement("div");
+  card.className = "record-card proxy-card"; // reuse the record-card family class
+  card.dataset.kind = item.kind || "";
+  card.dataset.id = item.id || "";
+
+  // Header: kind chip + the one-line question (the card's ask).
+  const header = document.createElement("div");
+  header.className = "record-header proxy-card-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip proxy-kind-chip";
+  chip.dataset.kind = item.kind || "";
+  chip.textContent = prettySlug(item.kind || "");
+  header.appendChild(chip);
+  if (typeof item.confidence === "number") {
+    const conf = document.createElement("span");
+    conf.className = "proxy-confidence";
+    conf.textContent = Math.round(item.confidence * 100) + "% agreement";
+    header.appendChild(conf);
+  }
+  card.appendChild(header);
+
+  const question = document.createElement("p");
+  question.className = "proxy-question";
+  question.textContent =
+    PROXY_KIND_QUESTIONS[item.kind] || "Review this proposal?";
+  card.appendChild(question);
+
+  // The rationale ("why") — the fleet's one-line reasoning.
+  if (ev.why) {
+    const why = document.createElement("p");
+    why.className = "record-summary proxy-why";
+    why.textContent = ev.why;
+    card.appendChild(why);
+  }
+
+  // Evidence panel: verbatims, then a meta row (dates · owners · cosine ·
+  // routes · verdict). Reuses the record-quote chrome for verbatims.
+  const evidence = document.createElement("div");
+  evidence.className = "proxy-evidence";
+
+  const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
+  for (const v of verbatims) {
+    if (!v) continue;
+    const quote = document.createElement("blockquote");
+    quote.className = "record-quote proxy-verbatim";
+    quote.textContent = v;
+    evidence.appendChild(quote);
+  }
+
+  const metaRow = document.createElement("p");
+  metaRow.className = "record-meta proxy-evidence-meta";
+  const segs = [];
+  const dates = Array.isArray(ev.dates) ? ev.dates.filter(Boolean) : [];
+  if (dates.length) segs.push(dates.map((d) => String(d).slice(0, 10)).join(" → "));
+  const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
+  if (owners.length) segs.push(owners.map(prettySlug).join(", "));
+  if (typeof ev.cosine === "number") segs.push("cos " + ev.cosine.toFixed(2));
+  metaRow.textContent = segs.join(" · ");
+  if (metaRow.textContent) evidence.appendChild(metaRow);
+
+  // Routing verdicts + routes as chips.
+  const routes = Array.isArray(ev.routes) ? ev.routes.filter(Boolean) : [];
+  if (routes.length || ev.verdict) {
+    const chips = document.createElement("div");
+    chips.className = "proxy-route-chips";
+    if (ev.verdict) {
+      const vChip = document.createElement("span");
+      vChip.className = "proxy-route-chip proxy-verdict-chip";
+      vChip.textContent = PROXY_VERDICT_LABELS[ev.verdict] || String(ev.verdict);
+      chips.appendChild(vChip);
+    }
+    for (const r of routes) {
+      const rChip = document.createElement("span");
+      rChip.className = "proxy-route-chip";
+      rChip.textContent = r;
+      chips.appendChild(rChip);
+    }
+    evidence.appendChild(chips);
+  }
+  card.appendChild(evidence);
+
+  // Actions footer — the SAME `.record-actions` row + gesture affordances the
+  // record cards use. Confirm (proxy-specific ratify) + Dismiss (reuses the
+  // dismiss-with-undo pattern; here the undo re-inserts the card and there's no
+  // record-level suppression, so a local proxy-scoped confirm/dismiss handler
+  // provides the toast + Undo mirror of undoDismiss).
+  const actions = document.createElement("div");
+  actions.className = "record-actions proxy-card-actions";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.type = "button";
+  confirmBtn.className = "record-action-btn proxy-confirm-btn";
+  confirmBtn.textContent = "Confirm";
+  confirmBtn.title = "Confirm — apply this proposal";
+  confirmBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    proxyRatify(item, card, "confirm");
+  });
+  actions.appendChild(confirmBtn);
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.type = "button";
+  dismissBtn.className = "record-dismiss-btn proxy-dismiss-btn";
+  dismissBtn.title = "Dismiss — the fleet got this one wrong";
+  dismissBtn.setAttribute("aria-label", "Dismiss");
+  dismissBtn.textContent = "✕";
+  dismissBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    proxyRatify(item, card, "dismiss");
+  });
+  actions.appendChild(dismissBtn);
+
+  card.appendChild(actions);
+  return card;
+}
+
+/**
+ * Build one "Filed confidently" collapsed row: the question + a one-line gist,
+ * plus an Undo affordance. Undo mirrors undoDismiss (re-insert where it was);
+ * here it moves the item back into "Wants your eye" so the user can re-examine.
+ */
+function renderProxyFiledRow(item) {
+  const ev = (item && item.evidence) || {};
+  const row = document.createElement("div");
+  row.className = "proxy-filed-row";
+  row.dataset.id = item.id || "";
+
+  const kind = document.createElement("span");
+  kind.className = "proxy-filed-kind proxy-kind-chip";
+  kind.dataset.kind = item.kind || "";
+  kind.textContent = prettySlug(item.kind || "");
+  row.appendChild(kind);
+
+  const gist = document.createElement("span");
+  gist.className = "proxy-filed-gist";
+  const firstVerbatim =
+    Array.isArray(ev.verbatims) && ev.verbatims.length ? ev.verbatims[0] : "";
+  gist.textContent = clampText(ev.why || firstVerbatim || item.id || "", 90);
+  gist.title = ev.why || firstVerbatim || "";
+  row.appendChild(gist);
+
+  if (typeof item.confidence === "number") {
+    const conf = document.createElement("span");
+    conf.className = "proxy-filed-conf";
+    conf.textContent = Math.round(item.confidence * 100) + "%";
+    row.appendChild(conf);
+  }
+
+  const undo = document.createElement("button");
+  undo.type = "button";
+  undo.className = "btn btn-link proxy-filed-undo";
+  undo.textContent = "Undo";
+  undo.title = "Undo — move back to Wants your eye";
+  undo.addEventListener("click", (e) => {
+    e.stopPropagation();
+    proxyUndoFiled(item, row);
+  });
+  row.appendChild(undo);
+
+  return row;
+}
+
+/**
+ * Ratify a "Wants your eye" card: optimistically remove it, best-effort POST the
+ * decision to the WP-E5 endpoint (via a future proxy_queue_decide IPC — absent
+ * for now, so this stays local), and show an Undo toast that re-inserts the card
+ * (mirrors dismissRecord → undoDismiss). `action` is "confirm" | "dismiss".
+ */
+function proxyRatify(item, cardEl, action) {
+  if (!cardEl) return;
+  const parent = cardEl.parentNode;
+  const next = cardEl.nextSibling;
+  cardEl.remove();
+
+  // Best-effort server decision. The IPC is a WP-E5 dependency; until it exists
+  // the invoke throws and we keep the optimistic local state (offline-tolerant,
+  // same posture as dismissRecord's server best-effort).
+  tauri.core
+    .invoke("proxy_queue_decide", { id: item.id, decision: action })
+    .catch((err) => console.warn("[main] proxy_queue_decide failed:", err));
+
+  const label =
+    action === "confirm"
+      ? PROXY_KIND_QUESTIONS[item.kind]
+        ? "Applied: " + prettySlug(item.kind)
+        : "Confirmed"
+      : "Dismissed";
+  showToast({
+    kind: action === "confirm" ? "success" : "idempotent",
+    title: label,
+    body: clampText(((item.evidence || {}).why) || "", 80),
+    cta: {
+      label: "Undo",
+      onClick: () => {
+        if (parent && !cardEl.isConnected) parent.insertBefore(cardEl, next || null);
+        tauri.core
+          .invoke("proxy_queue_decide", { id: item.id, decision: "undo" })
+          .catch((err) => console.warn("[main] proxy_queue_decide (undo) failed:", err));
+      },
+    },
+  });
+}
+
+/** Undo a filed item: remove the collapsed row and re-fetch so it re-surfaces
+ *  in "Wants your eye" (server-side status flips to pending). Best-effort. */
+function proxyUndoFiled(item, rowEl) {
+  if (rowEl) rowEl.remove();
+  tauri.core
+    .invoke("proxy_queue_decide", { id: item.id, decision: "undo" })
+    .catch((err) => console.warn("[main] proxy_queue_decide (undo-filed) failed:", err));
+  showToast({
+    kind: "idempotent",
+    title: "Moved back",
+    body: "Now waiting on you again.",
+  });
+}
+
 // ───────── WP-ONENOTE-EXPORT-04 — OneNote browse view ─────────
 
 /**
@@ -11972,6 +12355,27 @@ window.addEventListener("DOMContentLoaded", () => {
         console.warn("[main] widget_collapse (plaud-back) failed:", err);
       }
     });
+  }
+
+  // WP-CASCADE-PRODUCTION WP-T1 — Proxy inbox buttons. Same defensive posture
+  // as the Plaud block above.
+  const proxyRefreshBtn = document.getElementById("btn-proxy-refresh");
+  if (proxyRefreshBtn) {
+    proxyRefreshBtn.addEventListener("click", () => refreshProxyQueue());
+  }
+  const proxyBackBtn = document.getElementById("btn-proxy-back");
+  if (proxyBackBtn) {
+    proxyBackBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("widget_collapse");
+      } catch (err) {
+        console.warn("[main] widget_collapse (proxy-back) failed:", err);
+      }
+    });
+  }
+  const proxyFiledToggle = document.getElementById("proxy-filed-toggle");
+  if (proxyFiledToggle) {
+    proxyFiledToggle.addEventListener("click", toggleProxyFiledPile);
   }
 
   // WP-ONENOTE-EXPORT-04 — OneNote Browse view buttons. Defensive optional

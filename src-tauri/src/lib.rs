@@ -3006,6 +3006,95 @@ async fn fetch_sop(
         .map_err(|e| format!("fetch_sop: parse response failed: {e}"))
 }
 
+/// WP-CASCADE-PRODUCTION WP-T1 — the proxy-fleet inbox queue. Mirrors `fetch_sop`
+/// (bearer auth, base_url, timeout, degrade-to-`{available:false}` on 404/503)
+/// EXCEPT it prefers a local fixture while the real queue store is WP-E5 (not yet
+/// shipped). Resolution order:
+///   1. `<config_dir>/proxy-queue.fixture.json` — a dev/demo fixture the operator
+///      drops next to config.json. If present + parseable, it is returned as-is.
+///      (This is how T1 is demonstrated fixture-first per the brief, without
+///      touching the Ross-owned live backends.)
+///   2. Else proxy `GET /api/proxy-queue` — the WP-E5 endpoint. Until E5 lands
+///      that 404s → `{available:false}`, so the view degrades to its empty state
+///      rather than erroring.
+/// Response contract (matches the WP-E5 queue-item shape):
+///   { available: bool, items: [{ id, kind: merge|close|combine|chase|escalate,
+///     confidence, evidence: { recordIds, cosine, routes, verdict, why,
+///     verbatims?, dates?, owners? }, status: pending|confirmed|dismissed|undone,
+///     actor, ts }] }
+#[tauri::command]
+async fn fetch_proxy_queue(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    // (1) Fixture first — dev/demo path. A parse failure is surfaced (a
+    // malformed fixture the operator placed is worth knowing about); a missing
+    // fixture falls through to the live endpoint.
+    if let Some(fixture) = config_dir().map(|p| p.join("proxy-queue.fixture.json")) {
+        if fixture.exists() {
+            let raw = fs::read_to_string(&fixture)
+                .map_err(|e| format!("fetch_proxy_queue: read fixture failed: {e}"))?;
+            let val: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("fetch_proxy_queue: fixture parse failed: {e}"))?;
+            log::info!("proxy-queue served from fixture {}", fixture.display());
+            return Ok(val);
+        }
+    }
+
+    // (2) Live WP-E5 endpoint. Not yet shipped → 404 → {available:false}.
+    let cfg = match current_config(&state) {
+        Ok(c) => c,
+        Err(_) => return Ok(serde_json::json!({ "available": false, "items": [] })),
+    };
+    let url = format!("{}/api/proxy-queue", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false, "items": [] }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_proxy_queue: parse response failed: {e}"))
+}
+
+/// WP-CASCADE-PRODUCTION WP-T1 — pending-count for the amber widget badge.
+/// Counts `status == "pending"` items from the same source `fetch_proxy_queue`
+/// draws on (fixture-first, then the WP-E5 endpoint). Best-effort like
+/// `get_decision_log_summary`: ANY error (no config, unreachable, parse, missing)
+/// returns 0 so the always-on widget badge simply stays hidden.
+#[tauri::command]
+async fn get_proxy_queue_count(state: tauri::State<'_, AppState>) -> Result<u32, String> {
+    let payload = match fetch_proxy_queue(state).await {
+        Ok(v) => v,
+        Err(_) => return Ok(0),
+    };
+    let count = payload
+        .get("items")
+        .and_then(|i| i.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|it| {
+                    it.get("status").and_then(|s| s.as_str()) == Some("pending")
+                })
+                .count() as u32
+        })
+        .unwrap_or(0);
+    Ok(count)
+}
+
 /// WP-SoP-Team-Update-Compose — derive an OUTWARD team status update FROM a
 /// Work-Forest SoP digest. Proxies POST /api/state-of-play/compose with
 /// { level, id }. `level` is required; `id` is required for job/frame (omit for
@@ -7049,6 +7138,9 @@ pub fn run() {
             // WP-WorkForest-Native-SoP — Work-Forest-native State of Play (job/frame/forest + lenses)
             fetch_sop,
             compose_team_update,
+            // WP-CASCADE-PRODUCTION WP-T1 — proxy-fleet inbox queue + badge count
+            fetch_proxy_queue,
+            get_proxy_queue_count,
             frame_edit,
             fetch_learning_state,
             develop_rules,

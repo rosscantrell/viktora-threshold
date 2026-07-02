@@ -1,0 +1,130 @@
+{
+  "available": true,
+  "items": [
+    {
+      "id": "pq-merge-001",
+      "kind": "merge",
+      "confidence": 0.94,
+      "evidence": {
+        "recordIds": ["rec-4821", "rec-5107"],
+        "cosine": 0.94,
+        "routes": ["same-owner cross-capture"],
+        "verdict": "DUPLICATE",
+        "why": "Same commitment captured in two meetings 6 days apart. Same owner (Allie Wittry), same PV-training deliverable; cosine 0.94 sits in the high-band.",
+        "verbatims": [
+          "Allie will pull the PV training completion numbers before the next OPR sync.",
+          "Allie to send over the pharmacovigilance training completion figures ahead of Thursday."
+        ],
+        "dates": ["2026-06-11", "2026-06-17"],
+        "owners": ["allie-wittry"]
+      },
+      "status": "pending",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:00Z"
+    },
+    {
+      "id": "pq-combine-002",
+      "kind": "combine",
+      "confidence": 0.91,
+      "evidence": {
+        "recordIds": ["rec-3390", "rec-3612"],
+        "cosine": 0.91,
+        "routes": ["co-sign candidate"],
+        "verdict": "DUPLICATE",
+        "why": "Two records reference the same initiative (RSV vaccines landing page) under differently-slugged entities. Distinct owners → co-sign candidate; combine into one initiative.",
+        "verbatims": [
+          "The RSV landing page copy needs legal sign-off before it can ship.",
+          "Vaccines landing page is blocked on the legal review for RSV messaging."
+        ],
+        "dates": ["2026-06-20", "2026-06-22"],
+        "owners": ["trisha-comsti", "marketing-team"]
+      },
+      "status": "pending",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:03Z"
+    },
+    {
+      "id": "pq-close-003",
+      "kind": "close",
+      "confidence": 0.78,
+      "evidence": {
+        "recordIds": ["rec-2201", "rec-2890"],
+        "cosine": 0.81,
+        "routes": ["resolution-candidate", "temporal-forward"],
+        "verdict": "RESOLVED_EVIDENCE",
+        "why": "An open commitment (Dr. Carter to approve the protocol amendment) has a later record implying completion. Adjudicate-band; state-change verdict — held to majority-of-3 before proposal.",
+        "verbatims": [
+          "Dr. Carter still needs to approve the protocol amendment.",
+          "Carter signed off on the amendment yesterday, so we're cleared to proceed."
+        ],
+        "dates": ["2026-06-09", "2026-06-24"],
+        "owners": ["dr-carter"]
+      },
+      "status": "pending",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:07Z"
+    },
+    {
+      "id": "pq-chase-004",
+      "kind": "chase",
+      "confidence": 0.72,
+      "evidence": {
+        "recordIds": ["rec-1780"],
+        "cosine": null,
+        "routes": ["chronic-restatement"],
+        "verdict": "RESTATEMENT",
+        "why": "OPR PV-training deliverable re-promised 3 times over 25 days without a closing record. A chase note is drafted; nothing sends until you approve.",
+        "verbatims": [
+          "We'll have the PV training numbers by end of week — same as last two syncs."
+        ],
+        "dates": ["2026-05-28", "2026-06-11", "2026-06-22"],
+        "owners": ["opr-team"]
+      },
+      "status": "pending",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:11Z"
+    },
+    {
+      "id": "pq-merge-005",
+      "kind": "merge",
+      "confidence": 0.97,
+      "evidence": {
+        "recordIds": ["rec-6001", "rec-6014"],
+        "cosine": 0.97,
+        "routes": ["same-doc extraction-dup"],
+        "verdict": "DUPLICATE",
+        "why": "Extraction produced two near-identical records from the same document. Same documentId → extraction-dup route; cosine 0.97, high-band, filed confidently.",
+        "verbatims": [
+          "Statement of work needs the revised milestone dates.",
+          "SOW to be updated with the new milestone schedule."
+        ],
+        "dates": ["2026-06-25", "2026-06-25"],
+        "owners": ["trisha"]
+      },
+      "status": "confirmed",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:15Z"
+    },
+    {
+      "id": "pq-merge-006",
+      "kind": "merge",
+      "confidence": 0.93,
+      "evidence": {
+        "recordIds": ["rec-7220", "rec-7288"],
+        "cosine": 0.93,
+        "routes": ["same-owner cross-capture"],
+        "verdict": "DUPLICATE",
+        "why": "Same weekly-status action captured in two consecutive standups. High-band, filed confidently.",
+        "verbatims": [
+          "Send the weekly status roll-up to the steering committee.",
+          "Weekly status summary goes out to steering this week."
+        ],
+        "dates": ["2026-06-16", "2026-06-23"],
+        "owners": ["trisha-comsti"]
+      },
+      "status": "confirmed",
+      "actor": "fleet",
+      "ts": "2026-07-02T02:14:18Z"
+    }
+  ]
+}

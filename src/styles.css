@@ -5047,3 +5047,211 @@ button.rec-source {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .privacy-error { color: var(--danger-text); }
+
+/* ────────────────────────────────────────────────────────────────────────
+ * WP-CASCADE-PRODUCTION WP-T1 — Proxy inbox.
+ * The proxy-fleet inbox reuses the record-card family (.record-card,
+ * .record-actions, .record-action-btn, .record-dismiss-btn, .record-quote,
+ * .record-chip, .btn-link) — these rules add ONLY the proxy-specific anatomy:
+ * the view header, the two piles, the one-line question, the evidence panel,
+ * the routing chips, and the collapsed "filed" rows. All colors come from the
+ * dark/glassy token system (no flat/light values).
+ * ──────────────────────────────────────────────────────────────────────── */
+
+.proxy-queue-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "title refresh"
+    "meta refresh";
+  gap: 4px 16px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.proxy-queue-title {
+  grid-area: title;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+  margin: 0;
+}
+.proxy-queue-meta {
+  grid-area: meta;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+#btn-proxy-refresh {
+  grid-area: refresh;
+  white-space: nowrap;
+}
+
+.proxy-pile {
+  margin-bottom: 18px;
+}
+.proxy-pile-heading {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+/* The "Filed confidently" heading doubles as the collapse toggle — a bare,
+   left-aligned button that keeps the heading typography. */
+.proxy-pile-filed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+.proxy-pile-chevron {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.proxy-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Card = the record-card family; these tune the proxy header + question. */
+.proxy-card-header {
+  justify-content: flex-start;
+}
+.proxy-confidence {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--warn-text);
+}
+.proxy-question {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  margin: 0;
+}
+.proxy-why {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0;
+}
+
+/* Kind chip — reuses .record-chip chrome; a warm amber tint marks it as a
+   fleet proposal (distinct from the blue decision / neutral commitment chips). */
+.proxy-kind-chip {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  text-transform: capitalize;
+}
+
+/* Evidence panel — an inset glass block holding verbatims + the meta row. */
+.proxy-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--glass-border);
+}
+.proxy-verbatim {
+  margin: 0;
+  font-size: 12.5px;
+}
+.proxy-evidence-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+.proxy-route-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.proxy-route-chip {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.proxy-verdict-chip {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  border-color: var(--accent-ring);
+}
+
+.proxy-confirm-btn {
+  color: var(--success-text);
+  border-color: var(--success-soft);
+}
+.proxy-dismiss-btn {
+  margin-left: auto;
+}
+
+/* "Filed confidently" collapsed rows — one skimmable line each, undo at the end. */
+.proxy-filed-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.proxy-filed-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+}
+.proxy-filed-kind {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+}
+.proxy-filed-gist {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proxy-filed-conf {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+.proxy-filed-undo {
+  flex: 0 0 auto;
+  font-size: 11.5px;
+}
+
+.proxy-queue-empty {
+  font-size: 14px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 32px 0;
+}
+.proxy-queue-footer {
+  margin-top: 16px;
+}
