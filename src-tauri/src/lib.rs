@@ -3359,11 +3359,18 @@ async fn fetch_question(
 /// the confirm_fact org-edit (plus the drafted bulk events the card previewed)
 /// and marks the question answered — terminal, never re-asked. Mirrors
 /// frame_edit's auth + client posture.
+///
+/// UAT-curate — an optional `selectedJobKeys` (camelCase → `selected_job_keys`)
+/// lets the card act on a SUBSET of the question's member jobs. The UI sends it
+/// only when a curation subset exists; when absent (or all-selected), the server
+/// treats it as the full action — today's behavior. Forwarded into the POST body
+/// only when `Some`, so the wire shape is unchanged until a subset is chosen.
 #[tauri::command]
 async fn answer_question(
     state: tauri::State<'_, AppState>,
     fact_key: String,
     answer: bool,
+    selected_job_keys: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
     let cfg = current_config(&state)?;
     let url = format!(
@@ -3375,10 +3382,14 @@ async fn answer_question(
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let mut body = serde_json::json!({ "factKey": fact_key, "answer": answer });
+    if let Some(keys) = selected_job_keys {
+        body["selectedJobKeys"] = serde_json::json!(keys);
+    }
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", cfg.bearer_token))
-        .json(&serde_json::json!({ "factKey": fact_key, "answer": answer }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;

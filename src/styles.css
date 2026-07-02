@@ -3944,6 +3944,62 @@ code {
   color: var(--glass-text-faint);
   padding-left: 10px;
 }
+/* UAT-curate — the live "N of M selected" count in the disclosure header. */
+.question-members-count {
+  margin-left: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--glass-text-faint);
+}
+/* Each member row: checkbox + name + View toggle on one legible line. */
+.question-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+}
+.question-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text);
+  word-break: break-word;
+}
+.question-member-view {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-member-view:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.10);
+}
+.question-member-view-chevron {
+  font-size: 8px;
+  color: var(--accent-gold, #c8a24a);
+}
+/* INSPECT — the inline record panel; reuses .linked-rec cards inside. */
+.question-member-detail {
+  margin: 6px 0 2px 12px;
+}
+.question-member-empty {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+  padding: 6px 0 2px;
+}
 .question-no-btn {
   padding: 5px 12px;
   font-size: 11px;

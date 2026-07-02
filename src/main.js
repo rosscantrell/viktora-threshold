@@ -6488,16 +6488,46 @@ function buildQuestionCard(card) {
   // The affected items — Trisha's #1 ask ("I need to see the jobs" before
   // answering). Prefer the payload's `members` [{jobKey, jobName}]; fall back to
   // the older `draft` [{jobKey, jobName, toFrameName}]; omit entirely if neither.
-  const disclosure = buildQuestionMembers(card);
-  if (disclosure) el.appendChild(disclosure);
-
-  const actions = document.createElement("div");
-  actions.className = "rule-card-actions";
+  // UAT (Ross 2026-07-02): each row now INSPECTS (inline record content) and
+  // CURATES (a checkbox; Yes acts on the checked subset). The disclosure exposes
+  // `_getSelectedJobKeys()` / `_allSelected()` and drives the Yes enabled state
+  // through the `onSelectionChange` callback wired below (after `yes` exists).
   const yes = document.createElement("button");
   yes.type = "button";
   yes.className = "rule-card-primary";
   yes.textContent = "Yes";
-  yes.addEventListener("click", () => answerQuestion(card, true, el));
+
+  // Sync the Yes button to the current selection: disable (with a hint) when the
+  // set is empty — can't confirm nothing. Left enabled when there's no curatable
+  // disclosure at all (nothing to gate on).
+  const syncYes = (selectedCount, totalCount) => {
+    const empty = totalCount > 0 && selectedCount === 0;
+    yes.disabled = empty;
+    if (empty) {
+      yes.title = "Select at least one item.";
+      yes.setAttribute("aria-disabled", "true");
+    } else {
+      yes.removeAttribute("title");
+      yes.removeAttribute("aria-disabled");
+    }
+  };
+
+  const disclosure = buildQuestionMembers(card, syncYes);
+  if (disclosure) el.appendChild(disclosure);
+
+  // Yes acts on the curated subset. When the disclosure supports curation, pass
+  // the checked jobKeys; when everything is selected (the default) send the full
+  // list — the backend treats absent/all-selected as today's full action, so the
+  // UI is correct today and becomes subset-capable the moment the backend lands.
+  yes.addEventListener("click", () => {
+    const selected = disclosure && typeof disclosure._getSelectedJobKeys === "function"
+      ? disclosure._getSelectedJobKeys()
+      : null;
+    answerQuestion(card, true, el, selected);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "rule-card-actions";
   const no = document.createElement("button");
   no.type = "button";
   no.className = "question-no-btn";
@@ -6516,27 +6546,43 @@ function buildQuestionCard(card) {
 }
 
 // The expandable "which items this touches" disclosure — collapsed by default so
-// the card stays scannable, one click to reveal the affected work by name. Reads
+// the card stays scannable, one click to reveal the affected work. Reads
 // `members` [{jobKey, jobName}] first, then falls back to `draft`
 // [{jobKey, jobName, toFrameName}]. Returns null when there's nothing to show
 // (no empty shell). `membersTruncated` (a count) appends a "+K more" row.
-function buildQuestionMembers(card) {
+//
+// UAT (Ross 2026-07-02) — each row now supports:
+//   INSPECT: a "view" toggle expands the job's records INLINE (Trisha prefers
+//     embedded, no navigating away), reusing renderLinkedRecord over the records
+//     already in _decisionsCtx (recordJobs[recordId] === jobKey). No fetch.
+//   CURATE: a checkbox (default checked). A live "N of M selected" header count.
+//     The wrap exposes `_getSelectedJobKeys()` / `_allSelected()`; `onSyncYes`
+//     (a callback into the Yes button) fires on every toggle so an empty set
+//     disables Yes. The "+K more" truncated rows aren't curatable (no jobKey),
+//     so they're excluded from M and always ride along with the full action.
+function buildQuestionMembers(card, onSyncYes) {
   const raw = Array.isArray(card.members) && card.members.length ? card.members
     : (Array.isArray(card.draft) ? card.draft : []);
-  // Resolve a display name for each item: prefer the payload's own name, then a
-  // jobKey label, then the key itself — never render a bare object.
-  const names = raw
+  // Resolve {name, jobKey} for each item: prefer the payload's own name, then a
+  // jobKey label, then the key itself — never render a bare object. Keep the
+  // jobKey so curation + inspect can key off it (string members carry the key).
+  const members = raw
     .map((m) => {
-      if (!m) return "";
-      if (typeof m === "string") return jobKeyLabel(m);
-      return (m.jobName || m.name || (m.jobKey ? jobKeyLabel(m.jobKey) : "")).trim();
+      if (!m) return null;
+      if (typeof m === "string") return { name: jobKeyLabel(m), jobKey: m };
+      const jobKey = typeof m.jobKey === "string" ? m.jobKey : "";
+      const name = (m.jobName || m.name || (jobKey ? jobKeyLabel(jobKey) : "")).trim();
+      return name ? { name, jobKey } : null;
     })
     .filter(Boolean);
-  if (!names.length) return null;
+  if (!members.length) return null;
 
   const extra = Number.isFinite(card.membersTruncated) && card.membersTruncated > 0
     ? Math.floor(card.membersTruncated) : 0;
-  const total = names.length + extra;
+  // Curatable count M = the named rows we can key by jobKey (truncated +K rows
+  // have no key and stay out of the curation math). Display total includes extra.
+  const curatable = members.filter((m) => m.jobKey);
+  const total = members.length + extra;
 
   const wrap = document.createElement("div");
   wrap.className = "question-members";
@@ -6546,18 +6592,93 @@ function buildQuestionMembers(card) {
   toggle.className = "question-members-toggle";
   toggle.setAttribute("aria-expanded", "false");
   const noun = total === 1 ? "item" : "items";
+  // The header carries the "N of M selected" count once opened; collapsed it just
+  // invites the reveal. `count` is a dedicated span so we can update it live.
   toggle.innerHTML =
     `<span class="question-members-chevron" aria-hidden="true">▸</span>` +
-    `<span class="question-members-label">Show the ${total} ${noun}</span>`;
+    `<span class="question-members-label">Show the ${total} ${noun}</span>` +
+    `<span class="question-members-count" aria-hidden="true"></span>`;
   wrap.appendChild(toggle);
 
   const list = document.createElement("ul");
   list.className = "question-members-list";
   list.style.display = "none";
-  for (const name of names) {
+
+  // checkbox registry: jobKey → checkbox. Only curatable rows enroll.
+  const boxes = new Map();
+  const getSelectedJobKeys = () =>
+    curatable.filter((m) => { const cb = boxes.get(m.jobKey); return cb && cb.checked; })
+      .map((m) => m.jobKey);
+  const allSelected = () => getSelectedJobKeys().length === curatable.length;
+
+  const updateCount = () => {
+    const sel = getSelectedJobKeys().length;
+    const m = curatable.length;
+    const countEl = toggle.querySelector(".question-members-count");
+    if (countEl) countEl.textContent = m > 0 ? `${sel} of ${m} selected` : "";
+    if (typeof onSyncYes === "function") onSyncYes(sel, m);
+  };
+
+  for (const member of members) {
     const li = document.createElement("li");
     li.className = "question-members-item";
-    li.textContent = name;
+
+    const row = document.createElement("div");
+    row.className = "question-member-row";
+
+    // CURATE — the checkbox (default checked), styling matched to the Log's
+    // .job-select-box. Only curatable rows (with a jobKey) get one.
+    if (member.jobKey) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "job-select-box question-member-check";
+      cb.checked = true;
+      cb.setAttribute("aria-label", `Include ${member.name}`);
+      cb.addEventListener("change", updateCount);
+      boxes.set(member.jobKey, cb);
+      row.appendChild(cb);
+    }
+
+    const name = document.createElement("span");
+    name.className = "question-member-name";
+    name.textContent = member.name;
+    row.appendChild(name);
+
+    // INSPECT — a "view" toggle that inline-expands the job's records. Only rows
+    // with a jobKey can be inspected (need the key to find their records).
+    let detail = null;
+    if (member.jobKey) {
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "question-member-view";
+      view.setAttribute("aria-expanded", "false");
+      view.innerHTML =
+        `<span class="question-member-view-chevron" aria-hidden="true">▸</span>` +
+        `<span>View</span>`;
+      row.appendChild(view);
+
+      detail = document.createElement("div");
+      detail.className = "question-member-detail";
+      detail.style.display = "none";
+      // lazy-populate on first open (records are in memory; no fetch either way).
+      let built = false;
+      view.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const showing = detail.style.display !== "none";
+        detail.style.display = showing ? "none" : "block";
+        view.setAttribute("aria-expanded", showing ? "false" : "true");
+        const chev = view.querySelector(".question-member-view-chevron");
+        if (chev) chev.textContent = showing ? "▸" : "▾";
+        if (!built && !showing) {
+          built = true;
+          buildMemberContent(detail, member.jobKey);
+        }
+      });
+    }
+
+    li.appendChild(row);
+    if (detail) li.appendChild(detail);
     list.appendChild(li);
   }
   if (extra > 0) {
@@ -6578,16 +6699,55 @@ function buildQuestionMembers(card) {
     const label = toggle.querySelector(".question-members-label");
     if (label) label.textContent = (open ? "Hide the " : "Show the ") + `${total} ${noun}`;
   });
+
+  // Expose the selection API + prime the header/Yes state once at build.
+  wrap._getSelectedJobKeys = getSelectedJobKeys;
+  wrap._allSelected = allSelected;
+  updateCount();
   return wrap;
+}
+
+// INSPECT helper — fill `container` with a job's record content, reusing the
+// compact renderLinkedRecord over the records already loaded in _decisionsCtx.
+// A job's records = the loaded records whose recordJobs[recordId] === jobKey.
+// Graceful empty state when nothing is loaded for the job.
+function buildMemberContent(container, jobKey) {
+  const ctx = _decisionsCtx || {};
+  const recordJobs = ctx.recordJobs || {};
+  const byId = ctx.byId; // Map recordId → record
+  const recs = [];
+  if (byId && typeof byId.get === "function") {
+    for (const recId of Object.keys(recordJobs)) {
+      if (recordJobs[recId] === jobKey) {
+        const rec = byId.get(recId);
+        if (rec) recs.push(rec);
+      }
+    }
+  }
+  if (!recs.length) {
+    const none = document.createElement("div");
+    none.className = "question-member-empty";
+    none.textContent = "No content loaded for this item.";
+    container.appendChild(none);
+    return;
+  }
+  for (const rec of recs) container.appendChild(renderLinkedRecord(rec));
 }
 
 // Answer: the server folds the confirm_fact (+ the previewed bulk events) and
 // marks the question answered — terminal. Re-enter the view so the fold's
 // effects (and the next question state) come from the server, never a cache.
-async function answerQuestion(card, answer, cardEl) {
+async function answerQuestion(card, answer, cardEl, selectedJobKeys) {
   if (cardEl) cardEl.classList.add("rule-card-busy");
   try {
-    const r = await tauri.core.invoke("answer_question", { factKey: card.factKey, answer });
+    // UAT-curate — forward the curated subset for a "Yes" only. The Tauri command
+    // includes selectedJobKeys in the POST body only when present; an absent (or
+    // all-selected) set is the full action — today's backend behavior. Omit it
+    // for No, and when curation isn't in play (null/undefined), so the wire shape
+    // is unchanged until a real subset is chosen.
+    const args = { factKey: card.factKey, answer };
+    if (answer && Array.isArray(selectedJobKeys)) args.selectedJobKeys = selectedJobKeys;
+    const r = await tauri.core.invoke("answer_question", args);
     _questionCard = null;
     const applied = r && typeof r.appended === "number" ? r.appended : 0;
     showToast({
