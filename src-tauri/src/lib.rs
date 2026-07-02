@@ -3164,6 +3164,75 @@ async fn frame_edit(
         .map_err(|e| format!("frame_edit: parse response failed: {e}"))
 }
 
+/// Phase 0 — structural-edit learning read. Surfaces what the engine learned from
+/// merge/reparent gestures (containment signals + placement priors). Mirrors
+/// frame_edit's auth + client posture exactly; a GET with no body.
+#[tauri::command]
+async fn fetch_learning_state(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/frames/learning-state",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_learning_state: parse response failed: {e}"))
+}
+
+/// WP-Rule-Cards — "Patterns I've noticed" surface. Asks the LLM rule-development
+/// engine to (re)develop cited rules + disjunction ("combine these?") suggestions
+/// from the current semantic signals. A POST with an empty body; the server does
+/// the work and returns the developed rules + suggestions. Mirrors frame_edit's
+/// auth + client posture; the developer LLM step can be slow, so a longer timeout.
+#[tauri::command]
+async fn develop_rules(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/frames/develop-rules",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("develop_rules: parse response failed: {e}"))
+}
+
 /// WP-Frame-HITL "adapts" tier — the felt-learning POST actions. `action` is a
 /// BOUNDED enum (offer / resolve / reject), never an arbitrary path. Mirrors
 /// frame_edit's auth + client posture. `offer` returns the apply-to-similar offer
@@ -6807,6 +6876,8 @@ pub fn run() {
             fetch_sop,
             compose_team_update,
             frame_edit,
+            fetch_learning_state,
+            develop_rules,
             apply_to_similar,
             fetch_learned_suggestions,
             // WP-THRESHOLD-SOURCE — in-app source reader

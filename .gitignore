@@ -26,3 +26,6 @@ src-tauri/tauri.signing.conf.json
 *.njsproj
 *.sln
 *.sw?
+
+# Local-only ported Claude Code memory (may contain sensitive notes)
+memory-bank/
