@@ -3311,6 +3311,180 @@ async fn fetch_learned_suggestions(
         .map_err(|e| format!("fetch_learned_suggestions: parse response failed: {e}"))
 }
 
+/// MVP-Librarian Phase 3 — the Question Engine channel ("one good question").
+/// GET /api/decision-log/questions reports the currently-surfaced question (zero
+/// side effects); with `pull=true` it appends `?pull=1` — the "anything you need
+/// from me?" gesture that surfaces the top judged question on demand. The server
+/// answers 503 when ENABLE_QUESTION_ENGINE is off; that is a NORMAL state, so it
+/// is returned as data (`{disabled:true}`) rather than an error — the UI hides
+/// the affordance silently. Mirrors frame_edit's auth + client posture; pull
+/// runs the phrasing-judge LLM server-side, so a longer timeout.
+#[tauri::command]
+async fn fetch_question(
+    state: tauri::State<'_, AppState>,
+    pull: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/questions{}",
+        cfg.base_url.trim_end_matches('/'),
+        if pull.unwrap_or(false) { "?pull=1" } else { "" }
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(45))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "disabled": true, "question": null }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_question: parse response failed: {e}"))
+}
+
+/// MVP-Librarian Phase 3 — answer the surfaced question. POSTs
+/// `{factKey, answer}` to /api/decision-log/questions/answer; the server folds
+/// the confirm_fact org-edit (plus the drafted bulk events the card previewed)
+/// and marks the question answered — terminal, never re-asked. Mirrors
+/// frame_edit's auth + client posture.
+///
+/// UAT-curate — an optional `selectedJobKeys` (camelCase → `selected_job_keys`)
+/// lets the card act on a SUBSET of the question's member jobs. The UI sends it
+/// only when a curation subset exists; when absent (or all-selected), the server
+/// treats it as the full action — today's behavior. Forwarded into the POST body
+/// only when `Some`, so the wire shape is unchanged until a subset is chosen.
+#[tauri::command]
+async fn answer_question(
+    state: tauri::State<'_, AppState>,
+    fact_key: String,
+    answer: bool,
+    selected_job_keys: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/questions/answer",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let mut body = serde_json::json!({ "factKey": fact_key, "answer": answer });
+    if let Some(keys) = selected_job_keys {
+        body["selectedJobKeys"] = serde_json::json!(keys);
+    }
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 503 {
+        return Err("Question engine is disabled on the server.".into());
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("answer_question: parse response failed: {e}"))
+}
+
+/// MVP-Librarian card-trust — "Not now" = SNOOZE (not permanent). POSTs
+/// `{factKey}` to /api/decision-log/questions/snooze; the server sets the
+/// question aside and re-surfaces it later (Trisha: "if you say not now,
+/// shouldn't it ask again later?"). Mirrors answer_question's auth + client
+/// posture (bearer, invalid-certs, 15s timeout).
+#[tauri::command]
+async fn snooze_question(
+    state: tauri::State<'_, AppState>,
+    fact_key: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/questions/snooze",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({ "factKey": fact_key }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 503 {
+        return Err("Question engine is disabled on the server.".into());
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("snooze_question: parse response failed: {e}"))
+}
+
+/// MVP-Librarian Phase 3 — permanent fact-keyed suppression. POSTs
+/// `{factKey}` to /api/decision-log/questions/dismiss; the fact never
+/// re-surfaces (server-enforced). Retained for a future explicit "Don't ask
+/// again"; "Not now" now snoozes. Mirrors frame_edit's auth + client posture.
+#[tauri::command]
+async fn dismiss_question(
+    state: tauri::State<'_, AppState>,
+    fact_key: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/questions/dismiss",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({ "factKey": fact_key }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 503 {
+        return Err("Question engine is disabled on the server.".into());
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("dismiss_question: parse response failed: {e}"))
+}
+
 /// WP-THRESHOLD-STATE-OF-PLAY — project altitude: returns the team-addressed
 /// digest AND the per-teammate digests scoped to one project. `polish=false`
 /// (`?team=text`) yields the instant deterministic team email; default polishes
@@ -6880,6 +7054,11 @@ pub fn run() {
             develop_rules,
             apply_to_similar,
             fetch_learned_suggestions,
+            // MVP-Librarian Phase 3 — Question Engine card + pull mode
+            fetch_question,
+            answer_question,
+            snooze_question,
+            dismiss_question,
             // WP-THRESHOLD-SOURCE — in-app source reader
             fetch_document,
             fetch_document_records,

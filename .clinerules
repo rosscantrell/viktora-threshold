@@ -1,0 +1,44 @@
+# Project memory (ported from Claude Code)
+
+Persistent context for this repo lives in `memory-bank/` — one markdown file per
+fact. This file is the always-loaded index. When a task touches a topic below,
+READ the linked file in `memory-bank/` before acting; do not rely on the
+one-line hook alone. Keep these notes updated as work lands, and add a new
+`memory-bank/<slug>.md` file plus an index line here when you learn something
+durable that isn't derivable from the code or git history.
+
+`memory-bank/` is gitignored — it is local-only and may contain sensitive
+operational detail (server, token, and pilot notes). Do not paste its contents
+into commits, PRs, or anything that leaves this machine.
+
+## Working preferences
+- Run high/xhigh effort with verification discipline; verify via grep/pgrep and
+  real output, not by eye. (see operating-mode-fable-parity)
+- Desktop app aesthetic: dark/glassy, not flat-light/blocky. (see threshold-ui-design-direction)
+
+## Index
+- [Trisha Log card feedback](memory-bank/trisha-log-card-feedback.md) — 2026-06-29 live UX session on the action-pill prototype: "Share decision" verb, embedded dependency popover, Copy+Send-to-Outbox; upstream content-accuracy fixes
+- [Threshold Settings master-detail](memory-bank/threshold-settings-master-detail.md) — Settings = left group-rail / right detail pane; consolidate all config into it
+- [Bedrock GLM cost optimization](memory-bank/bedrock-glm-cost-optimization.md) — GLM-5-on-Bedrock provider facade + 4 cost levers; why GLM-5.2 can't run on Bedrock
+- [Threshold installer signing](memory-bank/threshold-installer-signing.md) — installers signed/notarized (macOS Developer ID + Windows Azure Trusted Signing); AZURE_CLIENT_SECRET to rotate
+- [Threshold Plaud token lifecycle](memory-bank/threshold-plaud-token-lifecycle.md) — Plaud refresh tokens = 7-day rotating; droplet→person map; reconnect gotchas (use 127.0.0.1)
+- [Apolla pilot deploy gotchas](memory-bank/apolla-pilot-deploy-gotchas.md) — pilot restarts cause a startup-reprocessing outage; package-lock gitignored; Bedrock deps optional+lazy (#303)
+- [Threshold markers are tidbits](memory-bank/threshold-markers-are-tidbits.md) — how Threshold surfaces markers, and why the live corpus shows zero
+- [Field-model design thread](memory-bank/field-model-design-thread.md) — "knowledge field" redesign of the Apolla marker/synthesis engine + scratch experiments
+- [Personal knowledge-field thread](memory-bank/personal-knowledge-field-thread.md) — personal/social + federated use; North Star = root blockers to relationship growth
+- [Apolla evidence-axis state](memory-bank/apolla-evidence-axis-state.md) — WP-EV2 shipped (PR #269, flag OFF); audit-gate adjudication pending; judge-ceiling lesson
+- [Threshold UI design direction](memory-bank/threshold-ui-design-direction.md) — dark/glassy desktop app; token system in styles.css
+- [Plaud serialNumber is unreliable](memory-bank/plaud-serialnumber-is-unreliable.md) — serial_number holds a start-timestamp; don't use as device id
+- [Editor LLM output budget](memory-bank/editor-llm-output-budget.md) — decision-log editor output ~31-36k & variable; use 64k backstop + subdivision
+- [ID2 entity-canon status](memory-bank/id2-entity-canon-status.md) — ENABLE_ENTITY_CANON is NOT merged; restore the topology sibling-veto, not the version-token veto
+- [Corpus eval 2026-06-14](memory-bank/corpus-eval-2026-06-14.md) — real-corpus findings: machinery sound; gaps are upstream attribution + display; tooling in PR #285
+- [SYN2 cards/eval location](memory-bank/syn2-cards-eval-location.md) — WP-SYN2 gate + DEF1/DEF2 cards live in the `claude/wp-syn2-eval` worktree; how to run/verify
+- [Threshold back-half UI grounding](memory-bank/threshold-backhalf-ui-grounding.md) — edges view = display join over /api/decision-log?full=1; HITL needs a new engine PATCH endpoint
+- [Operating mode: Fable parity](memory-bank/operating-mode-fable-parity.md) — high/xhigh effort + verification discipline (confirmed default)
+- [Agent deliverable: inform first](memory-bank/agent-deliverable-inform-first.md) — edge-traversal agent drafts an align-the-affected-parties note FIRST, resolution proposal second
+- [Threshold dev-loop gotchas](memory-bank/threshold-dev-loop-gotchas.md) — clear `~/Library/WebKit/viktora-threshold` (exec-name-keyed); kill BOTH dev + installed app; verify via grep/pgrep
+- [Threshold decision-log persistence](memory-bank/threshold-decision-log-persistence.md) — gzipped _metadata/decision-log.json (flag-gated); only the demo Meridian log (905 recs) is saved locally
+- [Threshold HITL capture intent](memory-bank/threshold-hitl-capture-intent.md) — capture dismissals + edge confirm/dismiss as calibration signal; bearer lane is identity-less
+- [Threshold dismiss feature](memory-bank/threshold-dismiss-feature.md) — client-only suppression shipped; snooze + two-reason + server calibration deferred
+- [Threshold nav/IA redesign](memory-bank/threshold-nav-ia-redesign.md) — renames (Links→Relationships, Connections→Sources, Decisions→Log); persistent nav shell done; project-home pending
+- [Threshold email-login](memory-bank/threshold-email-login.md) — per-user magic-link auth (built, unmerged); reuse map + EMAIL_API_KEY gotcha; unlocks the Mine filter

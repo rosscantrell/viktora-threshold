@@ -1515,8 +1515,12 @@ let _sourceOpenDoc = null;
 let _sourceCurrent = null;
 
 /** Open the source reader beside the current view: fetch the document (detail +
- *  body) and render it, highlighting `verbatim`. */
-async function openSourcePanel(documentId, verbatim) {
+ *  body) and render it, highlighting `verbatim`.
+ *  `extraVerbatims` (optional) is an additional set of authored strings to
+ *  highlight as siblings alongside the document's own extracted records — used
+ *  by the question card to light up every authored hot-list item at once.
+ *  Existing callers omit it; behavior is unchanged when absent. */
+async function openSourcePanel(documentId, verbatim, extraVerbatims, opts) {
   if (!documentId) return;
   const panel = document.getElementById("source-panel");
   const titleEl = document.getElementById("source-panel-title");
@@ -1582,20 +1586,35 @@ async function openSourcePanel(documentId, verbatim) {
   // Gather EVERY verified verbatim extracted from this source so they all get
   // highlighted (the clicked one stays primary). Best-effort: on failure we fall
   // back to highlighting just the clicked record.
+  // AUTHORED mode (question-card hot-list source): skip the doc's OTHER records —
+  // the point is to show THIS category's items, not light up every action-item in
+  // the doc (which drowns the ones the question is about). Only the caller-supplied
+  // item verbatims are highlighted then.
   let others = [];
-  try {
-    const dr = await tauri.core.invoke("fetch_document_records", { documentId });
-    if (_sourceOpenDoc !== documentId) return;
-    const recs = dr && Array.isArray(dr.records) ? dr.records : [];
-    const clicked = (verbatim || "").trim().toLowerCase();
-    for (const it of recs) {
-      const r = it && it.record ? it.record : it;
-      if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
-      if (r.verbatim.trim().toLowerCase() === clicked) continue;
-      others.push(r.verbatim);
+  if (!(opts && opts.authoredOnly)) {
+    try {
+      const dr = await tauri.core.invoke("fetch_document_records", { documentId });
+      if (_sourceOpenDoc !== documentId) return;
+      const recs = dr && Array.isArray(dr.records) ? dr.records : [];
+      const clicked = (verbatim || "").trim().toLowerCase();
+      for (const it of recs) {
+        const r = it && it.record ? it.record : it;
+        if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
+        if (r.verbatim.trim().toLowerCase() === clicked) continue;
+        others.push(r.verbatim);
+      }
+    } catch (err) {
+      console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
     }
-  } catch (err) {
-    console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
+  }
+
+  // Fold in any caller-supplied extra highlights (question-card hot-list items).
+  // Best-effort substring; renderSourceBody silently skips any that don't match.
+  if (Array.isArray(extraVerbatims)) {
+    for (const t of extraVerbatims) {
+      const s = typeof t === "string" ? t.trim() : "";
+      if (s) others.push(s);
+    }
   }
 
   const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others);
@@ -5947,6 +5966,11 @@ function buildFrameHeader(frame) {
   const badge = FRAME_BADGE[frame.state] || FRAME_BADGE.Suggested;
   const b = document.createElement("span"); b.className = "frame-badge " + badge.cls; b.textContent = badge.label;
   const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = frame.name;
+  // MVP-Librarian 2.1 — direct rename entry point on the name itself (the ⋯ glyph
+  // alone was undiscoverable live). Double-click opens the edit menu focused on
+  // the rename field, ready to type.
+  n.title = "Double-click to rename";
+  n.addEventListener("dblclick", (ev) => { ev.stopPropagation(); openFrameEditMenu(n, frame, { focusRename: true }); });
   el.appendChild(b); el.appendChild(n);
   // Heat chip — the orthogonal axis. "On fire" / "Active" carry an accent; "quiet"
   // is omitted so a calm project doesn't shout.
@@ -5993,10 +6017,25 @@ function buildWsHeader(ws) {
   n.className = "frame-ws-name";
   n.textContent = name || "";
   el.appendChild(n);
-  const fid = ws && typeof ws === "object" ? ws.fid : null;
+  // MVP-Librarian 2.1 — the gesture menu (and so rename) must exist for EVERY
+  // rendered frame. The bare-string back-compat path used to drop the ⋯ entirely;
+  // resolve the frame object from the live context so even that path keeps its
+  // rename / re-home / merge affordance. The SoP toggle alone stays fid-gated.
+  const frameObj = ws && typeof ws === "object"
+    ? ws
+    : (name ? (((_decisionsCtx && _decisionsCtx.frames) || []).find((f) => f && f.name === name) || { name }) : null);
+  if (frameObj) {
+    n.title = "Double-click to rename";
+    n.addEventListener("dblclick", (ev) => { ev.stopPropagation(); openFrameEditMenu(n, frameObj, { focusRename: true }); });
+  }
+  const fid = frameObj && frameObj.fid != null ? frameObj.fid : null;
+  let sopPanel = null;
   if (fid != null) {
     const sop = makeSoPToggle(fid, "State of play for this area");
     el.appendChild(sop.toggle);
+    sopPanel = sop.panel;
+  }
+  if (frameObj) {
     // WP-Frame-HITL — sub-frames get the SAME gesture menu as top frames (Issue 4).
     // Without it a nested area had no rename / merge / re-home affordance, so
     // redundant sub-frames couldn't be combined. Appended after the SoP panel so the
@@ -6007,10 +6046,10 @@ function buildWsHeader(ws) {
     edit.setAttribute("role", "button");
     edit.tabIndex = 0;
     edit.title = "Rename, re-home, or merge";
-    edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, ws); });
+    edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frameObj); });
     el.appendChild(edit);
-    el.appendChild(sop.panel);
   }
+  if (sopPanel) el.appendChild(sopPanel);
   return el;
 }
 // Prepend a collapse chevron to a frame/workstream section header. `key` is the
@@ -6097,6 +6136,10 @@ async function frameEdit(edit) {
       }
     } else if (edit && edit.eventType === "merge") {
       showToast({ kind: "success", title: "Combined", body: "I'll treat these as one going forward." });
+    } else if (edit && edit.eventType === "rename" && edit.newFrameName) {
+      // MVP-Librarian 2.1 — visible confirmation. The silent rename was half the
+      // bug; the felt outcome must match the recorded event.
+      showToast({ kind: "success", title: "Renamed", body: `“${edit.oldFrameName}” is now “${edit.newFrameName}”.` });
     }
     // WP-Frame-HITL "adapts" tier — felt learning. After a MOVE, ask the learner
     // whether the same explicit feature explains other jobs, and surface a visible
@@ -6107,6 +6150,25 @@ async function frameEdit(edit) {
   } catch (e) {
     console.warn("[main] frame_edit failed:", e);
   }
+}
+
+// MVP-Librarian 2.2/2.3 — batch org-edit emitter. POSTs each edit sequentially
+// (order matters: a create_frame must land before the moves into it), then reloads
+// the view ONCE. Individual events, individually reversible — never a compound
+// event. Returns the count that failed so callers can toast honestly (e.g. the
+// move_record gesture 400s until its backend companion lands).
+async function frameEditBatch(edits) {
+  let failed = 0;
+  for (const edit of edits) {
+    try {
+      await tauri.core.invoke("frame_edit", { edit });
+    } catch (e) {
+      failed++;
+      console.warn("[main] frame_edit (batch) failed:", e);
+    }
+  }
+  await enterDecisionsView();
+  return failed;
 }
 
 // After a move, fetch the apply-to-similar offer and (if anything generalizes)
@@ -6325,6 +6387,543 @@ async function refreshDevelopedRules() {
     console.warn("[main] develop_rules failed:", e);
     _developedRules = [];
     _disjunctionSuggestions = [];
+  }
+}
+
+// ───────── MVP-Librarian Phase 3 — the Question Engine card ─────────────────
+//
+// "One good question": the server surfaces at most ONE judged question at a time
+// (fact-keyed suppression means an answered/dismissed question NEVER returns, so
+// this state is never a cache — every Log entry re-fetches). `fetch_question`
+// without pull reports the currently-surfaced question if any; the pull gesture
+// ("Anything you need from me?") asks the server to surface the top-ranked one.
+// A 503 (ENABLE_QUESTION_ENGINE off) arrives as `{disabled:true}` and hides the
+// whole surface silently — no affordance, no card, no error.
+let _questionCard = null;        // the ONE surfaced question payload, or null
+let _questionEngineOff = false;  // server flag off → omit the surface entirely
+async function refreshQuestionCard() {
+  try {
+    const res = await tauri.core.invoke("fetch_question", { pull: false });
+    _questionEngineOff = !!(res && res.disabled);
+    _questionCard = !_questionEngineOff && res && res.question ? res.question : null;
+  } catch (e) {
+    console.warn("[main] fetch_question failed:", e);
+    _questionEngineOff = true;   // fail-safe: hide the surface, never a broken shell
+    _questionCard = null;
+  }
+}
+
+// The question surface for the project lens: the card when one is surfaced,
+// otherwise the understated pull affordance. Null when the engine is off.
+function buildQuestionSection() {
+  if (_questionEngineOff) return null;
+  if (_questionCard) {
+    const section = document.createElement("section");
+    section.className = "question-section";
+    section.appendChild(buildQuestionCard(_questionCard));
+    return section;
+  }
+  const row = document.createElement("div");
+  row.className = "question-pull-row";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "question-pull-btn";
+  btn.textContent = "Anything you need from me?";
+  const note = document.createElement("span");
+  note.className = "question-pull-note";
+  btn.addEventListener("click", () => pullQuestion(btn, note));
+  row.appendChild(btn);
+  row.appendChild(note);
+  return row;
+}
+
+// Pull mode: surface the top judged question on demand. Zero interruption cost —
+// flag-off, empty queue, and failure all degrade to a quiet "Nothing right now."
+async function pullQuestion(btn, noteEl) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    const res = await tauri.core.invoke("fetch_question", { pull: true });
+    if (res && !res.disabled && res.question) {
+      _questionCard = res.question;
+      renderDecisions();          // redraw — the card replaces the affordance
+      return;
+    }
+  } catch (e) {
+    console.warn("[main] fetch_question (pull) failed:", e);
+  }
+  btn.disabled = false;
+  btn.textContent = original;
+  if (noteEl) noteEl.textContent = "Nothing right now.";
+}
+
+// The authored hot-list source, when the card carries one AND we have the doc in
+// hand (invisible-by-absence otherwise). Returns { docId, items:[{text,jobKey}] }
+// with each item's text normalized to a non-empty string, or null.
+function questionSource(card) {
+  const src = card && card.source;
+  const docId = src && typeof src.docId === "string" ? src.docId : "";
+  if (!docId || !_docsById || !_docsById.get(docId)) return null;
+  const rawItems = Array.isArray(src.items) ? src.items : [];
+  const items = rawItems
+    .map((it) => {
+      if (!it) return null;
+      const text = typeof it === "string" ? it : (typeof it.text === "string" ? it.text : "");
+      const t = text.trim();
+      if (!t) return null;
+      const jobKey = it && typeof it.jobKey === "string" ? it.jobKey : "";
+      return { text: t, jobKey };
+    })
+    .filter(Boolean);
+  return { docId, docTitle: src.docTitle, items };
+}
+
+// Extract a CODE-like structured identifier (e.g. "US-NON-19757") from a string,
+// for the highlight fallback when an item's LLM prose isn't an exact substring of
+// the source. Matches an uppercase/alnum token with at least one hyphen and a
+// digit run (so it catches job codes, not ordinary ALL-CAPS words). Null if none.
+function extractCodeToken(text) {
+  const m = String(text || "").match(/\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b/);
+  if (!m) return null;
+  return /\d/.test(m[0]) && /-/.test(m[0]) ? m[0] : null;
+}
+
+// The set of best-effort highlight strings for one source item: its authored text
+// first, then its structured code token (if any) as a fallback anchor. Both are
+// passed to the highlighter, which places whichever it can find (substring match)
+// and silently skips the rest.
+function itemHighlightStrings(item) {
+  const out = [];
+  if (item && item.text) out.push(item.text);
+  const code = extractCodeToken(item && item.text);
+  if (code) out.push(code);
+  return out;
+}
+
+// One surfaced question → a card in the rule-card visual language. Shows the
+// judged phrasing, the "why" receipt, BOTH futures from the simulation
+// (Yes → … / No → …), and Yes / No / Not now.
+function buildQuestionCard(card) {
+  const el = document.createElement("div");
+  el.className = "rule-card question-card";
+
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = card.question || "";
+  top.appendChild(stmt);
+  const tag = document.createElement("span");
+  tag.className = "rule-auth question-tag";
+  tag.textContent = "Question";
+  top.appendChild(tag);
+  el.appendChild(top);
+
+  if (card.why) {
+    const why = document.createElement("div");
+    why.className = "question-why";
+    why.textContent = "Why I'm asking: " + card.why;
+    el.appendChild(why);
+  }
+
+  // The authored hot-list source, when present + resolvable. A clickable badge
+  // (reusing the source-badge chrome) opens the authored document in the source
+  // pane, highlighting EVERY authored item at once. Invisible-by-absence when the
+  // card carries no source, or its doc isn't in _docsById.
+  const qsrc = questionSource(card);
+  if (qsrc) {
+    const doc = _docsById.get(qsrc.docId);
+    const label = qsrc.docTitle || (doc ? sourceFromDoc(doc).label : "your notes");
+    const allTexts = qsrc.items.flatMap(itemHighlightStrings);
+    const row = document.createElement("div");
+    row.className = "question-source-row";
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "source-badge question-source-badge";
+    chip.title = "Open your authored list beside this — " + label;
+    const icon = document.createElement("span");
+    icon.className = "source-badge-icon";
+    icon.innerHTML = SOURCE_ICONS[doc ? sourceFromDoc(doc).iconKey : "doc"] || SOURCE_ICONS.doc;
+    chip.appendChild(icon);
+    const lab = document.createElement("span");
+    lab.className = "source-badge-label";
+    lab.textContent = "View in your notes";
+    chip.appendChild(lab);
+    if (qsrc.docTitle) {
+      const det = document.createElement("span");
+      det.className = "source-badge-detail";
+      det.textContent = "· " + qsrc.docTitle;
+      chip.appendChild(det);
+    }
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1), { authoredOnly: true });
+    });
+    row.appendChild(chip);
+    el.appendChild(row);
+  }
+
+  // Both futures — the consequence previews the simulator computed. The answer
+  // path replays the SAME events, so what the card promises is what happens.
+  const futures = document.createElement("div");
+  futures.className = "question-futures";
+  for (const [verb, preview] of [["Yes", card.yesPreview], ["No", card.noPreview]]) {
+    if (!preview) continue;
+    // The verb is rendered as its own styled chip below, so strip any leading
+    // "Yes →" / "No →" the payload already carries — otherwise it reads "Yes → Yes → …".
+    const body = String(preview).replace(/^\s*(?:yes|no)\s*(?:→|->)\s*/i, "");
+    const f = document.createElement("div");
+    f.className = "question-future";
+    const v = document.createElement("span");
+    v.className = "question-future-verb";
+    v.textContent = verb + " →";
+    f.appendChild(v);
+    f.appendChild(document.createTextNode(" " + body));
+    futures.appendChild(f);
+  }
+  if (futures.childNodes.length) el.appendChild(futures);
+
+  // The affected items — Trisha's #1 ask ("I need to see the jobs" before
+  // answering). Prefer the payload's `members` [{jobKey, jobName}]; fall back to
+  // the older `draft` [{jobKey, jobName, toFrameName}]; omit entirely if neither.
+  // UAT (Ross 2026-07-02): each row now INSPECTS (inline record content) and
+  // CURATES (a checkbox; Yes acts on the checked subset). The disclosure exposes
+  // `_getSelectedJobKeys()` / `_allSelected()` and drives the Yes enabled state
+  // through the `onSelectionChange` callback wired below (after `yes` exists).
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "rule-card-primary";
+  yes.textContent = "Yes";
+
+  // Sync the Yes button to the current selection: disable (with a hint) when the
+  // set is empty — can't confirm nothing. Left enabled when there's no curatable
+  // disclosure at all (nothing to gate on).
+  const syncYes = (selectedCount, totalCount) => {
+    const empty = totalCount > 0 && selectedCount === 0;
+    yes.disabled = empty;
+    if (empty) {
+      yes.title = "Select at least one item.";
+      yes.setAttribute("aria-disabled", "true");
+    } else {
+      yes.removeAttribute("title");
+      yes.removeAttribute("aria-disabled");
+    }
+  };
+
+  const disclosure = buildQuestionMembers(card, syncYes, qsrc);
+  if (disclosure) el.appendChild(disclosure);
+
+  // Yes acts on the curated subset. When the disclosure supports curation, pass
+  // the checked jobKeys; when everything is selected (the default) send the full
+  // list — the backend treats absent/all-selected as today's full action, so the
+  // UI is correct today and becomes subset-capable the moment the backend lands.
+  yes.addEventListener("click", () => {
+    const selected = disclosure && typeof disclosure._getSelectedJobKeys === "function"
+      ? disclosure._getSelectedJobKeys()
+      : null;
+    answerQuestion(card, true, el, selected);
+  });
+
+  const actions = document.createElement("div");
+  actions.className = "rule-card-actions";
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "question-no-btn";
+  no.textContent = "No";
+  no.addEventListener("click", () => answerQuestion(card, false, el));
+  const later = document.createElement("button");
+  later.type = "button";
+  later.className = "rule-card-ghost";
+  later.textContent = "Not now";
+  later.addEventListener("click", () => snoozeQuestion(card, el));
+  actions.appendChild(yes);
+  actions.appendChild(no);
+  actions.appendChild(later);
+  el.appendChild(actions);
+  return el;
+}
+
+// The expandable "which items this touches" disclosure — collapsed by default so
+// the card stays scannable, one click to reveal the affected work. Reads
+// `members` [{jobKey, jobName}] first, then falls back to `draft`
+// [{jobKey, jobName, toFrameName}]. Returns null when there's nothing to show
+// (no empty shell). `membersTruncated` (a count) appends a "+K more" row.
+//
+// UAT (Ross 2026-07-02) — each row now supports:
+//   INSPECT: a "view" toggle expands the job's records INLINE (Trisha prefers
+//     embedded, no navigating away), reusing renderLinkedRecord over the records
+//     already in _decisionsCtx (recordJobs[recordId] === jobKey). No fetch.
+//   CURATE: a checkbox (default checked). A live "N of M selected" header count.
+//     The wrap exposes `_getSelectedJobKeys()` / `_allSelected()`; `onSyncYes`
+//     (a callback into the Yes button) fires on every toggle so an empty set
+//     disables Yes. The "+K more" truncated rows aren't curatable (no jobKey),
+//     so they're excluded from M and always ride along with the full action.
+function buildQuestionMembers(card, onSyncYes, qsrc) {
+  const raw = Array.isArray(card.members) && card.members.length ? card.members
+    : (Array.isArray(card.draft) ? card.draft : []);
+  // Index the resolved source items by jobKey so a member row can jump to THAT
+  // item's authored line in the source pane (additive to inspect + curate).
+  const srcItemByJobKey = new Map();
+  if (qsrc && Array.isArray(qsrc.items)) {
+    for (const it of qsrc.items) if (it.jobKey) srcItemByJobKey.set(it.jobKey, it);
+  }
+  // Resolve {name, jobKey} for each item: prefer the payload's own name, then a
+  // jobKey label, then the key itself — never render a bare object. Keep the
+  // jobKey so curation + inspect can key off it (string members carry the key).
+  const members = raw
+    .map((m) => {
+      if (!m) return null;
+      if (typeof m === "string") return { name: jobKeyLabel(m), jobKey: m };
+      const jobKey = typeof m.jobKey === "string" ? m.jobKey : "";
+      const name = (m.jobName || m.name || (jobKey ? jobKeyLabel(jobKey) : "")).trim();
+      return name ? { name, jobKey } : null;
+    })
+    .filter(Boolean);
+  if (!members.length) return null;
+
+  const extra = Number.isFinite(card.membersTruncated) && card.membersTruncated > 0
+    ? Math.floor(card.membersTruncated) : 0;
+  // Curatable count M = the named rows we can key by jobKey (truncated +K rows
+  // have no key and stay out of the curation math). Display total includes extra.
+  const curatable = members.filter((m) => m.jobKey);
+  const total = members.length + extra;
+
+  const wrap = document.createElement("div");
+  wrap.className = "question-members";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "question-members-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  const noun = total === 1 ? "item" : "items";
+  // The header carries the "N of M selected" count once opened; collapsed it just
+  // invites the reveal. `count` is a dedicated span so we can update it live.
+  toggle.innerHTML =
+    `<span class="question-members-chevron" aria-hidden="true">▸</span>` +
+    `<span class="question-members-label">Show the ${total} ${noun}</span>` +
+    `<span class="question-members-count" aria-hidden="true"></span>`;
+  wrap.appendChild(toggle);
+
+  const list = document.createElement("ul");
+  list.className = "question-members-list";
+  list.style.display = "none";
+
+  // checkbox registry: jobKey → checkbox. Only curatable rows enroll.
+  const boxes = new Map();
+  const getSelectedJobKeys = () =>
+    curatable.filter((m) => { const cb = boxes.get(m.jobKey); return cb && cb.checked; })
+      .map((m) => m.jobKey);
+  const allSelected = () => getSelectedJobKeys().length === curatable.length;
+
+  const updateCount = () => {
+    const sel = getSelectedJobKeys().length;
+    const m = curatable.length;
+    const countEl = toggle.querySelector(".question-members-count");
+    if (countEl) countEl.textContent = m > 0 ? `${sel} of ${m} selected` : "";
+    if (typeof onSyncYes === "function") onSyncYes(sel, m);
+  };
+
+  for (const member of members) {
+    const li = document.createElement("li");
+    li.className = "question-members-item";
+
+    const row = document.createElement("div");
+    row.className = "question-member-row";
+
+    // CURATE — the checkbox (default checked), styling matched to the Log's
+    // .job-select-box. Only curatable rows (with a jobKey) get one.
+    if (member.jobKey) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "job-select-box question-member-check";
+      cb.checked = true;
+      cb.setAttribute("aria-label", `Include ${member.name}`);
+      cb.addEventListener("change", updateCount);
+      boxes.set(member.jobKey, cb);
+      row.appendChild(cb);
+    }
+
+    const name = document.createElement("span");
+    name.className = "question-member-name";
+    name.textContent = member.name;
+    row.appendChild(name);
+
+    // INSPECT — a "view" toggle that inline-expands the job's records. Only rows
+    // with a jobKey can be inspected (need the key to find their records).
+    let detail = null;
+    if (member.jobKey) {
+      const view = document.createElement("button");
+      view.type = "button";
+      view.className = "question-member-view";
+      view.setAttribute("aria-expanded", "false");
+      view.innerHTML =
+        `<span class="question-member-view-chevron" aria-hidden="true">▸</span>` +
+        `<span>View</span>`;
+      row.appendChild(view);
+
+      detail = document.createElement("div");
+      detail.className = "question-member-detail";
+      detail.style.display = "none";
+      // lazy-populate on first open (records are in memory; no fetch either way).
+      let built = false;
+      view.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const showing = detail.style.display !== "none";
+        detail.style.display = showing ? "none" : "block";
+        view.setAttribute("aria-expanded", showing ? "false" : "true");
+        const chev = view.querySelector(".question-member-view-chevron");
+        if (chev) chev.textContent = showing ? "▸" : "▾";
+        if (!built && !showing) {
+          built = true;
+          buildMemberContent(detail, member.jobKey);
+        }
+      });
+    }
+
+    // IN NOTES — when this member's job maps to an authored source item, a small
+    // icon opens the source pane highlighted to THAT item's line (its code token
+    // as fallback anchor). Additive: inspect (records) + curate (checkbox) stay.
+    const srcItem = member.jobKey ? srcItemByJobKey.get(member.jobKey) : null;
+    if (srcItem && qsrc) {
+      const inNotes = document.createElement("button");
+      inNotes.type = "button";
+      inNotes.className = "question-member-in-notes";
+      inNotes.setAttribute("aria-label", `See ${member.name} in your notes`);
+      inNotes.title = "See this in your notes";
+      inNotes.innerHTML =
+        `<span class="source-badge-icon" aria-hidden="true">${SOURCE_ICONS.doc}</span>` +
+        `<span>In notes</span>`;
+      const strings = itemHighlightStrings(srcItem);
+      inNotes.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openSourcePanel(qsrc.docId, strings[0], strings.slice(1), { authoredOnly: true });
+      });
+      row.appendChild(inNotes);
+    }
+
+    li.appendChild(row);
+    if (detail) li.appendChild(detail);
+    list.appendChild(li);
+  }
+  if (extra > 0) {
+    const li = document.createElement("li");
+    li.className = "question-members-more";
+    li.textContent = `+${extra} more`;
+    list.appendChild(li);
+  }
+  wrap.appendChild(list);
+
+  let open = false;
+  toggle.addEventListener("click", () => {
+    open = !open;
+    list.style.display = open ? "block" : "none";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    const chev = toggle.querySelector(".question-members-chevron");
+    if (chev) chev.textContent = open ? "▾" : "▸";
+    const label = toggle.querySelector(".question-members-label");
+    if (label) label.textContent = (open ? "Hide the " : "Show the ") + `${total} ${noun}`;
+  });
+
+  // Expose the selection API + prime the header/Yes state once at build.
+  wrap._getSelectedJobKeys = getSelectedJobKeys;
+  wrap._allSelected = allSelected;
+  updateCount();
+  return wrap;
+}
+
+// INSPECT helper — fill `container` with a job's record content, reusing the
+// compact renderLinkedRecord over the records already loaded in _decisionsCtx.
+// A job's records = the loaded records whose recordJobs[recordId] === jobKey.
+// Graceful empty state when nothing is loaded for the job.
+function buildMemberContent(container, jobKey) {
+  const ctx = _decisionsCtx || {};
+  const recordJobs = ctx.recordJobs || {};
+  const byId = ctx.byId; // Map recordId → record
+  const recs = [];
+  if (byId && typeof byId.get === "function") {
+    for (const recId of Object.keys(recordJobs)) {
+      if (recordJobs[recId] === jobKey) {
+        const rec = byId.get(recId);
+        if (rec) recs.push(rec);
+      }
+    }
+  }
+  if (!recs.length) {
+    const none = document.createElement("div");
+    none.className = "question-member-empty";
+    none.textContent = "No content loaded for this item.";
+    container.appendChild(none);
+    return;
+  }
+  for (const rec of recs) container.appendChild(renderLinkedRecord(rec));
+}
+
+// Answer: the server folds the confirm_fact (+ the previewed bulk events) and
+// marks the question answered — terminal. Re-enter the view so the fold's
+// effects (and the next question state) come from the server, never a cache.
+async function answerQuestion(card, answer, cardEl, selectedJobKeys) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    // UAT-curate — forward the curated subset for a "Yes" only. The Tauri command
+    // includes selectedJobKeys in the POST body only when present; an absent (or
+    // all-selected) set is the full action — today's backend behavior. Omit it
+    // for No, and when curation isn't in play (null/undefined), so the wire shape
+    // is unchanged until a real subset is chosen.
+    const args = { factKey: card.factKey, answer };
+    if (answer && Array.isArray(selectedJobKeys)) args.selectedJobKeys = selectedJobKeys;
+    const r = await tauri.core.invoke("answer_question", args);
+    _questionCard = null;
+    const applied = r && typeof r.appended === "number" ? r.appended : 0;
+    showToast({
+      kind: "success",
+      title: answer ? "Got it — yes" : "Got it — no",
+      body: applied > 1
+        ? `Recorded, and applied ${applied} changes it unlocked.`
+        : "Recorded — I'll organize with that in mind.",
+    });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] answer_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't record that", body: "Try again in a moment." });
+  }
+}
+
+// "Not now": a SNOOZE, not a permanent block (Trisha: "if you say not now,
+// shouldn't it ask again later?"). The server records a snooze so the question
+// comes back later instead of being suppressed forever. Same re-enter discipline
+// as answer.
+async function snoozeQuestion(card, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("snooze_question", { factKey: card.factKey });
+    _questionCard = null;
+    showToast({ kind: "idempotent", title: "Not now", body: "Okay — I'll bring this back later." });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] snooze_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't set that aside", body: "Try again in a moment." });
+  }
+}
+
+// Permanent fact-keyed suppression server-side — the question never re-surfaces.
+// Retained for a future explicit "Don't ask again" affordance; "Not now" now
+// snoozes (see snoozeQuestion) rather than dismisses. Same re-enter discipline.
+async function dismissQuestion(card, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("dismiss_question", { factKey: card.factKey });
+    _questionCard = null;
+    showToast({ kind: "idempotent", title: "Got it", body: "I won't ask that again." });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] dismiss_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't dismiss", body: "Try again in a moment." });
   }
 }
 
@@ -6732,7 +7331,7 @@ const FRAME_TYPE_TIERS = [
   { label: "Nested", hint: "lives inside a top-level home", types: ["workstream"] },
   { label: "Lens", hint: "tags jobs across homes without owning them", types: ["topic", "geography"] },
 ];
-function positionMenu(menu, anchorEl) {
+function positionMenu(menu, anchorEl, opts) {
   document.body.appendChild(menu);
   const r = anchorEl.getBoundingClientRect();
   const vh = window.innerHeight, vw = window.innerWidth;
@@ -6751,11 +7350,19 @@ function positionMenu(menu, anchorEl) {
   menu.style.maxHeight = `${vh - top - margin}px`;
   setTimeout(() => {
     document.addEventListener("click", function close(ev) {
-      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) {
+        // onDismiss fires only when THIS click is what closed the menu (isConnected
+        // guard) — an item click that already removed the menu must not re-trigger
+        // it on the next unrelated click. Used by the rename commit-on-dismiss.
+        const wasOpen = menu.isConnected;
+        menu.remove();
+        document.removeEventListener("click", close);
+        if (wasOpen && opts && typeof opts.onDismiss === "function") opts.onDismiss();
+      }
     });
   }, 0);
 }
-function openFrameEditMenu(anchorEl, frame) {
+function openFrameEditMenu(anchorEl, frame, opts) {
   document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
   const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
   const menu = document.createElement("div");
@@ -6767,17 +7374,44 @@ function openFrameEditMenu(anchorEl, frame) {
   title.className = "frame-move-title";
   title.textContent = "Edit category";
   header.appendChild(title);
+  // MVP-Librarian 2.1 (the rename bug) — the old rename was an UNLABELED prefilled
+  // input that committed ONLY on Enter; every other exit (outside click, another
+  // menu item, Escape) silently discarded the typed name, so live rename attempts
+  // produced zero events. Now: a labeled row with an explicit Rename button, and
+  // a changed name also commits when the menu is dismissed by clicking away
+  // (positionMenu onDismiss). Escape restores the name and closes without saving.
+  const renameLbl = document.createElement("div");
+  renameLbl.className = "frame-move-section";
+  renameLbl.textContent = "Rename";
+  header.appendChild(renameLbl);
+  const renameRow = document.createElement("div");
+  renameRow.className = "frame-rename-row";
   const input = document.createElement("input");          // rename, prefilled
   input.type = "text";
   input.className = "frame-move-new-input";
   input.value = frame.name;
+  let renameCommitted = false;
+  const commitRename = () => {
+    const nn = input.value.trim();
+    if (renameCommitted || !nn || nn === frame.name) return false;
+    renameCommitted = true;
+    menu.remove();
+    frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn });
+    return true;
+  };
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      const nn = input.value.trim();
-      if (nn && nn !== frame.name) { menu.remove(); frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn }); }
-    }
+    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+    else if (e.key === "Escape") { e.stopPropagation(); input.value = frame.name; menu.remove(); }
   });
-  header.appendChild(input);
+  const renameSave = document.createElement("button");
+  renameSave.type = "button";
+  renameSave.className = "frame-rename-save";
+  renameSave.textContent = "Rename";
+  renameSave.title = "Save the new name";
+  renameSave.addEventListener("click", () => commitRename());
+  renameRow.appendChild(input);
+  renameRow.appendChild(renameSave);
+  header.appendChild(renameRow);
   menu.appendChild(header);
 
   const list = document.createElement("div");
@@ -6863,7 +7497,11 @@ function openFrameEditMenu(anchorEl, frame) {
     }
   }
   menu.appendChild(list);
-  positionMenu(menu, anchorEl);
+  // Dismissing the menu with a changed name commits the rename (lossless — the
+  // user's typed intent is never silently thrown away again).
+  positionMenu(menu, anchorEl, { onDismiss: () => commitRename() });
+  // Double-click-to-rename entry point lands focused on the name, ready to type.
+  if (opts && opts.focusRename) { input.focus(); input.select(); }
 }
 
 function openMovePicker(anchorEl, grp) {
@@ -6969,6 +7607,238 @@ function openMovePicker(anchorEl, grp) {
   }, 0);
 }
 
+// ───────── MVP-Librarian 2.2 + 2.3 — bulk multi-select + Move to… ─────────
+//
+// Two selection lanes over the framed Work-Forest view, both mode-less (a subtle
+// checkbox per row; ticking any shows one action bar at the bottom of the Log):
+//   • jobs (2.3, Trisha C5): N ticked job groups → one "Move to…" → N individual
+//     `move` org-edit events (the existing event type — nothing compound).
+//   • records (2.2, job-split): ticked record cards inside a job → "Move to…" a
+//     DIFFERENT job (or a brand-new job name) → one `move_record` org-edit per
+//     record: { eventType: "move_record", recordId, toJobKey? | newJobName?,
+//     sourceContext: { jobName } }. The server adds the envelope (id/ts/enriched
+//     sourceContext) exactly as for every other org-edit. NOTE: the backend
+//     companion isn't live yet — until it lands the POST 400s and the bar toasts
+//     the failure honestly; nothing is silently pretended.
+// Selection state is cleared on every re-render (each landed edit reloads the
+// view, so a stale recordId/jobKey can never be replayed).
+const _bulkJobSel = new Map();     // jobKey → job label
+const _bulkRecordSel = new Map();  // recordId → source job label
+
+function clearBulkSelection() {
+  _bulkJobSel.clear();
+  _bulkRecordSel.clear();
+  updateBulkMoveBar();
+}
+
+// The one action bar. Lives inside #view-decisions so it can never leak into
+// another view; rebuilt on every selection change; removed when nothing is ticked.
+function updateBulkMoveBar() {
+  const host = document.getElementById("view-decisions");
+  if (!host) return;
+  let bar = host.querySelector(".bulk-move-bar");
+  const jobs = _bulkJobSel.size, recs = _bulkRecordSel.size;
+  if (!jobs && !recs) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "bulk-move-bar";
+    host.appendChild(bar);
+  }
+  bar.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "bulk-move-count";
+  const parts = [];
+  if (jobs) parts.push(`${jobs} ${jobs === 1 ? "job" : "jobs"}`);
+  if (recs) parts.push(`${recs} ${recs === 1 ? "record" : "records"}`);
+  label.textContent = `${parts.join(" · ")} selected`;
+  bar.appendChild(label);
+  if (jobs) {
+    const mv = document.createElement("button");
+    mv.type = "button";
+    mv.className = "bulk-move-action";
+    mv.textContent = "Move jobs to…";
+    mv.addEventListener("click", (ev) => { ev.stopPropagation(); openBulkJobMovePicker(mv); });
+    bar.appendChild(mv);
+  }
+  if (recs) {
+    const mv = document.createElement("button");
+    mv.type = "button";
+    mv.className = "bulk-move-action";
+    mv.textContent = "Move records to…";
+    mv.addEventListener("click", (ev) => { ev.stopPropagation(); openRecordMovePicker(mv); });
+    bar.appendChild(mv);
+  }
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "bulk-move-clear";
+  clear.textContent = "Clear";
+  clear.addEventListener("click", () => {
+    clearBulkSelection();
+    // untick without a re-render
+    document.querySelectorAll(".job-select-box:checked, .record-select-box:checked").forEach((cb) => { cb.checked = false; });
+  });
+  bar.appendChild(clear);
+}
+
+// 2.3 — destination picker for the ticked JOBS. Same destinations as the per-job
+// Move picker (top frames + nested workstreams + an inline new category), but one
+// choice emits N individual `move` events through frameEditBatch (one reload, no
+// per-move apply-to-similar storm).
+function openBulkJobMovePicker(anchorEl) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const selected = [..._bulkJobSel.entries()]; // [jobKey, label]
+  const n = selected.length;
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = `Move ${n} ${n === 1 ? "job" : "jobs"} to…`;
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New category…";
+  input.className = "frame-move-new-input";
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const emit = async (toFrameName, createEdit) => {
+    menu.remove();
+    const edits = [];
+    if (createEdit) edits.push(createEdit);
+    for (const [jobKey, jobName] of selected) {
+      edits.push({ eventType: "move", jobKey, toFrameName, sourceContext: { jobName } });
+    }
+    clearBulkSelection();
+    const failed = await frameEditBatch(edits);
+    if (failed) {
+      showToast({ kind: "failure", title: "Some moves didn't stick", body: `${failed} of ${edits.length} edits were rejected — check the connection and retry.` });
+    } else {
+      showToast({ kind: "success", title: `Moved ${n} ${n === 1 ? "job" : "jobs"}`, body: `Now under ${toFrameName}.` });
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const name = input.value.trim();
+    if (!name) return;
+    emit(name, { eventType: "create_frame", frameName: name, frameType: "initiative" });
+  });
+
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addItem = (name, nested) => {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item" + (nested ? " nested" : "");
+    it.textContent = name;
+    it.addEventListener("click", () => emit(name));
+    list.appendChild(it);
+  };
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    addItem(t.name, false);
+    for (const w of frames.filter((f) => f.parentFid === t.fid)) addItem(w.name, true);
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
+}
+
+// 2.2 — destination picker for the ticked RECORDS (the job-split gesture).
+// Destinations are JOBS (grouped under their frame for wayfinding) or a typed
+// new job name; one choice emits N individual `move_record` events. Payload per
+// record (envelope added server-side, matching every other org-edit POST):
+//   existing job → { eventType: "move_record", recordId, toJobKey, sourceContext: { jobName } }
+//   new job      → { eventType: "move_record", recordId, newJobName, sourceContext: { jobName } }
+// where sourceContext.jobName is the record's CURRENT job label (the learner's
+// evidence), mirroring what the per-job Move sends for whole-job moves.
+function openRecordMovePicker(anchorEl) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const ctx = _decisionsCtx || {};
+  const frames = ctx.frames || [];
+  const jobNames = ctx.jobNames || {};
+  const selected = [..._bulkRecordSel.entries()]; // [recordId, source job label]
+  const n = selected.length;
+  const jobLabel = (jk) =>
+    jobNames[jk] || jobNames[String(jk).replace(/^job:/, "")] || prettySlug(String(jk).replace(/^job:/, ""));
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = `Move ${n} ${n === 1 ? "record" : "records"} to…`;
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New job…";
+  input.className = "frame-move-new-input";
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const emit = async (dest) => {   // dest: { toJobKey } | { newJobName }
+    menu.remove();
+    const edits = selected.map(([recordId, jobName]) => ({
+      eventType: "move_record",
+      recordId,
+      ...dest,
+      sourceContext: { jobName },
+    }));
+    clearBulkSelection();
+    const failed = await frameEditBatch(edits);
+    if (failed) {
+      // Expected until the move_record backend companion lands: the server 400s
+      // the eventType. Honest failure — never pretend the split stuck.
+      showToast({ kind: "failure", title: "Couldn't move the records", body: `The server rejected ${failed} of ${edits.length} record moves.` });
+    } else {
+      const destLabel = dest.toJobKey ? jobLabel(dest.toJobKey) : dest.newJobName;
+      showToast({ kind: "success", title: `Moved ${n} ${n === 1 ? "record" : "records"}`, body: `Now under ${destLabel}.` });
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const name = input.value.trim();
+    if (!name) return;
+    emit({ newJobName: name });
+  });
+
+  // Jobs grouped under their frame (section label = frame, items = its jobs).
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addJob = (jk) => {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item nested";
+    it.textContent = jobLabel(jk);
+    it.addEventListener("click", () => emit({ toJobKey: jk }));
+    list.appendChild(it);
+  };
+  const seen = new Set();
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    const nested = frames.filter((f) => f.parentFid === t.fid);
+    const keys = [...(t.jobKeys || []), ...nested.flatMap((w) => w.jobKeys || [])];
+    if (!keys.length) continue;
+    const lbl = document.createElement("div");
+    lbl.className = "frame-move-section";
+    lbl.textContent = t.name;
+    list.appendChild(lbl);
+    for (const jk of keys) { if (!seen.has(jk)) { seen.add(jk); addJob(jk); } }
+  }
+  // Jobs known to the mapping but not in any rendered frame (unframed).
+  const unframed = [...new Set(Object.values(ctx.recordJobs || {}))].filter((jk) => jk && !seen.has(jk));
+  if (unframed.length) {
+    const lbl = document.createElement("div");
+    lbl.className = "frame-move-section";
+    lbl.textContent = "Unframed";
+    list.appendChild(lbl);
+    for (const jk of unframed) { seen.add(jk); addJob(jk); }
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
+}
+
 /**
  * Open the Decisions browser. Pulls every record (fetch_decision_log_full) and
  * the documents (fetch_documents → /api/data) so each record joins to its
@@ -7005,16 +7875,12 @@ async function enterDecisionsView(initialFilter, navCtx) {
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log_full");
-    // WP-Frame-HITL "adapts" tier — refresh ambient learned suggestions in lockstep
-    // with the Log data so job rows can render the inline "Suggested: X" chips.
-    await refreshLearnedSuggestions();
-    // Phase 0 — pull the learned-state (containment signals etc.) into memory. Not
-    // rendered as a header chip anymore (redundant once the frame is already nested);
-    // kept as plumbing for the forthcoming surfaces (suggest-vs-auto, "group under X?").
-    await refreshContainmentSignals();
-    // WP-Rule-Cards — develop the LLM-cited rules + "combine these?" suggestions for
-    // the "Patterns I've noticed" surface. Empty on settled corpora; failure-safe.
-    await refreshDevelopedRules();
+    // PERF: the ambient enrichment (learned-suggestion chips, the "Patterns I've
+    // noticed" rules, and the Question-Engine card) USED to be awaited here, BEFORE the
+    // first paint. But the Question-Engine generation alone can take ~30s (doc-type +
+    // index extraction + membership embeddings + simulation + judge), so the decisions
+    // — ready in ~50ms — sat blocked behind it. It now fires fire-and-forget AFTER the
+    // paint (below `renderDecisions()`), each patching itself in when it lands.
   } catch (err) {
     console.warn("[main] fetch_decision_log_full failed:", err);
     if (statusEl) {
@@ -7086,8 +7952,22 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // step 5 — ActionCandidateView mode per record; step 6 — per-record "who".
     actionKinds: data && data.actionKinds ? data.actionKinds : {},
     recordRelationship: data && data.recordRelationship ? data.recordRelationship : {},
+    // MVP-Librarian Phase 4 — the nursery shelf: new/uncategorized jobs the
+    // incremental-ingest path abstained on ({jobKey, jobName, firstSeenTd,
+    // docIds}). Backend companion may not be live yet — absent/empty ⇒ hidden.
+    nursery: Array.isArray(data && data.nursery) ? data.nursery : [],
   };
   renderDecisions();
+
+  // Ambient enrichment — fetched OFF the critical path so nothing blocks the paint
+  // above (the Question-Engine card can take ~30s). Fired in parallel; each re-renders
+  // when it lands. Guarded so one slow/failed enrichment can't abort the view or the
+  // others. (Order-independent: each sets its own module state that renderDecisions reads.)
+  const _reDecisions = () => { try { renderDecisions(); } catch (_e) { /* redraw best-effort */ } };
+  refreshLearnedSuggestions().then(_reDecisions).catch((e) => console.warn("[main] learned suggestions:", e));
+  refreshContainmentSignals().catch((e) => console.warn("[main] containment signals:", e));
+  refreshDevelopedRules().then(_reDecisions).catch((e) => console.warn("[main] developed rules:", e));
+  refreshQuestionCard().then(_reDecisions).catch((e) => console.warn("[main] question card:", e));
 }
 
 /** Conflicts lens — promotes the contradiction edges with inline confirm/dismiss
@@ -7722,7 +8602,11 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat, nursery } = _decisionsCtx;
+
+  // MVP-Librarian 2.2/2.3 — a re-render rebuilds every checkbox unticked, so the
+  // selection state must reset with it (stale jobKeys/recordIds never replay).
+  clearBulkSelection();
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -7757,6 +8641,11 @@ function renderDecisions() {
   // project lens, above the frame list. buildPatternsSection returns null when there's
   // nothing to review (empty corpus), so nothing intrusive renders on settled data.
   if (_decisionsLens === "project") {
+    // MVP-Librarian Phase 3 — the ONE question (or its pull affordance) sits at
+    // the very top of the forest, above the ambient patterns. Null when the
+    // question engine is off server-side (503) — nothing renders at all.
+    const questionSection = buildQuestionSection();
+    if (questionSection) listEl.appendChild(questionSection);
     const patterns = buildPatternsSection();
     if (patterns) listEl.appendChild(patterns);
   }
@@ -7937,7 +8826,32 @@ function renderDecisions() {
     }
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
-      if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
+      if (!rec) continue;
+      const card = renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []);
+      // MVP-Librarian 2.2 (job-split) — record-level multi-select inside the job
+      // detail. A subtle checkbox beside each card; ticking any shows the bulk
+      // "Move records to…" bar. Only JOB-grouped records qualify (the move_record
+      // override remaps recordId → job, which is meaningless on document-project
+      // buckets); unframed job groups qualify too — splitting is how they get filed.
+      if (framed && rec.recordId && recordJobs && recordJobs[rec.recordId]) {
+        const row = document.createElement("div");
+        row.className = "record-select-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "record-select-box";
+        cb.title = "Select this record to move it to another job";
+        cb.addEventListener("click", (ev) => ev.stopPropagation());
+        cb.addEventListener("change", () => {
+          if (cb.checked) _bulkRecordSel.set(rec.recordId, grp.label);
+          else _bulkRecordSel.delete(rec.recordId);
+          updateBulkMoveBar();
+        });
+        row.appendChild(cb);
+        row.appendChild(card);
+        body.appendChild(row);
+      } else {
+        body.appendChild(card);
+      }
     }
 
     // (Per-job SoP removed — the consolidated state of play now lives one level up,
@@ -7957,6 +8871,24 @@ function renderDecisions() {
     // header <button>). Tap-to-filter on chips is untouched.
     const headRow = document.createElement("div");
     headRow.className = "decisions-group-head-row";
+    // MVP-Librarian 2.3 (Trisha C5) — job-level multi-select. A subtle checkbox
+    // beside each job row (same gating as the single Move control); ticking any
+    // shows the bulk "Move jobs to…" bar, and one destination choice emits N
+    // individual `move` events. Sits OUTSIDE the <button> header (inputs can't
+    // legally nest inside a button).
+    if (framed && grp._top) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "job-select-box";
+      cb.title = "Select this job to move it with others";
+      cb.addEventListener("click", (ev) => ev.stopPropagation());
+      cb.addEventListener("change", () => {
+        if (cb.checked) _bulkJobSel.set(grp.key, grp.label);
+        else _bulkJobSel.delete(grp.key);
+        updateBulkMoveBar();
+      });
+      headRow.appendChild(cb);
+    }
     headRow.appendChild(head);
     // In the framed (Work-Forest) view the legacy per-group project-canon
     // Combine/Rename is replaced by the overlay-backed frame-header menu (Move on
@@ -7969,8 +8901,90 @@ function renderDecisions() {
     groupEl.appendChild(body);
     listEl.appendChild(groupEl);
   }
+  // MVP-Librarian Phase 4 — the nursery shelf: honest abstention made visible.
+  // New/uncategorized jobs sit at the BOTTOM of the By-project view, on a shelf
+  // (not a frame), each with the Move affordance so the user files them manually.
+  if (_decisionsLens === "project" && nursery && nursery.length) {
+    listEl.appendChild(buildNurseryShelf(nursery));
+  }
   // Fold away any sections the user had collapsed (persists across frame-edit re-renders).
   if (framed) applyFrameCollapse(listEl);
+}
+
+// MVP-Librarian Phase 4 — render the nursery shelf. Each entry is a job the
+// incremental-ingest path declined to place ({jobKey, jobName, firstSeenTd,
+// docIds}); all fields defensive since the backend companion may lag this UI.
+// The Move affordance reuses openMovePicker — a nursery job has no home top
+// frame, so a new category lands top-level and the move emits the same
+// overlay-backed `move` event every filed job gets.
+function buildNurseryShelf(nursery) {
+  const section = document.createElement("section");
+  section.className = "nursery-shelf";
+
+  const header = document.createElement("div");
+  header.className = "nursery-header";
+  const title = document.createElement("span");
+  title.className = "nursery-title";
+  title.textContent = "New / uncategorized";
+  header.appendChild(title);
+  const count = document.createElement("span");
+  count.className = "nursery-count";
+  count.textContent = String(nursery.length);
+  header.appendChild(count);
+  section.appendChild(header);
+
+  const hint = document.createElement("div");
+  hint.className = "nursery-hint";
+  hint.textContent = "New work I haven't filed yet — move each one where it belongs.";
+  section.appendChild(hint);
+
+  const rows = document.createElement("div");
+  rows.className = "nursery-rows";
+  for (const entry of nursery) {
+    if (!entry || !entry.jobKey) continue;
+    const label = (entry.jobName || "").trim() || jobKeyLabel(entry.jobKey);
+    const row = document.createElement("div");
+    row.className = "nursery-row";
+
+    const name = document.createElement("span");
+    name.className = "nursery-job-name";
+    name.textContent = label;
+    row.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "nursery-job-meta";
+    const docCount = Array.isArray(entry.docIds) ? entry.docIds.length : 0;
+    const parts = [`${docCount} ${docCount === 1 ? "doc" : "docs"}`];
+    const seen = formatNurseryDate(entry.firstSeenTd);
+    if (seen) parts.push(`first seen ${seen}`);
+    meta.textContent = parts.join(" · ");
+    row.appendChild(meta);
+
+    const mv = document.createElement("span");
+    mv.className = "job-move-btn";
+    mv.textContent = "Move";
+    mv.setAttribute("role", "button");
+    mv.tabIndex = 0;
+    mv.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openMovePicker(mv, { key: entry.jobKey, label });
+    });
+    row.appendChild(mv);
+    rows.appendChild(row);
+  }
+  section.appendChild(rows);
+  return section;
+}
+
+// firstSeenTd arrives in learned-fold-io conventions — usually an ISO-ish date
+// string. Format when parseable; otherwise show it verbatim; empty ⇒ omit.
+function formatNurseryDate(td) {
+  if (td == null) return "";
+  const s = String(td).trim();
+  if (!s) return "";
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return s;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /** One compact card for the browser: type chip + state, summary, owner · due,

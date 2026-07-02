@@ -3858,6 +3858,277 @@ code {
 }
 .disjunction-confirm { font-style: italic; }
 
+/* ── MVP-Librarian Phase 3 — the Question Engine card + pull affordance ──────
+   One question at a time, in the rule-card language but with a gold spine so it
+   reads as the engine ASKING (not just noticing). The pull affordance is
+   deliberately understated — plain text, no chrome until hover. */
+.question-section { margin: 0 0 14px; }
+.question-card {
+  border-left: 2px solid var(--accent-gold, #c8a24a);
+  background: rgba(200, 162, 74, 0.05);
+}
+.question-tag {
+  color: var(--accent-gold, #c8a24a);
+  border-color: rgba(200, 162, 74, 0.4);
+  background: rgba(200, 162, 74, 0.1);
+}
+.question-why {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  line-height: 1.4;
+}
+.question-futures {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 9px;
+}
+.question-future {
+  font-size: 12px;
+  line-height: 1.4;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+  color: var(--glass-text-dim);
+}
+.question-future-verb {
+  font-weight: 600;
+  color: var(--glass-text);
+}
+/* The "which items this touches" disclosure — collapsed by default; the #1 UAT
+   ask was to see the affected work by name before answering. */
+.question-members { margin-top: 10px; }
+.question-members-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: rgba(200, 162, 74, 0.06);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-members-toggle:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.12);
+}
+.question-members-toggle[aria-expanded="true"] { color: var(--glass-text); }
+.question-members-chevron {
+  font-size: 9px;
+  color: var(--accent-gold, #c8a24a);
+}
+.question-members-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.question-members-item {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text);
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+}
+.question-members-more {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+  padding-left: 10px;
+}
+/* UAT-curate — the live "N of M selected" count in the disclosure header. */
+.question-members-count {
+  margin-left: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--glass-text-faint);
+}
+/* Each member row: checkbox + name + View toggle on one legible line. */
+.question-member-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+}
+.question-member-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text);
+  word-break: break-word;
+}
+.question-member-view {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-member-view:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.10);
+}
+.question-member-view-chevron {
+  font-size: 8px;
+  color: var(--accent-gold, #c8a24a);
+}
+/* IN NOTES — per-member jump to its authored line in the source pane. Matches
+   the inspect "View" chip's chrome so the row reads as a set of peer actions. */
+.question-member-in-notes {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-member-in-notes:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.10);
+}
+.question-member-in-notes .source-badge-icon svg { width: 12px; height: 12px; }
+
+/* The card-level "View in your notes" affordance — a source badge placed under
+   the "why" receipt, above the futures/members. */
+.question-source-row {
+  margin: 8px 0 2px;
+}
+.question-source-badge { max-width: 100%; }
+/* INSPECT — the inline record panel; reuses .linked-rec cards inside. */
+.question-member-detail {
+  margin: 6px 0 2px 12px;
+}
+.question-member-empty {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+  padding: 6px 0 2px;
+}
+.question-no-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-surface);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.question-no-btn:hover { background: var(--glass-surface-hover); }
+.question-pull-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.question-pull-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-faint);
+  cursor: pointer;
+}
+.question-pull-btn:hover {
+  color: var(--glass-text);
+  background: var(--glass-surface-hover);
+}
+.question-pull-btn:disabled { opacity: 0.6; cursor: default; }
+.question-pull-note {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+}
+
+/* ── MVP-Librarian Phase 4 — the nursery shelf ───────────────────────────────
+   Honest abstention, visibly a SHELF (dashed boundary), not a frame. Sits at
+   the bottom of the By-project view; each job carries the same Move control
+   the framed job rows use. */
+.nursery-shelf {
+  margin: 18px 0 8px;
+  border: 1px dashed var(--glass-border-strong);
+  border-radius: var(--glass-radius-md, 9px);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+}
+.nursery-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nursery-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text);
+  letter-spacing: 0.01em;
+}
+.nursery-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface-hover);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.nursery-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+.nursery-rows {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nursery-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.02);
+}
+.nursery-job-name {
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--glass-text);
+}
+.nursery-job-meta {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+
 .frame-move-menu {
   position: fixed;
   z-index: 1000;
@@ -3949,6 +4220,82 @@ code {
 }
 .frame-edit-btn:hover { color: var(--glass-text); background: var(--glass-surface-hover); }
 .frame-move-new-row { padding: 4px 4px 2px; border-top: 1px solid var(--glass-border); margin-top: 4px; }
+/* MVP-Librarian 2.1 — the rename row: input + an EXPLICIT save button (the old
+   Enter-only commit silently discarded every rename attempted by clicking away). */
+.frame-rename-row { display: flex; gap: 6px; align-items: center; }
+.frame-rename-row .frame-move-new-input { flex: 1 1 auto; min-width: 0; }
+.frame-rename-save {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #d6e9ff;
+  background: rgba(56, 132, 255, 0.16);
+  border: 1px solid rgba(56, 132, 255, 0.45);
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.frame-rename-save:hover { background: rgba(56, 132, 255, 0.28); }
+/* MVP-Librarian 2.2/2.3 — bulk multi-select. Subtle resting checkboxes beside job
+   rows and record cards; the accent appears on hover/checked. */
+.job-select-box,
+.record-select-box {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #3884ff;
+  opacity: 0.45;
+  cursor: pointer;
+}
+.job-select-box { align-self: center; }
+.record-select-box { margin-top: 12px; }
+.job-select-box:hover, .job-select-box:checked,
+.record-select-box:hover, .record-select-box:checked { opacity: 1; }
+.record-select-row { display: flex; gap: 8px; align-items: flex-start; }
+.record-select-row .record-card { flex: 1 1 auto; min-width: 0; }
+/* The one bulk action bar — pinned to the bottom of the Log, solid like the move
+   menu so cards never bleed through. */
+.bulk-move-bar {
+  position: fixed;
+  z-index: 990;             /* under the .frame-move-menu pickers (1000) */
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #1c1f27;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.66);
+}
+.bulk-move-count { font-size: 11.5px; font-weight: 600; color: var(--glass-text); white-space: nowrap; }
+.bulk-move-action {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: #d6e9ff;
+  background: rgba(56, 132, 255, 0.16);
+  border: 1px solid rgba(56, 132, 255, 0.45);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bulk-move-action:hover { background: rgba(56, 132, 255, 0.28); }
+.bulk-move-clear {
+  font-size: 11.5px;
+  font-family: inherit;
+  color: var(--glass-text-faint);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+.bulk-move-clear:hover { color: var(--glass-text); }
 /* Nested-vs-top scope toggle under the "New category" input (Issue 2). */
 .frame-move-scope { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 2px 2px; }
 .frame-move-new-input {
