@@ -6485,6 +6485,12 @@ function buildQuestionCard(card) {
   }
   if (futures.childNodes.length) el.appendChild(futures);
 
+  // The affected items — Trisha's #1 ask ("I need to see the jobs" before
+  // answering). Prefer the payload's `members` [{jobKey, jobName}]; fall back to
+  // the older `draft` [{jobKey, jobName, toFrameName}]; omit entirely if neither.
+  const disclosure = buildQuestionMembers(card);
+  if (disclosure) el.appendChild(disclosure);
+
   const actions = document.createElement("div");
   actions.className = "rule-card-actions";
   const yes = document.createElement("button");
@@ -6501,12 +6507,78 @@ function buildQuestionCard(card) {
   later.type = "button";
   later.className = "rule-card-ghost";
   later.textContent = "Not now";
-  later.addEventListener("click", () => dismissQuestion(card, el));
+  later.addEventListener("click", () => snoozeQuestion(card, el));
   actions.appendChild(yes);
   actions.appendChild(no);
   actions.appendChild(later);
   el.appendChild(actions);
   return el;
+}
+
+// The expandable "which items this touches" disclosure — collapsed by default so
+// the card stays scannable, one click to reveal the affected work by name. Reads
+// `members` [{jobKey, jobName}] first, then falls back to `draft`
+// [{jobKey, jobName, toFrameName}]. Returns null when there's nothing to show
+// (no empty shell). `membersTruncated` (a count) appends a "+K more" row.
+function buildQuestionMembers(card) {
+  const raw = Array.isArray(card.members) && card.members.length ? card.members
+    : (Array.isArray(card.draft) ? card.draft : []);
+  // Resolve a display name for each item: prefer the payload's own name, then a
+  // jobKey label, then the key itself — never render a bare object.
+  const names = raw
+    .map((m) => {
+      if (!m) return "";
+      if (typeof m === "string") return jobKeyLabel(m);
+      return (m.jobName || m.name || (m.jobKey ? jobKeyLabel(m.jobKey) : "")).trim();
+    })
+    .filter(Boolean);
+  if (!names.length) return null;
+
+  const extra = Number.isFinite(card.membersTruncated) && card.membersTruncated > 0
+    ? Math.floor(card.membersTruncated) : 0;
+  const total = names.length + extra;
+
+  const wrap = document.createElement("div");
+  wrap.className = "question-members";
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "question-members-toggle";
+  toggle.setAttribute("aria-expanded", "false");
+  const noun = total === 1 ? "item" : "items";
+  toggle.innerHTML =
+    `<span class="question-members-chevron" aria-hidden="true">▸</span>` +
+    `<span class="question-members-label">Show the ${total} ${noun}</span>`;
+  wrap.appendChild(toggle);
+
+  const list = document.createElement("ul");
+  list.className = "question-members-list";
+  list.style.display = "none";
+  for (const name of names) {
+    const li = document.createElement("li");
+    li.className = "question-members-item";
+    li.textContent = name;
+    list.appendChild(li);
+  }
+  if (extra > 0) {
+    const li = document.createElement("li");
+    li.className = "question-members-more";
+    li.textContent = `+${extra} more`;
+    list.appendChild(li);
+  }
+  wrap.appendChild(list);
+
+  let open = false;
+  toggle.addEventListener("click", () => {
+    open = !open;
+    list.style.display = open ? "block" : "none";
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    const chev = toggle.querySelector(".question-members-chevron");
+    if (chev) chev.textContent = open ? "▾" : "▸";
+    const label = toggle.querySelector(".question-members-label");
+    if (label) label.textContent = (open ? "Hide the " : "Show the ") + `${total} ${noun}`;
+  });
+  return wrap;
 }
 
 // Answer: the server folds the confirm_fact (+ the previewed bulk events) and
@@ -6533,14 +6605,33 @@ async function answerQuestion(card, answer, cardEl) {
   }
 }
 
-// Not now: permanent fact-keyed suppression server-side — the question never
-// re-surfaces. Same re-enter discipline as answer.
+// "Not now": a SNOOZE, not a permanent block (Trisha: "if you say not now,
+// shouldn't it ask again later?"). The server records a snooze so the question
+// comes back later instead of being suppressed forever. Same re-enter discipline
+// as answer.
+async function snoozeQuestion(card, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("snooze_question", { factKey: card.factKey });
+    _questionCard = null;
+    showToast({ kind: "idempotent", title: "Not now", body: "Okay — I'll bring this back later." });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] snooze_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't set that aside", body: "Try again in a moment." });
+  }
+}
+
+// Permanent fact-keyed suppression server-side — the question never re-surfaces.
+// Retained for a future explicit "Don't ask again" affordance; "Not now" now
+// snoozes (see snoozeQuestion) rather than dismisses. Same re-enter discipline.
 async function dismissQuestion(card, cardEl) {
   if (cardEl) cardEl.classList.add("rule-card-busy");
   try {
     await tauri.core.invoke("dismiss_question", { factKey: card.factKey });
     _questionCard = null;
-    showToast({ kind: "idempotent", title: "Not now", body: "I won't ask that again." });
+    showToast({ kind: "idempotent", title: "Got it", body: "I won't ask that again." });
     await enterDecisionsView();
   } catch (e) {
     console.warn("[main] dismiss_question failed:", e);

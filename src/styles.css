@@ -3895,6 +3895,55 @@ code {
   font-weight: 600;
   color: var(--glass-text);
 }
+/* The "which items this touches" disclosure — collapsed by default; the #1 UAT
+   ask was to see the affected work by name before answering. */
+.question-members { margin-top: 10px; }
+.question-members-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: rgba(200, 162, 74, 0.06);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-members-toggle:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.12);
+}
+.question-members-toggle[aria-expanded="true"] { color: var(--glass-text); }
+.question-members-chevron {
+  font-size: 9px;
+  color: var(--accent-gold, #c8a24a);
+}
+.question-members-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.question-members-item {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text);
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+}
+.question-members-more {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+  padding-left: 10px;
+}
 .question-no-btn {
   padding: 5px 12px;
   font-size: 11px;
