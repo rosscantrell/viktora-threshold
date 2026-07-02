@@ -6471,13 +6471,16 @@ function buildQuestionCard(card) {
   futures.className = "question-futures";
   for (const [verb, preview] of [["Yes", card.yesPreview], ["No", card.noPreview]]) {
     if (!preview) continue;
+    // The verb is rendered as its own styled chip below, so strip any leading
+    // "Yes →" / "No →" the payload already carries — otherwise it reads "Yes → Yes → …".
+    const body = String(preview).replace(/^\s*(?:yes|no)\s*(?:→|->)\s*/i, "");
     const f = document.createElement("div");
     f.className = "question-future";
     const v = document.createElement("span");
     v.className = "question-future-verb";
     v.textContent = verb + " →";
     f.appendChild(v);
-    f.appendChild(document.createTextNode(" " + preview));
+    f.appendChild(document.createTextNode(" " + body));
     futures.appendChild(f);
   }
   if (futures.childNodes.length) el.appendChild(futures);
