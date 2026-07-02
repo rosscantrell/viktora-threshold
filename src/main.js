@@ -2384,6 +2384,21 @@ async function vvVoidAction(cmd, args) {
   } catch (err) {
     console.warn(`[main] ${cmd} failed:`, err);
   }
+  // Re-render whichever surface hosts these void cards. On Today (WP-R2) the
+  // voids live in the Needs-you queue, so re-run the queue's void source (a full
+  // enterLogView would needlessly re-fetch every section); on the (retired)
+  // Watching view, re-enter it. Detect by which view is currently shown.
+  const logView = document.getElementById("view-log");
+  if (logView && !logView.hidden) {
+    // Clear only the void cards from the queue, then re-fetch them. Proxy cards
+    // and the question card in the queue are left in place (different sources).
+    const list = document.getElementById("today-queue-list");
+    if (list) {
+      for (const el of Array.from(list.querySelectorAll(".watching-card"))) el.remove();
+    }
+    loadTodayQueueVoids(() => {}).catch((e) => console.warn("[main] void re-render:", e));
+    return;
+  }
   enterWatchingView();
 }
 function vvHumanizeSlug(s) {
@@ -2761,11 +2776,353 @@ async function enterWatchingView() {
   if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// WP-R2 Today rebuild — paint-first Today.
+//
+// enterLogView paints the skeleton (index.html's three sections + tray) and any
+// synchronous state IMMEDIATELY, then fires each data source fire-and-forget OFF
+// the critical path. Each source re-renders ONLY its own section when it lands,
+// guarded so a slow/failed/absent one can't blank Today or abort the others.
+// This preserves the < 1s cold first-paint gate (§2.6) — the exact async-
+// enrichment pattern from commit 7a1475f (decisions view), applied to Today.
+//
+// Paint order:
+//   ① SoP header      — fetch_sop (person lens, forest fallback) → loadPersonLensSoP
+//   ② Needs-you queue — fetch_proxy_queue + fetch_question + fetch_vigilance_voids
+//   ③ Filed confidently — the proxy queue's high-confidence pile (same fetch)
+//   + Awaiting-send tray — fetch_outbox (hidden when empty)
+//   + Everything-else / priority / stalled — the decision-log rollup (unchanged
+//     surfaces), now also loaded off the critical path.
+//
+// NOTHING LLM-backed or network-backed is awaited before the first paint below.
+// ══════════════════════════════════════════════════════════════════════════
 async function enterLogView() {
   state.inWizard = false;
   showView("view-log");
   setNav([{ label: "Today" }], { active: "today", back: () => goHome() });
 
+  // Record-level inline editing reload hook (Phase A). Capability flag is set
+  // when the decision-log source lands (renderTodayDecisionLog).
+  _reloadRecordView = enterLogView;
+
+  // ── FIRST PAINT (synchronous) ──────────────────────────────────────────────
+  // Reset each section to its skeleton/empty resting state, wire the idempotent
+  // toggles, and show the collapsible shell. No await, no network — this returns
+  // to the event loop before any data source resolves, so the paint is immediate.
+  renderTodaySkeleton();
+  wireSopLensToggle();
+  wireTodayFiledToggle();
+
+  // ── FIRE-AND-FORGET ENRICHMENT (off the critical path) ──────────────────────
+  // Each source patches its own section when it lands; each is independently
+  // guarded so a slow/failed/absent one can't blank Today or abort the others.
+
+  // ① SoP header — person-lens narrative (forest fallback with no identity). The
+  //    person lens needs the viewer identity; loadTodayContext resolves it, then
+  //    the SoP + the decision-log rollup (which use viewer attribution) fire.
+  loadTodayContext()
+    .then(() => {
+      loadPersonLensSoP().catch((e) => console.warn("[main] SoP header:", e));
+      renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log rollup:", e));
+    })
+    .catch((e) => {
+      console.warn("[main] Today context:", e);
+      // Context failed (no viewer identity resolvable) — still load the lenses
+      // that don't strictly need it (they degrade to the forest fallback).
+      loadPersonLensSoP().catch(() => {});
+      renderTodayDecisionLog().catch(() => {});
+    });
+
+  // ② + ③ Needs-you queue + Filed-confidently — both piles from the proxy queue,
+  //    plus the question card and the vigilance voids folded into the queue.
+  loadTodayQueue().catch((e) => console.warn("[main] Needs-you queue:", e));
+
+  // + Awaiting-send tray — hidden when there are no staged drafts.
+  loadTodayOutboxTray().catch((e) => console.warn("[main] Outbox tray:", e));
+}
+
+// Reset every Today section to its resting skeleton/empty state (synchronous —
+// no network). Called at the top of every enterLogView so a re-entry starts
+// clean before the async sources repopulate.
+function renderTodaySkeleton() {
+  // ① SoP — skeleton line; the lens bar hides until prose resolves.
+  const sopPanel = document.getElementById("log-sop-lens-panel");
+  if (sopPanel) sopPanel.innerHTML = '<div class="sop-status today-sop-skeleton">Composing your state of play…</div>';
+  const sopBar = document.getElementById("log-sop-lens");
+  if (sopBar) sopBar.hidden = true;
+
+  // ② Needs-you queue — clear the lists, show the skeleton, hide the empty state.
+  const qList = document.getElementById("today-queue-list");
+  if (qList) qList.innerHTML = "";
+  const qSlot = document.getElementById("today-question-slot");
+  if (qSlot) qSlot.innerHTML = "";
+  const qSkel = document.getElementById("today-queue-skeleton");
+  if (qSkel) qSkel.hidden = false;
+  const qEmpty = document.getElementById("today-queue-empty");
+  if (qEmpty) qEmpty.hidden = true;
+  const qCount = document.getElementById("today-queue-count");
+  if (qCount) qCount.textContent = "";
+
+  // ③ Filed confidently — hidden until the proxy source lands with any.
+  const filedSection = document.getElementById("today-filed-section");
+  if (filedSection) filedSection.hidden = true;
+  const filedList = document.getElementById("today-filed-list");
+  if (filedList) filedList.innerHTML = "";
+
+  // Tray — hidden until fetch_outbox lands with staged drafts.
+  const tray = document.getElementById("today-outbox-tray");
+  if (tray) tray.hidden = true;
+  const trayList = document.getElementById("today-outbox-list");
+  if (trayList) trayList.innerHTML = "";
+
+  // Legacy rollup surfaces reset to a calm resting state (repopulated by
+  // renderTodayDecisionLog / loadTodayPriority / loadStalledChaseList).
+  const statesStrip = document.getElementById("log-states-strip");
+  if (statesStrip) statesStrip.hidden = true;
+  const everySection = document.getElementById("log-everything-section");
+  if (everySection) everySection.hidden = true;
+  const statusEl = document.getElementById("log-status");
+  if (statusEl) statusEl.hidden = true;
+}
+
+// Toggle the Today "Filed confidently" pile (collapsed by default). Idempotent —
+// binds the click handler once across re-renders.
+function wireTodayFiledToggle() {
+  const toggle = document.getElementById("today-filed-toggle");
+  const list = document.getElementById("today-filed-list");
+  if (!toggle || !list || toggle.dataset.wired) return;
+  toggle.dataset.wired = "1";
+  const chevron = toggle.querySelector(".proxy-pile-chevron");
+  toggle.addEventListener("click", () => {
+    const open = list.hidden; // about to open if currently hidden
+    list.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (chevron) chevron.textContent = open ? "▾" : "▸";
+  });
+}
+
+// ── Today context: viewer identity + capture-attribution join ───────────────
+// Resolves the viewer email/slug (for the Mine filter + person-lens SoP) and the
+// documentId → submitter map (for the attribution join on the decision-log
+// rollup). Best-effort: a null identity hides the toggle + the person lens (the
+// forest fallback is used); a failed /api/data join simply omits attribution.
+// Stored on _todayCtx so the SoP + rollup can read it without re-fetching.
+async function loadTodayContext() {
+  await refreshDismissedIds();
+  await loadDocsMap();
+  const viewerEmail = await getViewerEmail();
+  const submitterByDoc = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
+        submitterByDoc.set(d.id, d.submittedByEmail);
+      }
+    }
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (attribution omitted):", err);
+  }
+  _todayCtx = {
+    needsAttention: (_todayCtx && _todayCtx.needsAttention) || [],
+    submitterByDoc,
+    viewerEmail,
+    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
+  };
+  // The Mine / Everyone toggle exists only for an identified viewer.
+  const filterEl = document.getElementById("log-filter");
+  if (filterEl) filterEl.hidden = !viewerEmail;
+  setTodayFilter("everyone"); // default Everyone on each view load
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ② + ③ Needs-you queue + Filed-confidently.
+//
+// ONE card family (§2.3). Three async sources fill the queue, each appending its
+// own cards as it arrives (the queue is order-independent):
+//   · proxy "Wants your eye" cards (renderProxyCard) + the high-confidence pile
+//     into "Filed confidently" (renderProxyFiledRow)
+//   · the Question-Engine pull card / affordance (buildQuestionSection)
+//   · vigilance-void chase cards (renderVoidCard)
+// Each source is independently guarded; a failed/absent one leaves the others.
+// The skeleton hides + the empty state shows only after ALL THREE settle empty.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayQueue() {
+  // Track completion of the three sources so the empty/skeleton state resolves
+  // correctly regardless of arrival order.
+  const settled = { proxy: false, question: false, voids: false };
+  const filled = { proxy: false, question: false, voids: false };
+  const settle = (key, didFill) => {
+    settled[key] = true;
+    if (didFill) filled[key] = true;
+    reconcileTodayQueueEmptyState(settled, filled);
+  };
+
+  // Fire all three in parallel; each appends when it lands.
+  loadTodayQueueProxy(settle).catch((e) => { console.warn("[main] proxy queue:", e); settle("proxy", false); });
+  loadTodayQueueQuestion(settle).catch((e) => { console.warn("[main] question card:", e); settle("question", false); });
+  loadTodayQueueVoids(settle).catch((e) => { console.warn("[main] vigilance voids:", e); settle("voids", false); });
+}
+
+// Show the empty state (and hide the skeleton) only once all three sources have
+// settled; keep the skeleton up until the first one lands. When any source
+// filled the queue, no empty state — just hide the skeleton.
+function reconcileTodayQueueEmptyState(settled, filled) {
+  const skel = document.getElementById("today-queue-skeleton");
+  const empty = document.getElementById("today-queue-empty");
+  const anyFilled = filled.proxy || filled.question || filled.voids;
+  const allSettled = settled.proxy && settled.question && settled.voids;
+  // Hide the skeleton as soon as anything filled OR everything has settled.
+  if (skel) skel.hidden = anyFilled || allSettled;
+  if (empty) empty.hidden = !(allSettled && !anyFilled);
+  // Live count of queue cards (proxy "wants your eye" + voids + a question card).
+  const list = document.getElementById("today-queue-list");
+  const qSlotCards = document.querySelectorAll("#today-question-slot .rule-card").length;
+  const n = (list ? list.children.length : 0) + qSlotCards;
+  const countEl = document.getElementById("today-queue-count");
+  if (countEl) countEl.textContent = n > 0 ? String(n) : "";
+}
+
+// Proxy source — the fleet inbox. "Wants your eye" cards append to the queue;
+// the high-confidence pile lands in "Filed confidently" (§ the second pile).
+async function loadTodayQueueProxy(settle) {
+  const list = document.getElementById("today-queue-list");
+  const filedSection = document.getElementById("today-filed-section");
+  const filedList = document.getElementById("today-filed-list");
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_proxy_queue");
+  } catch (err) {
+    console.warn("[main] fetch_proxy_queue failed (Today queue):", err);
+    settle("proxy", false);
+    return;
+  }
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+
+  // "Wants your eye" — full cards, into the shared queue (same card family).
+  if (list) {
+    for (const item of wantsEye) {
+      try { list.appendChild(renderProxyCard(item)); } catch (e) { console.warn("[main] renderProxyCard:", e); }
+    }
+  }
+  // "Filed confidently" — collapsed rows, undo per row. Hidden when none.
+  if (filed.length && filedList && filedSection) {
+    for (const item of filed) {
+      try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
+    }
+    filedSection.hidden = false;
+    const headText = document.getElementById("today-filed-heading-text");
+    if (headText) headText.textContent = `Filed confidently · ${filed.length}`;
+  }
+  settle("proxy", wantsEye.length > 0);
+}
+
+// Question source — the "Anything you need from me?" pull. Reuses the exact
+// project-lens question surface (buildQuestionSection → buildQuestionCard). The
+// surface renders into its own slot (so re-renders of the other sources don't
+// clear it). Off / empty ⇒ the calm pull affordance (which itself counts as
+// filling the section only when a real card is surfaced).
+async function loadTodayQueueQuestion(settle) {
+  const slot = document.getElementById("today-question-slot");
+  await refreshQuestionCard(); // sets _questionCard / _questionEngineOff (fail-safe)
+  const section = buildQuestionSection(); // null when the engine is off
+  if (slot) {
+    slot.innerHTML = "";
+    if (section) slot.appendChild(section);
+  }
+  // A surfaced card (not the bare pull affordance) counts as filling the queue.
+  settle("question", !!_questionCard);
+}
+
+// Vigilance-void source — the retired Watching surface's value, re-landed as
+// queue cards. Reuses renderVoidCard (dismiss/snooze via vvVoidAction). Loads
+// grouped so the silent-Nd join + low-impact suppression match the old ledger;
+// only the primary (non-low-impact) voids surface on Today. Degrades silently.
+async function loadTodayQueueVoids(settle) {
+  const list = document.getElementById("today-queue-list");
+  await loadDocsMap(); // void cards' source badges read _docsById (best-effort)
+  let data, grouped;
+  try {
+    const result = await fetchVigilanceGrouped();
+    if (!result) throw new Error("vigilance fetch failed");
+    data = result.voidData;
+    grouped = result.grouped; // null when flag off / old backend
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids failed (Today queue):", err);
+    settle("voids", false);
+    return;
+  }
+  const voids = Array.isArray(data && data.voids) ? data.voids : [];
+  const ageByVoid = new Map();
+  const lowImpactVoidIds = new Set();
+  if (grouped && Array.isArray(grouped.stalledJobs)) {
+    for (const job of grouped.stalledJobs) {
+      const isPrimary = stalledIsPrimary(job, stalledBand(job.jobKey));
+      const isSingleton = (job.voidCount || 0) <= 1 && !(job.blockerCount || 0);
+      for (const sv of job.scoredVoids || []) {
+        if (typeof sv.ageDays === "number") ageByVoid.set(sv.voidId, sv.ageDays);
+        if (!isPrimary || isSingleton) lowImpactVoidIds.add(sv.voidId);
+      }
+    }
+  }
+  const primaryVoids = voids.filter((v) => !lowImpactVoidIds.has(v.voidId));
+  if (list) {
+    for (const v of primaryVoids) {
+      try {
+        list.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+      } catch (e) { console.warn("[main] renderVoidCard (Today queue):", e); }
+    }
+  }
+  settle("voids", primaryVoids.length > 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Awaiting-send / Sent tray — the Outbox demotion. A small tray that appears
+// ONLY when there are staged drafts (empty ⇒ hidden). Sourced from fetch_outbox
+// (the same path enterOutboxView used); each draft renders via the existing
+// renderOutboxCard. Fire-and-forget: a failure/absence just leaves it hidden.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayOutboxTray() {
+  const tray = document.getElementById("today-outbox-tray");
+  const list = document.getElementById("today-outbox-list");
+  const countEl = document.getElementById("today-outbox-count");
+  if (!tray || !list) return;
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_outbox");
+  } catch (err) {
+    console.warn("[main] fetch_outbox failed (Today tray):", err);
+    tray.hidden = true; // empty ⇒ hidden (never an error surface on Today)
+    return;
+  }
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  if (!items.length) {
+    tray.hidden = true;
+    return;
+  }
+  list.innerHTML = "";
+  for (const item of items) {
+    try { list.appendChild(renderOutboxCard(item)); }
+    catch (e) { console.warn("[main] renderOutboxCard (Today tray):", e); }
+  }
+  if (countEl) countEl.textContent = String(items.length);
+  tray.hidden = false;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Decision-log rollup — the "Everything else" collapsible + states strip +
+// priority + stalled surfaces. This is the former blocking body of enterLogView,
+// now loaded fire-and-forget so nothing here blocks the first paint. Renders the
+// needs-attention rows, conflicts, workload, and the priority/stalled rails.
+// ══════════════════════════════════════════════════════════════════════════
+async function renderTodayDecisionLog() {
   const statusEl = document.getElementById("log-status");
   const attentionList = document.getElementById("log-attention-list");
   const attentionEmpty = document.getElementById("log-attention-empty");
@@ -2775,16 +3132,6 @@ async function enterLogView() {
   const ownersStrip = document.getElementById("log-owners-strip");
   const statesStrip = document.getElementById("log-states-strip");
   const subEl = document.getElementById("log-sub");
-
-  // Loading state.
-  if (statusEl) {
-    statusEl.hidden = false;
-    statusEl.dataset.kind = "loading";
-    statusEl.textContent = "Loading the log…";
-  }
-
-  await refreshDismissedIds();
-  await loadDocsMap();
 
   let data;
   try {
@@ -2797,20 +3144,13 @@ async function enterLogView() {
     if (contradictionsSection) contradictionsSection.hidden = true;
     if (ownersSection) ownersSection.hidden = true;
     if (statesStrip) statesStrip.hidden = true;
-    if (statusEl) {
-      statusEl.hidden = false;
-      statusEl.dataset.kind = "error";
-      statusEl.textContent =
-        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
-    }
+    // Degrade quietly — the queue/SoP/tray sections carry Today on their own; a
+    // decision-log outage must not blank Today or surface a hard error banner.
     return;
   }
 
-  if (statusEl) statusEl.hidden = true;
-
-  // Record-level inline editing capability + reload hook (Phase A).
+  // Record-level inline editing capability.
   _recordEditsEnabled = !!(data && data.editsEnabled);
-  _reloadRecordView = enterLogView;
 
   const summary = data && data.summary ? data.summary : {};
   const states = summary.states || {};
@@ -2856,36 +3196,15 @@ async function enterLogView() {
     statesStrip.hidden = !any;
   }
 
-  // WP-N1 #6/#8 — viewer identity (for attribution + the Mine filter) and the
-  // documentId → submitter map (for the Today attribution join). Both best-
-  // effort: a null identity hides the toggle + the "you" distinction; a failed
-  // /api/data join simply omits attribution. The documents array is already
-  // disclosure-sliced server-side, so the join never sees a hidden doc.
-  const viewerEmail = await getViewerEmail();
-  const submitterByDoc = new Map();
-  try {
-    const docsResp = await tauri.core.invoke("fetch_documents");
-    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
-    for (const d of docs) {
-      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
-        submitterByDoc.set(d.id, d.submittedByEmail);
-      }
-    }
-  } catch (err) {
-    console.warn("[main] fetch_documents failed (attribution omitted):", err);
+  // WP-N1 #6/#8 — the viewer identity + attribution join now resolve in
+  // loadTodayContext (off the critical path, before this rollup fires), so
+  // _todayCtx already carries submitterByDoc / viewerSlug. Fold the freshly-
+  // fetched needs-attention list onto it and re-render the rows under the
+  // current filter. Guard against a context that hasn't populated (defensive).
+  if (!_todayCtx) {
+    _todayCtx = { submitterByDoc: new Map(), viewerEmail: null, viewerSlug: null };
   }
-
-  _todayCtx = {
-    needsAttention,
-    submitterByDoc,
-    viewerEmail,
-    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
-  };
-
-  // The Mine / Everyone toggle exists only for an identified viewer.
-  const filterEl = document.getElementById("log-filter");
-  if (filterEl) filterEl.hidden = !viewerEmail;
-  setTodayFilter("everyone"); // default Everyone on each view load
+  _todayCtx.needsAttention = needsAttention;
   renderTodayAttention();
 
   // Contradictions.
@@ -2937,18 +3256,13 @@ async function enterLogView() {
     });
   }
 
-  // WP-WorkForest-Native-SoP (UI-1 + UI-6) — the top-of-Today SoP narrative +
-  // Person/Forest lens toggle, above the Focus rail. Additive + silent: bar +
-  // panel stay hidden when the endpoint is unavailable.
-  wireSopLensToggle();
-  loadPersonLensSoP();
-
-  // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
-  // independently of the State-of-Play digest. Additive + silent if the flag's off.
+  // WP-Priority-Operator — Focus + Watch sections (the priority rail). Additive
+  // + silent if the flag's off. Fired here (after the decision-log resolves so
+  // its own re-renders read the same data), still off the first-paint path.
   loadTodayPriority();
 
-  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list, just below the Focus
-  // rail. Additive + silent: renders nothing when grouped vigilance data is absent.
+  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list. Additive + silent:
+  // renders nothing when grouped vigilance data is absent.
   loadStalledChaseList();
 }
 
@@ -6513,7 +6827,24 @@ async function pullQuestion(btn, noteEl) {
     const res = await tauri.core.invoke("fetch_question", { pull: true });
     if (res && !res.disabled && res.question) {
       _questionCard = res.question;
-      renderDecisions();          // redraw — the card replaces the affordance
+      // Redraw the surface that hosts this affordance — the card replaces it.
+      // On Today (WP-R2) the pull lives in #today-question-slot; on Decisions it
+      // lives in the decisions render. Detect by the button's DOM ancestry so the
+      // right surface repaints (and the queue count re-reconciles on Today).
+      if (btn.closest && btn.closest("#today-question-slot")) {
+        const slot = document.getElementById("today-question-slot");
+        const section = buildQuestionSection();
+        if (slot) { slot.innerHTML = ""; if (section) slot.appendChild(section); }
+        const countEl = document.getElementById("today-queue-count");
+        if (countEl) {
+          const list = document.getElementById("today-queue-list");
+          const qCards = document.querySelectorAll("#today-question-slot .rule-card").length;
+          const n = (list ? list.children.length : 0) + qCards;
+          countEl.textContent = n > 0 ? String(n) : "";
+        }
+      } else {
+        renderDecisions();        // Decisions view — the card replaces the affordance
+      }
       return;
     }
   } catch (e) {

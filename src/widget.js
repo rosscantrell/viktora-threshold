@@ -417,24 +417,33 @@ if (logIndicator) {
 }
 
 /**
- * Fetch summary.overdueSilent via the get_decision_log_summary IPC and reflect
- * it on the badge. Best-effort: the Rust command returns 0 on any error, so the
- * badge simply stays hidden rather than surfacing an error on the always-on
- * widget. Hidden at zero; capped display at "99+".
+ * WP-R2 — the amber "Today" badge now counts what needs you TODAY: the ratify
+ * queue's pending proposals (get_proxy_queue_count) PLUS the overdue-silent
+ * decision-log items (get_decision_log_summary → summary.overdueSilent). The
+ * rebuilt Today view leads with the "Needs you" queue, so the badge points at
+ * that pile + the overdue tail. Both counts are summed CLIENT-SIDE from the two
+ * existing best-effort IPCs (each returns 0 on any error), so no server change
+ * is needed. Hidden at zero; capped display at "99+".
  */
 async function refreshLogBadge() {
   if (!logIndicator) return;
   let shown = false;
   try {
-    const count = await invoke("get_decision_log_summary");
-    const n = typeof count === "number" ? count : 0;
+    // Fetch both in parallel; each returns 0 on any error (best-effort).
+    const [overdueRaw, pendingRaw] = await Promise.all([
+      invoke("get_decision_log_summary").catch(() => 0),
+      invoke("get_proxy_queue_count").catch(() => 0),
+    ]);
+    const overdue = typeof overdueRaw === "number" ? overdueRaw : 0;
+    const pending = typeof pendingRaw === "number" ? pendingRaw : 0;
+    const n = overdue + pending;
     if (n > 0) {
       logIndicator.textContent = n > 99 ? "99+" : String(n);
-      logIndicator.title = `${n} item${n === 1 ? "" : "s"} need attention — open Today`;
+      logIndicator.title = `${n} need${n === 1 ? "s" : ""} you today — open Today`;
       shown = true;
     }
   } catch (err) {
-    console.warn("[widget] log summary fetch failed:", err);
+    console.warn("[widget] Today badge fetch failed:", err);
   }
   logIndicator.hidden = !shown;
   // The expand icon shares the top-left slot with the badge — show it only when
