@@ -154,6 +154,31 @@ const NAV_DEST_FNS = {
   settings: () => enterStandaloneConfigure(),
 };
 
+// WP-R0 — nav visibility gate. Retired destinations are HIDDEN from nav +
+// all entry points, but their views/routes remain fully intact and return
+// the moment a flag flips (or debug re-entry is enabled). Absent key = visible.
+const VIEW_VISIBILITY = { watching: false, outbox: false, edges: false };
+
+// Debug re-entry: append #debug-views (or #debugviews) to the window's URL
+// hash, or run `localStorage.setItem("threshold.debugViews", "1")` in the
+// devtools console, then reload. Either makes every gated view visible again
+// without touching VIEW_VISIBILITY. Checked once at module eval — reload to
+// pick up a change.
+const VIEW_DEBUG =
+  /(^|[?&#])debug-?views(=1)?([&#]|$)/i.test(window.location.hash) ||
+  (() => {
+    try {
+      return localStorage.getItem("threshold.debugViews") === "1";
+    } catch {
+      return false;
+    }
+  })();
+
+/** Is nav destination `dest` visible right now (flag map + debug override)? */
+function isDestVisible(dest) {
+  return VIEW_DEBUG || VIEW_VISIBILITY[dest] !== false;
+}
+
 let _navBackFn = null;
 
 function hideNav() {
@@ -220,6 +245,12 @@ function setNav(crumbs, opts = {}) {
   const backBtn = document.getElementById("app-nav-back");
   if (backBtn) backBtn.addEventListener("click", () => { if (_navBackFn) _navBackFn(); });
   for (const b of document.querySelectorAll(".app-nav-dest")) {
+    // WP-R0 — retired destinations are hidden from the bar entirely and never
+    // wired, so there's no dead/clickable button left behind.
+    if (!isDestVisible(b.dataset.dest)) {
+      b.setAttribute("hidden", "");
+      continue;
+    }
     const fn = NAV_DEST_FNS[b.dataset.dest];
     if (fn) b.addEventListener("click", fn);
   }
@@ -307,7 +338,11 @@ async function bootstrap() {
 
     // WP-THRESHOLD-LOG-UX — widget_expand("edges") / the "Connections" entry
     // navigates here with #edges. Render the full cross-record edge graph.
-    if (window.location.hash === "#edges") {
+    // WP-R0 — retired: with the flag off (and no debug override) this hash
+    // falls through to the main view instead of entering a nav-orphaned view
+    // (the tray's "Connections…" item still fires widget_expand("edges");
+    // this is the JS-side half of hiding that destination).
+    if (window.location.hash === "#edges" && isDestVisible("edges")) {
       enterEdgesView();
       return;
     }
@@ -4604,11 +4639,17 @@ function renderPriorityCard(item, isTracked) {
 }
 
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
+// WP-R0 — retired: hide the button and skip wiring when edges is gated off,
+// so there's no dead click path left on the Today header.
 const logEdgesBtn = document.getElementById("btn-log-edges");
 if (logEdgesBtn) {
-  logEdgesBtn.addEventListener("click", () => {
-    enterEdgesView();
-  });
+  if (!isDestVisible("edges")) {
+    logEdgesBtn.setAttribute("hidden", "");
+  } else {
+    logEdgesBtn.addEventListener("click", () => {
+      enterEdgesView();
+    });
+  }
 }
 
 const openLogBtn = document.getElementById("btn-open-log");
@@ -5216,11 +5257,17 @@ for (const b of document.querySelectorAll("#edges-lenses .decisions-lens-btn")) 
   });
 }
 
+// WP-R0 — retired: hide the button and skip wiring when edges is gated off,
+// so there's no dead click path left on the Home header.
 const openEdgesBtn = document.getElementById("btn-open-edges");
 if (openEdgesBtn) {
-  openEdgesBtn.addEventListener("click", () => {
-    enterEdgesView();
-  });
+  if (!isDestVisible("edges")) {
+    openEdgesBtn.setAttribute("hidden", "");
+  } else {
+    openEdgesBtn.addEventListener("click", () => {
+      enterEdgesView();
+    });
+  }
 }
 
 // ───────── Definition card — per-entity "what is this, here, now" (WP-THRESHOLD-LOG-UX) ─────────
