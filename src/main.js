@@ -5947,6 +5947,11 @@ function buildFrameHeader(frame) {
   const badge = FRAME_BADGE[frame.state] || FRAME_BADGE.Suggested;
   const b = document.createElement("span"); b.className = "frame-badge " + badge.cls; b.textContent = badge.label;
   const n = document.createElement("span"); n.className = "frame-header-name"; n.textContent = frame.name;
+  // MVP-Librarian 2.1 — direct rename entry point on the name itself (the ⋯ glyph
+  // alone was undiscoverable live). Double-click opens the edit menu focused on
+  // the rename field, ready to type.
+  n.title = "Double-click to rename";
+  n.addEventListener("dblclick", (ev) => { ev.stopPropagation(); openFrameEditMenu(n, frame, { focusRename: true }); });
   el.appendChild(b); el.appendChild(n);
   // Heat chip — the orthogonal axis. "On fire" / "Active" carry an accent; "quiet"
   // is omitted so a calm project doesn't shout.
@@ -5993,10 +5998,25 @@ function buildWsHeader(ws) {
   n.className = "frame-ws-name";
   n.textContent = name || "";
   el.appendChild(n);
-  const fid = ws && typeof ws === "object" ? ws.fid : null;
+  // MVP-Librarian 2.1 — the gesture menu (and so rename) must exist for EVERY
+  // rendered frame. The bare-string back-compat path used to drop the ⋯ entirely;
+  // resolve the frame object from the live context so even that path keeps its
+  // rename / re-home / merge affordance. The SoP toggle alone stays fid-gated.
+  const frameObj = ws && typeof ws === "object"
+    ? ws
+    : (name ? (((_decisionsCtx && _decisionsCtx.frames) || []).find((f) => f && f.name === name) || { name }) : null);
+  if (frameObj) {
+    n.title = "Double-click to rename";
+    n.addEventListener("dblclick", (ev) => { ev.stopPropagation(); openFrameEditMenu(n, frameObj, { focusRename: true }); });
+  }
+  const fid = frameObj && frameObj.fid != null ? frameObj.fid : null;
+  let sopPanel = null;
   if (fid != null) {
     const sop = makeSoPToggle(fid, "State of play for this area");
     el.appendChild(sop.toggle);
+    sopPanel = sop.panel;
+  }
+  if (frameObj) {
     // WP-Frame-HITL — sub-frames get the SAME gesture menu as top frames (Issue 4).
     // Without it a nested area had no rename / merge / re-home affordance, so
     // redundant sub-frames couldn't be combined. Appended after the SoP panel so the
@@ -6007,10 +6027,10 @@ function buildWsHeader(ws) {
     edit.setAttribute("role", "button");
     edit.tabIndex = 0;
     edit.title = "Rename, re-home, or merge";
-    edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, ws); });
+    edit.addEventListener("click", (ev) => { ev.stopPropagation(); openFrameEditMenu(edit, frameObj); });
     el.appendChild(edit);
-    el.appendChild(sop.panel);
   }
+  if (sopPanel) el.appendChild(sopPanel);
   return el;
 }
 // Prepend a collapse chevron to a frame/workstream section header. `key` is the
@@ -6097,6 +6117,10 @@ async function frameEdit(edit) {
       }
     } else if (edit && edit.eventType === "merge") {
       showToast({ kind: "success", title: "Combined", body: "I'll treat these as one going forward." });
+    } else if (edit && edit.eventType === "rename" && edit.newFrameName) {
+      // MVP-Librarian 2.1 — visible confirmation. The silent rename was half the
+      // bug; the felt outcome must match the recorded event.
+      showToast({ kind: "success", title: "Renamed", body: `“${edit.oldFrameName}” is now “${edit.newFrameName}”.` });
     }
     // WP-Frame-HITL "adapts" tier — felt learning. After a MOVE, ask the learner
     // whether the same explicit feature explains other jobs, and surface a visible
@@ -6107,6 +6131,25 @@ async function frameEdit(edit) {
   } catch (e) {
     console.warn("[main] frame_edit failed:", e);
   }
+}
+
+// MVP-Librarian 2.2/2.3 — batch org-edit emitter. POSTs each edit sequentially
+// (order matters: a create_frame must land before the moves into it), then reloads
+// the view ONCE. Individual events, individually reversible — never a compound
+// event. Returns the count that failed so callers can toast honestly (e.g. the
+// move_record gesture 400s until its backend companion lands).
+async function frameEditBatch(edits) {
+  let failed = 0;
+  for (const edit of edits) {
+    try {
+      await tauri.core.invoke("frame_edit", { edit });
+    } catch (e) {
+      failed++;
+      console.warn("[main] frame_edit (batch) failed:", e);
+    }
+  }
+  await enterDecisionsView();
+  return failed;
 }
 
 // After a move, fetch the apply-to-similar offer and (if anything generalizes)
@@ -6732,7 +6775,7 @@ const FRAME_TYPE_TIERS = [
   { label: "Nested", hint: "lives inside a top-level home", types: ["workstream"] },
   { label: "Lens", hint: "tags jobs across homes without owning them", types: ["topic", "geography"] },
 ];
-function positionMenu(menu, anchorEl) {
+function positionMenu(menu, anchorEl, opts) {
   document.body.appendChild(menu);
   const r = anchorEl.getBoundingClientRect();
   const vh = window.innerHeight, vw = window.innerWidth;
@@ -6751,11 +6794,19 @@ function positionMenu(menu, anchorEl) {
   menu.style.maxHeight = `${vh - top - margin}px`;
   setTimeout(() => {
     document.addEventListener("click", function close(ev) {
-      if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
+      if (!menu.contains(ev.target) && ev.target !== anchorEl) {
+        // onDismiss fires only when THIS click is what closed the menu (isConnected
+        // guard) — an item click that already removed the menu must not re-trigger
+        // it on the next unrelated click. Used by the rename commit-on-dismiss.
+        const wasOpen = menu.isConnected;
+        menu.remove();
+        document.removeEventListener("click", close);
+        if (wasOpen && opts && typeof opts.onDismiss === "function") opts.onDismiss();
+      }
     });
   }, 0);
 }
-function openFrameEditMenu(anchorEl, frame) {
+function openFrameEditMenu(anchorEl, frame, opts) {
   document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
   const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
   const menu = document.createElement("div");
@@ -6767,17 +6818,44 @@ function openFrameEditMenu(anchorEl, frame) {
   title.className = "frame-move-title";
   title.textContent = "Edit category";
   header.appendChild(title);
+  // MVP-Librarian 2.1 (the rename bug) — the old rename was an UNLABELED prefilled
+  // input that committed ONLY on Enter; every other exit (outside click, another
+  // menu item, Escape) silently discarded the typed name, so live rename attempts
+  // produced zero events. Now: a labeled row with an explicit Rename button, and
+  // a changed name also commits when the menu is dismissed by clicking away
+  // (positionMenu onDismiss). Escape restores the name and closes without saving.
+  const renameLbl = document.createElement("div");
+  renameLbl.className = "frame-move-section";
+  renameLbl.textContent = "Rename";
+  header.appendChild(renameLbl);
+  const renameRow = document.createElement("div");
+  renameRow.className = "frame-rename-row";
   const input = document.createElement("input");          // rename, prefilled
   input.type = "text";
   input.className = "frame-move-new-input";
   input.value = frame.name;
+  let renameCommitted = false;
+  const commitRename = () => {
+    const nn = input.value.trim();
+    if (renameCommitted || !nn || nn === frame.name) return false;
+    renameCommitted = true;
+    menu.remove();
+    frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn });
+    return true;
+  };
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      const nn = input.value.trim();
-      if (nn && nn !== frame.name) { menu.remove(); frameEdit({ eventType: "rename", oldFrameName: frame.name, newFrameName: nn }); }
-    }
+    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+    else if (e.key === "Escape") { e.stopPropagation(); input.value = frame.name; menu.remove(); }
   });
-  header.appendChild(input);
+  const renameSave = document.createElement("button");
+  renameSave.type = "button";
+  renameSave.className = "frame-rename-save";
+  renameSave.textContent = "Rename";
+  renameSave.title = "Save the new name";
+  renameSave.addEventListener("click", () => commitRename());
+  renameRow.appendChild(input);
+  renameRow.appendChild(renameSave);
+  header.appendChild(renameRow);
   menu.appendChild(header);
 
   const list = document.createElement("div");
@@ -6863,7 +6941,11 @@ function openFrameEditMenu(anchorEl, frame) {
     }
   }
   menu.appendChild(list);
-  positionMenu(menu, anchorEl);
+  // Dismissing the menu with a changed name commits the rename (lossless — the
+  // user's typed intent is never silently thrown away again).
+  positionMenu(menu, anchorEl, { onDismiss: () => commitRename() });
+  // Double-click-to-rename entry point lands focused on the name, ready to type.
+  if (opts && opts.focusRename) { input.focus(); input.select(); }
 }
 
 function openMovePicker(anchorEl, grp) {
@@ -6967,6 +7049,238 @@ function openMovePicker(anchorEl, grp) {
       if (!menu.contains(ev.target) && ev.target !== anchorEl) { menu.remove(); document.removeEventListener("click", close); }
     });
   }, 0);
+}
+
+// ───────── MVP-Librarian 2.2 + 2.3 — bulk multi-select + Move to… ─────────
+//
+// Two selection lanes over the framed Work-Forest view, both mode-less (a subtle
+// checkbox per row; ticking any shows one action bar at the bottom of the Log):
+//   • jobs (2.3, Trisha C5): N ticked job groups → one "Move to…" → N individual
+//     `move` org-edit events (the existing event type — nothing compound).
+//   • records (2.2, job-split): ticked record cards inside a job → "Move to…" a
+//     DIFFERENT job (or a brand-new job name) → one `move_record` org-edit per
+//     record: { eventType: "move_record", recordId, toJobKey? | newJobName?,
+//     sourceContext: { jobName } }. The server adds the envelope (id/ts/enriched
+//     sourceContext) exactly as for every other org-edit. NOTE: the backend
+//     companion isn't live yet — until it lands the POST 400s and the bar toasts
+//     the failure honestly; nothing is silently pretended.
+// Selection state is cleared on every re-render (each landed edit reloads the
+// view, so a stale recordId/jobKey can never be replayed).
+const _bulkJobSel = new Map();     // jobKey → job label
+const _bulkRecordSel = new Map();  // recordId → source job label
+
+function clearBulkSelection() {
+  _bulkJobSel.clear();
+  _bulkRecordSel.clear();
+  updateBulkMoveBar();
+}
+
+// The one action bar. Lives inside #view-decisions so it can never leak into
+// another view; rebuilt on every selection change; removed when nothing is ticked.
+function updateBulkMoveBar() {
+  const host = document.getElementById("view-decisions");
+  if (!host) return;
+  let bar = host.querySelector(".bulk-move-bar");
+  const jobs = _bulkJobSel.size, recs = _bulkRecordSel.size;
+  if (!jobs && !recs) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.className = "bulk-move-bar";
+    host.appendChild(bar);
+  }
+  bar.innerHTML = "";
+  const label = document.createElement("span");
+  label.className = "bulk-move-count";
+  const parts = [];
+  if (jobs) parts.push(`${jobs} ${jobs === 1 ? "job" : "jobs"}`);
+  if (recs) parts.push(`${recs} ${recs === 1 ? "record" : "records"}`);
+  label.textContent = `${parts.join(" · ")} selected`;
+  bar.appendChild(label);
+  if (jobs) {
+    const mv = document.createElement("button");
+    mv.type = "button";
+    mv.className = "bulk-move-action";
+    mv.textContent = "Move jobs to…";
+    mv.addEventListener("click", (ev) => { ev.stopPropagation(); openBulkJobMovePicker(mv); });
+    bar.appendChild(mv);
+  }
+  if (recs) {
+    const mv = document.createElement("button");
+    mv.type = "button";
+    mv.className = "bulk-move-action";
+    mv.textContent = "Move records to…";
+    mv.addEventListener("click", (ev) => { ev.stopPropagation(); openRecordMovePicker(mv); });
+    bar.appendChild(mv);
+  }
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "bulk-move-clear";
+  clear.textContent = "Clear";
+  clear.addEventListener("click", () => {
+    clearBulkSelection();
+    // untick without a re-render
+    document.querySelectorAll(".job-select-box:checked, .record-select-box:checked").forEach((cb) => { cb.checked = false; });
+  });
+  bar.appendChild(clear);
+}
+
+// 2.3 — destination picker for the ticked JOBS. Same destinations as the per-job
+// Move picker (top frames + nested workstreams + an inline new category), but one
+// choice emits N individual `move` events through frameEditBatch (one reload, no
+// per-move apply-to-similar storm).
+function openBulkJobMovePicker(anchorEl) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const frames = (_decisionsCtx && _decisionsCtx.frames) || [];
+  const selected = [..._bulkJobSel.entries()]; // [jobKey, label]
+  const n = selected.length;
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = `Move ${n} ${n === 1 ? "job" : "jobs"} to…`;
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New category…";
+  input.className = "frame-move-new-input";
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const emit = async (toFrameName, createEdit) => {
+    menu.remove();
+    const edits = [];
+    if (createEdit) edits.push(createEdit);
+    for (const [jobKey, jobName] of selected) {
+      edits.push({ eventType: "move", jobKey, toFrameName, sourceContext: { jobName } });
+    }
+    clearBulkSelection();
+    const failed = await frameEditBatch(edits);
+    if (failed) {
+      showToast({ kind: "failure", title: "Some moves didn't stick", body: `${failed} of ${edits.length} edits were rejected — check the connection and retry.` });
+    } else {
+      showToast({ kind: "success", title: `Moved ${n} ${n === 1 ? "job" : "jobs"}`, body: `Now under ${toFrameName}.` });
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const name = input.value.trim();
+    if (!name) return;
+    emit(name, { eventType: "create_frame", frameName: name, frameType: "initiative" });
+  });
+
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addItem = (name, nested) => {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item" + (nested ? " nested" : "");
+    it.textContent = name;
+    it.addEventListener("click", () => emit(name));
+    list.appendChild(it);
+  };
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    addItem(t.name, false);
+    for (const w of frames.filter((f) => f.parentFid === t.fid)) addItem(w.name, true);
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
+}
+
+// 2.2 — destination picker for the ticked RECORDS (the job-split gesture).
+// Destinations are JOBS (grouped under their frame for wayfinding) or a typed
+// new job name; one choice emits N individual `move_record` events. Payload per
+// record (envelope added server-side, matching every other org-edit POST):
+//   existing job → { eventType: "move_record", recordId, toJobKey, sourceContext: { jobName } }
+//   new job      → { eventType: "move_record", recordId, newJobName, sourceContext: { jobName } }
+// where sourceContext.jobName is the record's CURRENT job label (the learner's
+// evidence), mirroring what the per-job Move sends for whole-job moves.
+function openRecordMovePicker(anchorEl) {
+  document.querySelectorAll(".frame-move-menu").forEach((m) => m.remove());
+  const ctx = _decisionsCtx || {};
+  const frames = ctx.frames || [];
+  const jobNames = ctx.jobNames || {};
+  const selected = [..._bulkRecordSel.entries()]; // [recordId, source job label]
+  const n = selected.length;
+  const jobLabel = (jk) =>
+    jobNames[jk] || jobNames[String(jk).replace(/^job:/, "")] || prettySlug(String(jk).replace(/^job:/, ""));
+  const menu = document.createElement("div");
+  menu.className = "frame-move-menu";
+
+  const header = document.createElement("div");
+  header.className = "frame-move-header";
+  const title = document.createElement("div");
+  title.className = "frame-move-title";
+  title.textContent = `Move ${n} ${n === 1 ? "record" : "records"} to…`;
+  header.appendChild(title);
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "+ New job…";
+  input.className = "frame-move-new-input";
+  header.appendChild(input);
+  menu.appendChild(header);
+
+  const emit = async (dest) => {   // dest: { toJobKey } | { newJobName }
+    menu.remove();
+    const edits = selected.map(([recordId, jobName]) => ({
+      eventType: "move_record",
+      recordId,
+      ...dest,
+      sourceContext: { jobName },
+    }));
+    clearBulkSelection();
+    const failed = await frameEditBatch(edits);
+    if (failed) {
+      // Expected until the move_record backend companion lands: the server 400s
+      // the eventType. Honest failure — never pretend the split stuck.
+      showToast({ kind: "failure", title: "Couldn't move the records", body: `The server rejected ${failed} of ${edits.length} record moves.` });
+    } else {
+      const destLabel = dest.toJobKey ? jobLabel(dest.toJobKey) : dest.newJobName;
+      showToast({ kind: "success", title: `Moved ${n} ${n === 1 ? "record" : "records"}`, body: `Now under ${destLabel}.` });
+    }
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const name = input.value.trim();
+    if (!name) return;
+    emit({ newJobName: name });
+  });
+
+  // Jobs grouped under their frame (section label = frame, items = its jobs).
+  const list = document.createElement("div");
+  list.className = "frame-move-list";
+  const addJob = (jk) => {
+    const it = document.createElement("button");
+    it.type = "button";
+    it.className = "frame-move-item nested";
+    it.textContent = jobLabel(jk);
+    it.addEventListener("click", () => emit({ toJobKey: jk }));
+    list.appendChild(it);
+  };
+  const seen = new Set();
+  for (const t of frames.filter((f) => f.parentFid == null)) {
+    const nested = frames.filter((f) => f.parentFid === t.fid);
+    const keys = [...(t.jobKeys || []), ...nested.flatMap((w) => w.jobKeys || [])];
+    if (!keys.length) continue;
+    const lbl = document.createElement("div");
+    lbl.className = "frame-move-section";
+    lbl.textContent = t.name;
+    list.appendChild(lbl);
+    for (const jk of keys) { if (!seen.has(jk)) { seen.add(jk); addJob(jk); } }
+  }
+  // Jobs known to the mapping but not in any rendered frame (unframed).
+  const unframed = [...new Set(Object.values(ctx.recordJobs || {}))].filter((jk) => jk && !seen.has(jk));
+  if (unframed.length) {
+    const lbl = document.createElement("div");
+    lbl.className = "frame-move-section";
+    lbl.textContent = "Unframed";
+    list.appendChild(lbl);
+    for (const jk of unframed) { seen.add(jk); addJob(jk); }
+  }
+  menu.appendChild(list);
+  positionMenu(menu, anchorEl);
 }
 
 /**
@@ -7724,6 +8038,10 @@ function renderDecisions() {
   if (!_decisionsCtx || !listEl) return;
   const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
 
+  // MVP-Librarian 2.2/2.3 — a re-render rebuilds every checkbox unticked, so the
+  // selection state must reset with it (stale jobKeys/recordIds never replay).
+  clearBulkSelection();
+
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
     btn.setAttribute("aria-pressed", btn.dataset.lens === _decisionsLens ? "true" : "false");
@@ -7937,7 +8255,32 @@ function renderDecisions() {
     }
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
-      if (rec) body.appendChild(renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []));
+      if (!rec) continue;
+      const card = renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []);
+      // MVP-Librarian 2.2 (job-split) — record-level multi-select inside the job
+      // detail. A subtle checkbox beside each card; ticking any shows the bulk
+      // "Move records to…" bar. Only JOB-grouped records qualify (the move_record
+      // override remaps recordId → job, which is meaningless on document-project
+      // buckets); unframed job groups qualify too — splitting is how they get filed.
+      if (framed && rec.recordId && recordJobs && recordJobs[rec.recordId]) {
+        const row = document.createElement("div");
+        row.className = "record-select-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.className = "record-select-box";
+        cb.title = "Select this record to move it to another job";
+        cb.addEventListener("click", (ev) => ev.stopPropagation());
+        cb.addEventListener("change", () => {
+          if (cb.checked) _bulkRecordSel.set(rec.recordId, grp.label);
+          else _bulkRecordSel.delete(rec.recordId);
+          updateBulkMoveBar();
+        });
+        row.appendChild(cb);
+        row.appendChild(card);
+        body.appendChild(row);
+      } else {
+        body.appendChild(card);
+      }
     }
 
     // (Per-job SoP removed — the consolidated state of play now lives one level up,
@@ -7957,6 +8300,24 @@ function renderDecisions() {
     // header <button>). Tap-to-filter on chips is untouched.
     const headRow = document.createElement("div");
     headRow.className = "decisions-group-head-row";
+    // MVP-Librarian 2.3 (Trisha C5) — job-level multi-select. A subtle checkbox
+    // beside each job row (same gating as the single Move control); ticking any
+    // shows the bulk "Move jobs to…" bar, and one destination choice emits N
+    // individual `move` events. Sits OUTSIDE the <button> header (inputs can't
+    // legally nest inside a button).
+    if (framed && grp._top) {
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "job-select-box";
+      cb.title = "Select this job to move it with others";
+      cb.addEventListener("click", (ev) => ev.stopPropagation());
+      cb.addEventListener("change", () => {
+        if (cb.checked) _bulkJobSel.set(grp.key, grp.label);
+        else _bulkJobSel.delete(grp.key);
+        updateBulkMoveBar();
+      });
+      headRow.appendChild(cb);
+    }
     headRow.appendChild(head);
     // In the framed (Work-Forest) view the legacy per-group project-canon
     // Combine/Rename is replaced by the overlay-backed frame-header menu (Move on
