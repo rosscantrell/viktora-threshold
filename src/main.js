@@ -1520,7 +1520,7 @@ let _sourceCurrent = null;
  *  highlight as siblings alongside the document's own extracted records — used
  *  by the question card to light up every authored hot-list item at once.
  *  Existing callers omit it; behavior is unchanged when absent. */
-async function openSourcePanel(documentId, verbatim, extraVerbatims) {
+async function openSourcePanel(documentId, verbatim, extraVerbatims, opts) {
   if (!documentId) return;
   const panel = document.getElementById("source-panel");
   const titleEl = document.getElementById("source-panel-title");
@@ -1586,20 +1586,26 @@ async function openSourcePanel(documentId, verbatim, extraVerbatims) {
   // Gather EVERY verified verbatim extracted from this source so they all get
   // highlighted (the clicked one stays primary). Best-effort: on failure we fall
   // back to highlighting just the clicked record.
+  // AUTHORED mode (question-card hot-list source): skip the doc's OTHER records —
+  // the point is to show THIS category's items, not light up every action-item in
+  // the doc (which drowns the ones the question is about). Only the caller-supplied
+  // item verbatims are highlighted then.
   let others = [];
-  try {
-    const dr = await tauri.core.invoke("fetch_document_records", { documentId });
-    if (_sourceOpenDoc !== documentId) return;
-    const recs = dr && Array.isArray(dr.records) ? dr.records : [];
-    const clicked = (verbatim || "").trim().toLowerCase();
-    for (const it of recs) {
-      const r = it && it.record ? it.record : it;
-      if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
-      if (r.verbatim.trim().toLowerCase() === clicked) continue;
-      others.push(r.verbatim);
+  if (!(opts && opts.authoredOnly)) {
+    try {
+      const dr = await tauri.core.invoke("fetch_document_records", { documentId });
+      if (_sourceOpenDoc !== documentId) return;
+      const recs = dr && Array.isArray(dr.records) ? dr.records : [];
+      const clicked = (verbatim || "").trim().toLowerCase();
+      for (const it of recs) {
+        const r = it && it.record ? it.record : it;
+        if (!r || r.verbatimVerified !== true || !r.verbatim) continue;
+        if (r.verbatim.trim().toLowerCase() === clicked) continue;
+        others.push(r.verbatim);
+      }
+    } catch (err) {
+      console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
     }
-  } catch (err) {
-    console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
   }
 
   // Fold in any caller-supplied extra highlights (question-card hot-list items).
@@ -6552,7 +6558,7 @@ function buildQuestionCard(card) {
     }
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
-      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1));
+      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1), { authoredOnly: true });
     });
     row.appendChild(chip);
     el.appendChild(row);
@@ -6793,7 +6799,7 @@ function buildQuestionMembers(card, onSyncYes, qsrc) {
       inNotes.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        openSourcePanel(qsrc.docId, strings[0], strings.slice(1));
+        openSourcePanel(qsrc.docId, strings[0], strings.slice(1), { authoredOnly: true });
       });
       row.appendChild(inNotes);
     }
