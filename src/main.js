@@ -2215,12 +2215,15 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     if (meta.childNodes.length) card.appendChild(meta);
   }
 
-  // Verbatim — quotation ONLY when verified.
+  // Verbatim — via the ONE receipt component (quote-only here; the source badge
+  // rides in the actions row below, so jump is off on this instance).
   if (rec.verbatimVerified === true && rec.verbatim) {
-    const quote = document.createElement("blockquote");
-    quote.className = "record-quote";
-    quote.textContent = rec.verbatim;
-    card.appendChild(quote);
+    card.appendChild(
+      renderReceipt(
+        { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified },
+        { jump: false, variant: "receipt-record" },
+      ),
+    );
   }
 
   // Edge callouts (conflict / supersession / resolution / dependency).
@@ -2620,18 +2623,21 @@ function renderArrivedCard(v) {
   headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "An expected record arrived.");
   card.appendChild(headline);
 
-  // The evidence — the citation-checked quote from the filling document.
-  if (fb.verbatim) {
-    const q = document.createElement("blockquote");
-    q.className = "arrived-quote";
-    q.textContent = `“${fb.verbatim}”`;
-    card.appendChild(q);
-  }
-  if (fb.documentId) {
-    const src = document.createElement("p");
-    src.className = "arrived-source";
-    src.textContent = `from ${fb.documentId}`;
-    card.appendChild(src);
+  // The evidence — the citation-checked quote from the filling document, plus its
+  // provenance line, via the ONE receipt component. Verbatim here is checked by
+  // arrival (no separate verbatimVerified flag), so we mark it verified; jump is
+  // off (the void flow doesn't wire the source pane) so the source shows as text.
+  if (fb.verbatim || fb.documentId) {
+    card.appendChild(
+      renderReceipt(
+        {
+          verbatim: fb.verbatim,
+          verbatimVerified: !!fb.verbatim,
+          sourceFallback: fb.documentId ? `from ${fb.documentId}` : "",
+        },
+        { jump: false, quoteWrap: true, variant: "receipt-arrived" },
+      ),
+    );
   }
 
   // Clear the receipt once seen (acknowledge). A filled void can't re-surface, so
@@ -3919,12 +3925,15 @@ function renderWhyStalledDrawer(receipt) {
       line.textContent = v.render || v.summary || "";
       li.appendChild(line);
 
-      // Citation-checked verbatim, ONLY when verified (trust property).
+      // Citation-checked verbatim, ONLY when verified (trust property) — via the
+      // ONE receipt component (quote-only; the drawer doesn't wire the source pane).
       if (v.verbatim && v.verbatimVerified) {
-        const q = document.createElement("blockquote");
-        q.className = "stalled-void-quote";
-        q.textContent = `“${v.verbatim}”`;
-        li.appendChild(q);
+        li.appendChild(
+          renderReceipt(
+            { verbatim: v.verbatim, verbatimVerified: v.verbatimVerified },
+            { jump: false, quoteWrap: true, variant: "receipt-stalled" },
+          ),
+        );
       }
 
       // Waiting-on records (the enabling records this void is blocked behind).
@@ -6593,31 +6602,26 @@ function buildQuestionCard(card) {
     const doc = _docsById.get(qsrc.docId);
     const label = qsrc.docTitle || (doc ? sourceFromDoc(doc).label : "your notes");
     const allTexts = qsrc.items.flatMap(itemHighlightStrings);
+    // The authored hot-list source, via the ONE receipt component's authored-
+    // source jump variant: opens the authored doc highlighting every item at once.
     const row = document.createElement("div");
     row.className = "question-source-row";
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "source-badge question-source-badge";
-    chip.title = "Open your authored list beside this — " + label;
-    const icon = document.createElement("span");
-    icon.className = "source-badge-icon";
-    icon.innerHTML = SOURCE_ICONS[doc ? sourceFromDoc(doc).iconKey : "doc"] || SOURCE_ICONS.doc;
-    chip.appendChild(icon);
-    const lab = document.createElement("span");
-    lab.className = "source-badge-label";
-    lab.textContent = "View in your notes";
-    chip.appendChild(lab);
-    if (qsrc.docTitle) {
-      const det = document.createElement("span");
-      det.className = "source-badge-detail";
-      det.textContent = "· " + qsrc.docTitle;
-      chip.appendChild(det);
-    }
-    chip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1), { authoredOnly: true });
-    });
-    row.appendChild(chip);
+    row.appendChild(
+      renderReceipt(
+        {},
+        {
+          variant: "receipt-question",
+          authoredSource: {
+            docId: qsrc.docId,
+            primaryText: allTexts[0],
+            extraTexts: allTexts.slice(1),
+            label: "View in your notes",
+            detail: qsrc.docTitle || "",
+            iconKey: doc ? sourceFromDoc(doc).iconKey : "doc",
+          },
+        },
+      ),
+    );
     el.appendChild(row);
   }
 
@@ -9739,6 +9743,171 @@ async function enterReceiptsView(entity) {
   renderReceiptsChain(items, edges, baseUrl);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * WP-R1 — the ONE receipt component.
+ *
+ * Every surface that shows "evidence" (a verbatim quote, the source it came
+ * from, the co-sign corroboration count, and the jump-to-source affordance)
+ * renders it through renderReceipt(). The DOM tree it emits is IDENTICAL at
+ * every call site — surface variation is class/attr toggles via `opts`, never
+ * a forked element tree. This reconciles the two prior renderers (the #61
+ * source-pane/question-card treatment and renderReceiptNode's co-sign-bearing
+ * receipt) into a single component.
+ *
+ * `receipt` (normalized; every field optional — absent ⇒ that piece is omitted):
+ *   verbatim         string  the captured text
+ *   verbatimVerified bool    quote is ONLY rendered when this is true (trust gate)
+ *   documentId       string  the source doc → drives the source badge + jump
+ *   sourceFallback   string  plain text shown when documentId has no doc metadata
+ *                            AND opts.jump is false (e.g. "from EMAIL-123")
+ *   coSign           {captureCount, status}  "N captures corroborate" (≥2 only)
+ *   copy             {markdown, html}  when present, a copy-to-clipboard action
+ *                            (the share artifact) is added; reuses copy_receipts
+ *
+ * `opts`:
+ *   compact       bool    dense variant (data-compact="true")
+ *   jump          bool    default true; false ⇒ no clickable source (fallback text)
+ *   quoteWrap     bool    render the quote wrapped in curly quotes (legacy look)
+ *   variant       string  surface class hook appended to the root (parity only)
+ *   authoredSource {docId, primaryText, extraTexts, label, iconKey}  the
+ *                          question-card "View in your notes" jump variant:
+ *                          opens the authored doc highlighting every item at once
+ *   onCopyToast   fn      optional callback after a successful copy (toast)
+ *
+ * Returns a single <div class="receipt …"> element — the SAME tree everywhere.
+ * Renders only from data already in hand (no blocking work on the paint path).
+ * ───────────────────────────────────────────────────────────────────────── */
+function renderReceipt(receipt, opts) {
+  const r = receipt || {};
+  const o = opts || {};
+  const jump = o.jump !== false;
+
+  const root = document.createElement("div");
+  root.className = "receipt";
+  if (o.variant) root.classList.add(o.variant);
+  if (o.compact) root.dataset.compact = "true";
+
+  // 1. Verbatim quote — ONLY when verified (the trust property). Border-left
+  //    inset, italic. quoteWrap adds the curly quotes some surfaces show.
+  if (r.verbatimVerified === true && r.verbatim) {
+    const quote = document.createElement("blockquote");
+    quote.className = "receipt-quote";
+    quote.textContent = o.quoteWrap ? `“${r.verbatim}”` : r.verbatim;
+    root.appendChild(quote);
+  }
+
+  // 2. Co-sign — count-only corroboration ("N captures corroborate"), rendered
+  //    ONLY at captureCount ≥ 2, honoring confirmed/proposed. Never the emails —
+  //    count only.
+  const cs = r.coSign;
+  if (cs && typeof cs.captureCount === "number" && cs.captureCount >= 2) {
+    const chip = document.createElement("span");
+    chip.className = "receipt-cosign";
+    chip.dataset.status = cs.status === "confirmed" ? "confirmed" : "proposed";
+    chip.textContent = `✓ ${cs.captureCount} captures corroborate`;
+    root.appendChild(chip);
+  }
+
+  // 3. Source + jump-to-source. The authored-source variant (question card) opens
+  //    the authored doc highlighting every item at once; the standard variant
+  //    reuses renderSourceBadge (source-type chip) → opens the source pane beside
+  //    the view. When jump is off, or no doc metadata is available, we fall back
+  //    to a plain non-clickable source line.
+  const footer = document.createElement("div");
+  footer.className = "receipt-source";
+  let sourced = false;
+  if (jump && o.authoredSource && o.authoredSource.docId) {
+    const a = o.authoredSource;
+    const doc = _docsById ? _docsById.get(a.docId) : null;
+    const iconKey = a.iconKey || (doc ? sourceFromDoc(doc).iconKey : "doc");
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "source-badge";
+    chip.title = "Open your authored list beside this" + (a.detail ? " — " + a.detail : a.label ? " — " + a.label : "");
+    const icon = document.createElement("span");
+    icon.className = "source-badge-icon";
+    icon.innerHTML = SOURCE_ICONS[iconKey] || SOURCE_ICONS.doc; // constant SVG
+    chip.appendChild(icon);
+    const lab = document.createElement("span");
+    lab.className = "source-badge-label";
+    lab.textContent = a.label || "View in your notes";
+    chip.appendChild(lab);
+    if (a.detail) {
+      const det = document.createElement("span");
+      det.className = "source-badge-detail";
+      det.textContent = "· " + a.detail;
+      chip.appendChild(det);
+    }
+    const extras = Array.isArray(a.extraTexts) ? a.extraTexts : [];
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSourcePanel(a.docId, a.primaryText, extras, { authoredOnly: true });
+    });
+    footer.appendChild(chip);
+    sourced = true;
+  } else if (jump && r.documentId) {
+    const chip = renderSourceBadge(r.documentId, r.verbatim);
+    if (chip) {
+      footer.appendChild(chip);
+      sourced = true;
+    } else {
+      // No doc metadata loaded yet: a plain "source ↗" button that still opens it.
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "receipt-source-link";
+      btn.textContent = "source ↗";
+      btn.addEventListener("click", () => openSourcePanel(r.documentId, r.verbatim));
+      footer.appendChild(btn);
+      sourced = true;
+    }
+  } else if (r.sourceFallback) {
+    // Non-clickable provenance line (used where the source pane isn't wired).
+    const p = document.createElement("span");
+    p.className = "receipt-source-text";
+    p.textContent = r.sourceFallback;
+    footer.appendChild(p);
+    sourced = true;
+  }
+
+  // 4. The share artifact — copy the "compiled from N captures" block. Reuses the
+  //    existing deterministic serializers (buildReceiptsMarkdown/Html) via the
+  //    caller-supplied {markdown, html}; we do NOT re-serialize here.
+  if (r.copy && (r.copy.markdown || r.copy.html)) {
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "receipt-copy";
+    copyBtn.textContent = "Copy receipt";
+    copyBtn.title = "Copy this as a paste-able, source-cited block";
+    copyBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await tauri.core.invoke("copy_receipts", {
+          html: r.copy.html || "",
+          markdown: r.copy.markdown || "",
+        });
+        const original = copyBtn.textContent;
+        copyBtn.textContent = "Copied ✓";
+        copyBtn.disabled = true;
+        setTimeout(() => {
+          copyBtn.textContent = original;
+          copyBtn.disabled = false;
+        }, 1600);
+        if (typeof o.onCopyToast === "function") o.onCopyToast();
+      } catch (err) {
+        console.warn("[main] copy_receipts failed:", err);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = "Copy failed";
+        setTimeout(() => { copyBtn.textContent = original; }, 1600);
+      }
+    });
+    footer.appendChild(copyBtn);
+    sourced = true;
+  }
+
+  if (sourced) root.appendChild(footer);
+  return root;
+}
+
 /** Build the source-doc deep link for a record, reusing the tidbit scheme.
  *  Returns "" when no base URL is configured. */
 function receiptsDeepLink(baseUrl, documentId) {
@@ -9786,6 +9955,34 @@ function renderReceiptsChain(items, edges, baseUrl) {
   const chainEl = document.getElementById("receipts-chain");
   if (!chainEl) return;
   chainEl.innerHTML = "";
+
+  // Share artifact — the "compiled from N captures" copy action, on the ONE
+  // receipt component. Reuses the deterministic buildReceiptsMarkdown/Html
+  // serializers (NOT a second serializer); the same copy_receipts IPC the
+  // view's toolbar button uses. Rendered once at the head of the chain so any
+  // receipted set is one click from a paste-able, source-cited block.
+  if (currentReceipts && Array.isArray(currentReceipts.items) && currentReceipts.items.length) {
+    const { entity, items: cItems, edges: cEdges, baseUrl: cUrl } = currentReceipts;
+    chainEl.appendChild(
+      renderReceipt(
+        {
+          copy: {
+            markdown: buildReceiptsMarkdown(entity, cItems, cEdges, cUrl),
+            html: buildReceiptsHtml(entity, cItems, cEdges, cUrl),
+          },
+        },
+        {
+          variant: "receipt-share",
+          onCopyToast: () =>
+            showToast({
+              kind: "success",
+              title: "Receipt copied",
+              body: `Compiled from ${cItems.length} capture${cItems.length === 1 ? "" : "s"}.`,
+            }),
+        },
+      ),
+    );
+  }
 
   const edgesByRecord = new Map();
   for (const e of Array.isArray(edges) ? edges : []) {
@@ -9848,16 +10045,8 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
   title.textContent = rec.summary || "";
   body.appendChild(title);
 
-  // Verbatim quote — ONLY when verified (the trust property). Border-left only,
-  // no box.
-  if (rec.verbatimVerified === true && rec.verbatim) {
-    const quote = document.createElement("blockquote");
-    quote.className = "rec-quote";
-    quote.textContent = rec.verbatim;
-    body.appendChild(quote);
-  }
-
-  // Edge chips — supersession/conflict (red family), resolution (green).
+  // Edge chips — supersession/conflict (red family), resolution (green). These
+  // are relationship annotations, NOT evidence, so they stay bespoke here.
   for (const e of recEdges) {
     const phrasing = edgePhrasing(e, rec.recordId);
     if (!phrasing) continue;
@@ -9868,34 +10057,21 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
     body.appendChild(chipEl);
   }
 
-  // WP-N1 #7 — count-only co-sign ("N captures corroborate"): independent
-  // capture corroboration, green-family chip. confirmed = solid, proposed =
-  // dimmer. Server emits it only at captureCount ≥ 2; absent ⇒ no chip. NEVER
-  // the corroborating emails — count only.
-  if (coSign && typeof coSign.captureCount === "number" && coSign.captureCount >= 2) {
-    const cs = document.createElement("span");
-    cs.className = "rec-cosign";
-    cs.dataset.status = coSign.status === "confirmed" ? "confirmed" : "proposed";
-    cs.textContent = `✓ ${coSign.captureCount} captures corroborate`;
-    body.appendChild(cs);
-  }
-
-  // Source — opens the captured document in the in-app reader, BESIDE the chain
-  // (no browser round-trip). The source-type badge is the affordance when doc
-  // metadata is loaded; otherwise a plain "source ↗" button that still opens it.
-  if (rec.documentId) {
-    const chip = renderSourceBadge(rec.documentId, rec.verbatim);
-    if (chip) {
-      body.appendChild(chip);
-    } else {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "rec-source";
-      btn.textContent = "source ↗";
-      btn.addEventListener("click", () => openSourcePanel(rec.documentId, rec.verbatim));
-      body.appendChild(btn);
-    }
-  }
+  // Evidence — verbatim quote (verified-only), the count-only co-sign, and the
+  // jump-to-source, all via the ONE receipt component. This is the richest call
+  // site (it carries the co-sign) and the reference the component was distilled
+  // from; it now renders through it like every other surface.
+  body.appendChild(
+    renderReceipt(
+      {
+        verbatim: rec.verbatim,
+        verbatimVerified: rec.verbatimVerified,
+        documentId: rec.documentId,
+        coSign,
+      },
+      { variant: "receipt-chain" },
+    ),
+  );
 
   node.appendChild(body);
   return node;
@@ -10628,13 +10804,18 @@ function renderProxyCard(item) {
   const evidence = document.createElement("div");
   evidence.className = "proxy-evidence";
 
+  // Each captured verbatim via the ONE receipt component. Proxy verbatims are
+  // fleet-surfaced evidence (already citation-scoped), so they render as quotes
+  // (verified); the source pane isn't wired in the proxy queue, so jump is off.
   const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
   for (const v of verbatims) {
     if (!v) continue;
-    const quote = document.createElement("blockquote");
-    quote.className = "record-quote proxy-verbatim";
-    quote.textContent = v;
-    evidence.appendChild(quote);
+    evidence.appendChild(
+      renderReceipt(
+        { verbatim: v, verbatimVerified: true },
+        { jump: false, variant: "receipt-proxy" },
+      ),
+    );
   }
 
   const metaRow = document.createElement("p");

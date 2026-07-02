@@ -2750,6 +2750,122 @@ code {
   color: rgba(93, 202, 165, 0.7);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * WP-R1 — the ONE receipt component (renderReceipt). Every evidence render on
+ * every surface uses this element tree; surfaces vary by the .receipt-<name>
+ * variant class + [data-compact], NEVER a forked structure. Token-based only.
+ * ───────────────────────────────────────────────────────────────────────── */
+.receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Verbatim — inset, italic, reads unmistakably as a source quote. */
+.receipt-quote {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--glass-text-dim);
+  background: rgba(0, 0, 0, 0.22);
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
+  word-break: break-word;
+}
+
+/* Count-only co-sign ("N captures corroborate") — green-family chip; proposed
+ * is dimmer than confirmed. */
+.receipt-cosign {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: rgba(93, 202, 165, 0.12);
+  border: 1px solid rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
+}
+.receipt-cosign[data-status="proposed"] {
+  background: rgba(93, 202, 165, 0.08);
+  border-color: rgba(93, 202, 165, 0.25);
+  color: rgba(93, 202, 165, 0.7);
+}
+
+/* Source/jump/copy footer — a wrap-able row of affordances (source badge,
+ * plain source link/text, copy). The source badge itself is styled by the
+ * shared .source-badge rules. */
+.receipt-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.receipt-source-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  color: #7fb3e8;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.receipt-source-link:hover { text-decoration: underline; }
+.receipt-source-text {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+/* The share artifact — "Copy receipt" (compiled-from-N-captures). */
+.receipt-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  background: var(--glass-surface, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.receipt-copy:hover { border-color: var(--accent-ring, rgba(127,179,232,0.5)); color: var(--text-primary, #e8eaed); }
+.receipt-copy:disabled { opacity: 0.7; cursor: default; }
+
+/* ── Surface variants: class/attr toggles over the SAME tree ── */
+/* Receipts chain: the co-sign/source annotations hug their content. */
+.receipt.receipt-chain { gap: 6px; }
+.receipt.receipt-chain .receipt-quote {
+  font-size: 13px;
+  color: #e8eaed;
+  background: none;
+  padding: 0 0 0 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+}
+/* Arrived receipt: tighter, dimmer — the void-flow look. */
+.receipt.receipt-arrived .receipt-quote {
+  padding: 0 0 0 10px;
+  font-size: 12px;
+  background: none;
+  border-left: 2px solid var(--glass-border);
+  border-radius: 0;
+  line-height: 1.4;
+}
+.receipt.receipt-arrived { margin-top: 2px; }
+/* Stalled drawer: same inset look as the record cards. */
+.receipt.receipt-stalled .receipt-quote { font-size: 12px; }
+/* Proxy queue: verbatims sit inside the .proxy-evidence inset panel. */
+.receipt.receipt-proxy .receipt-quote { font-size: 12.5px; }
+/* Question card: source-only (authored jump). */
+.receipt.receipt-question { gap: 0; }
+
 /* #8 Mine / Everyone — ghost segmented control in the Today header row. */
 .log-header-actions {
   display: inline-flex;
