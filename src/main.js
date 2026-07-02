@@ -1515,8 +1515,12 @@ let _sourceOpenDoc = null;
 let _sourceCurrent = null;
 
 /** Open the source reader beside the current view: fetch the document (detail +
- *  body) and render it, highlighting `verbatim`. */
-async function openSourcePanel(documentId, verbatim) {
+ *  body) and render it, highlighting `verbatim`.
+ *  `extraVerbatims` (optional) is an additional set of authored strings to
+ *  highlight as siblings alongside the document's own extracted records — used
+ *  by the question card to light up every authored hot-list item at once.
+ *  Existing callers omit it; behavior is unchanged when absent. */
+async function openSourcePanel(documentId, verbatim, extraVerbatims) {
   if (!documentId) return;
   const panel = document.getElementById("source-panel");
   const titleEl = document.getElementById("source-panel-title");
@@ -1596,6 +1600,15 @@ async function openSourcePanel(documentId, verbatim) {
     }
   } catch (err) {
     console.warn("[main] fetch_document_records failed (highlighting clicked record only):", err);
+  }
+
+  // Fold in any caller-supplied extra highlights (question-card hot-list items).
+  // Best-effort substring; renderSourceBody silently skips any that don't match.
+  if (Array.isArray(extraVerbatims)) {
+    for (const t of extraVerbatims) {
+      const s = typeof t === "string" ? t.trim() : "";
+      if (s) others.push(s);
+    }
   }
 
   const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others);
@@ -6439,6 +6452,49 @@ async function pullQuestion(btn, noteEl) {
   if (noteEl) noteEl.textContent = "Nothing right now.";
 }
 
+// The authored hot-list source, when the card carries one AND we have the doc in
+// hand (invisible-by-absence otherwise). Returns { docId, items:[{text,jobKey}] }
+// with each item's text normalized to a non-empty string, or null.
+function questionSource(card) {
+  const src = card && card.source;
+  const docId = src && typeof src.docId === "string" ? src.docId : "";
+  if (!docId || !_docsById || !_docsById.get(docId)) return null;
+  const rawItems = Array.isArray(src.items) ? src.items : [];
+  const items = rawItems
+    .map((it) => {
+      if (!it) return null;
+      const text = typeof it === "string" ? it : (typeof it.text === "string" ? it.text : "");
+      const t = text.trim();
+      if (!t) return null;
+      const jobKey = it && typeof it.jobKey === "string" ? it.jobKey : "";
+      return { text: t, jobKey };
+    })
+    .filter(Boolean);
+  return { docId, docTitle: src.docTitle, items };
+}
+
+// Extract a CODE-like structured identifier (e.g. "US-NON-19757") from a string,
+// for the highlight fallback when an item's LLM prose isn't an exact substring of
+// the source. Matches an uppercase/alnum token with at least one hyphen and a
+// digit run (so it catches job codes, not ordinary ALL-CAPS words). Null if none.
+function extractCodeToken(text) {
+  const m = String(text || "").match(/\b[A-Z0-9]+(?:-[A-Z0-9]+)+\b/);
+  if (!m) return null;
+  return /\d/.test(m[0]) && /-/.test(m[0]) ? m[0] : null;
+}
+
+// The set of best-effort highlight strings for one source item: its authored text
+// first, then its structured code token (if any) as a fallback anchor. Both are
+// passed to the highlighter, which places whichever it can find (substring match)
+// and silently skips the rest.
+function itemHighlightStrings(item) {
+  const out = [];
+  if (item && item.text) out.push(item.text);
+  const code = extractCodeToken(item && item.text);
+  if (code) out.push(code);
+  return out;
+}
+
 // One surfaced question → a card in the rule-card visual language. Shows the
 // judged phrasing, the "why" receipt, BOTH futures from the simulation
 // (Yes → … / No → …), and Yes / No / Not now.
@@ -6463,6 +6519,43 @@ function buildQuestionCard(card) {
     why.className = "question-why";
     why.textContent = "Why I'm asking: " + card.why;
     el.appendChild(why);
+  }
+
+  // The authored hot-list source, when present + resolvable. A clickable badge
+  // (reusing the source-badge chrome) opens the authored document in the source
+  // pane, highlighting EVERY authored item at once. Invisible-by-absence when the
+  // card carries no source, or its doc isn't in _docsById.
+  const qsrc = questionSource(card);
+  if (qsrc) {
+    const doc = _docsById.get(qsrc.docId);
+    const label = qsrc.docTitle || (doc ? sourceFromDoc(doc).label : "your notes");
+    const allTexts = qsrc.items.flatMap(itemHighlightStrings);
+    const row = document.createElement("div");
+    row.className = "question-source-row";
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "source-badge question-source-badge";
+    chip.title = "Open your authored list beside this — " + label;
+    const icon = document.createElement("span");
+    icon.className = "source-badge-icon";
+    icon.innerHTML = SOURCE_ICONS[doc ? sourceFromDoc(doc).iconKey : "doc"] || SOURCE_ICONS.doc;
+    chip.appendChild(icon);
+    const lab = document.createElement("span");
+    lab.className = "source-badge-label";
+    lab.textContent = "View in your notes";
+    chip.appendChild(lab);
+    if (qsrc.docTitle) {
+      const det = document.createElement("span");
+      det.className = "source-badge-detail";
+      det.textContent = "· " + qsrc.docTitle;
+      chip.appendChild(det);
+    }
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1));
+    });
+    row.appendChild(chip);
+    el.appendChild(row);
   }
 
   // Both futures — the consequence previews the simulator computed. The answer
@@ -6512,7 +6605,7 @@ function buildQuestionCard(card) {
     }
   };
 
-  const disclosure = buildQuestionMembers(card, syncYes);
+  const disclosure = buildQuestionMembers(card, syncYes, qsrc);
   if (disclosure) el.appendChild(disclosure);
 
   // Yes acts on the curated subset. When the disclosure supports curation, pass
@@ -6560,9 +6653,15 @@ function buildQuestionCard(card) {
 //     (a callback into the Yes button) fires on every toggle so an empty set
 //     disables Yes. The "+K more" truncated rows aren't curatable (no jobKey),
 //     so they're excluded from M and always ride along with the full action.
-function buildQuestionMembers(card, onSyncYes) {
+function buildQuestionMembers(card, onSyncYes, qsrc) {
   const raw = Array.isArray(card.members) && card.members.length ? card.members
     : (Array.isArray(card.draft) ? card.draft : []);
+  // Index the resolved source items by jobKey so a member row can jump to THAT
+  // item's authored line in the source pane (additive to inspect + curate).
+  const srcItemByJobKey = new Map();
+  if (qsrc && Array.isArray(qsrc.items)) {
+    for (const it of qsrc.items) if (it.jobKey) srcItemByJobKey.set(it.jobKey, it);
+  }
   // Resolve {name, jobKey} for each item: prefer the payload's own name, then a
   // jobKey label, then the key itself — never render a bare object. Keep the
   // jobKey so curation + inspect can key off it (string members carry the key).
@@ -6675,6 +6774,28 @@ function buildQuestionMembers(card, onSyncYes) {
           buildMemberContent(detail, member.jobKey);
         }
       });
+    }
+
+    // IN NOTES — when this member's job maps to an authored source item, a small
+    // icon opens the source pane highlighted to THAT item's line (its code token
+    // as fallback anchor). Additive: inspect (records) + curate (checkbox) stay.
+    const srcItem = member.jobKey ? srcItemByJobKey.get(member.jobKey) : null;
+    if (srcItem && qsrc) {
+      const inNotes = document.createElement("button");
+      inNotes.type = "button";
+      inNotes.className = "question-member-in-notes";
+      inNotes.setAttribute("aria-label", `See ${member.name} in your notes`);
+      inNotes.title = "See this in your notes";
+      inNotes.innerHTML =
+        `<span class="source-badge-icon" aria-hidden="true">${SOURCE_ICONS.doc}</span>` +
+        `<span>In notes</span>`;
+      const strings = itemHighlightStrings(srcItem);
+      inNotes.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openSourcePanel(qsrc.docId, strings[0], strings.slice(1));
+      });
+      row.appendChild(inNotes);
     }
 
     li.appendChild(row);

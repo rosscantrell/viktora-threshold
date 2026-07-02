@@ -3990,6 +3990,35 @@ code {
   font-size: 8px;
   color: var(--accent-gold, #c8a24a);
 }
+/* IN NOTES — per-member jump to its authored line in the source pane. Matches
+   the inspect "View" chip's chrome so the row reads as a set of peer actions. */
+.question-member-in-notes {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.question-member-in-notes:hover {
+  color: var(--glass-text);
+  background: rgba(200, 162, 74, 0.10);
+}
+.question-member-in-notes .source-badge-icon svg { width: 12px; height: 12px; }
+
+/* The card-level "View in your notes" affordance — a source badge placed under
+   the "why" receipt, above the futures/members. */
+.question-source-row {
+  margin: 8px 0 2px;
+}
+.question-source-badge { max-width: 100%; }
 /* INSPECT — the inline record panel; reuses .linked-rec cards inside. */
 .question-member-detail {
   margin: 6px 0 2px 12px;
