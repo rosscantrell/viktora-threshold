@@ -6371,6 +6371,181 @@ async function refreshDevelopedRules() {
   }
 }
 
+// ───────── MVP-Librarian Phase 3 — the Question Engine card ─────────────────
+//
+// "One good question": the server surfaces at most ONE judged question at a time
+// (fact-keyed suppression means an answered/dismissed question NEVER returns, so
+// this state is never a cache — every Log entry re-fetches). `fetch_question`
+// without pull reports the currently-surfaced question if any; the pull gesture
+// ("Anything you need from me?") asks the server to surface the top-ranked one.
+// A 503 (ENABLE_QUESTION_ENGINE off) arrives as `{disabled:true}` and hides the
+// whole surface silently — no affordance, no card, no error.
+let _questionCard = null;        // the ONE surfaced question payload, or null
+let _questionEngineOff = false;  // server flag off → omit the surface entirely
+async function refreshQuestionCard() {
+  try {
+    const res = await tauri.core.invoke("fetch_question", { pull: false });
+    _questionEngineOff = !!(res && res.disabled);
+    _questionCard = !_questionEngineOff && res && res.question ? res.question : null;
+  } catch (e) {
+    console.warn("[main] fetch_question failed:", e);
+    _questionEngineOff = true;   // fail-safe: hide the surface, never a broken shell
+    _questionCard = null;
+  }
+}
+
+// The question surface for the project lens: the card when one is surfaced,
+// otherwise the understated pull affordance. Null when the engine is off.
+function buildQuestionSection() {
+  if (_questionEngineOff) return null;
+  if (_questionCard) {
+    const section = document.createElement("section");
+    section.className = "question-section";
+    section.appendChild(buildQuestionCard(_questionCard));
+    return section;
+  }
+  const row = document.createElement("div");
+  row.className = "question-pull-row";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "question-pull-btn";
+  btn.textContent = "Anything you need from me?";
+  const note = document.createElement("span");
+  note.className = "question-pull-note";
+  btn.addEventListener("click", () => pullQuestion(btn, note));
+  row.appendChild(btn);
+  row.appendChild(note);
+  return row;
+}
+
+// Pull mode: surface the top judged question on demand. Zero interruption cost —
+// flag-off, empty queue, and failure all degrade to a quiet "Nothing right now."
+async function pullQuestion(btn, noteEl) {
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    const res = await tauri.core.invoke("fetch_question", { pull: true });
+    if (res && !res.disabled && res.question) {
+      _questionCard = res.question;
+      renderDecisions();          // redraw — the card replaces the affordance
+      return;
+    }
+  } catch (e) {
+    console.warn("[main] fetch_question (pull) failed:", e);
+  }
+  btn.disabled = false;
+  btn.textContent = original;
+  if (noteEl) noteEl.textContent = "Nothing right now.";
+}
+
+// One surfaced question → a card in the rule-card visual language. Shows the
+// judged phrasing, the "why" receipt, BOTH futures from the simulation
+// (Yes → … / No → …), and Yes / No / Not now.
+function buildQuestionCard(card) {
+  const el = document.createElement("div");
+  el.className = "rule-card question-card";
+
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = card.question || "";
+  top.appendChild(stmt);
+  const tag = document.createElement("span");
+  tag.className = "rule-auth question-tag";
+  tag.textContent = "Question";
+  top.appendChild(tag);
+  el.appendChild(top);
+
+  if (card.why) {
+    const why = document.createElement("div");
+    why.className = "question-why";
+    why.textContent = "Why I'm asking: " + card.why;
+    el.appendChild(why);
+  }
+
+  // Both futures — the consequence previews the simulator computed. The answer
+  // path replays the SAME events, so what the card promises is what happens.
+  const futures = document.createElement("div");
+  futures.className = "question-futures";
+  for (const [verb, preview] of [["Yes", card.yesPreview], ["No", card.noPreview]]) {
+    if (!preview) continue;
+    const f = document.createElement("div");
+    f.className = "question-future";
+    const v = document.createElement("span");
+    v.className = "question-future-verb";
+    v.textContent = verb + " →";
+    f.appendChild(v);
+    f.appendChild(document.createTextNode(" " + preview));
+    futures.appendChild(f);
+  }
+  if (futures.childNodes.length) el.appendChild(futures);
+
+  const actions = document.createElement("div");
+  actions.className = "rule-card-actions";
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "rule-card-primary";
+  yes.textContent = "Yes";
+  yes.addEventListener("click", () => answerQuestion(card, true, el));
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "question-no-btn";
+  no.textContent = "No";
+  no.addEventListener("click", () => answerQuestion(card, false, el));
+  const later = document.createElement("button");
+  later.type = "button";
+  later.className = "rule-card-ghost";
+  later.textContent = "Not now";
+  later.addEventListener("click", () => dismissQuestion(card, el));
+  actions.appendChild(yes);
+  actions.appendChild(no);
+  actions.appendChild(later);
+  el.appendChild(actions);
+  return el;
+}
+
+// Answer: the server folds the confirm_fact (+ the previewed bulk events) and
+// marks the question answered — terminal. Re-enter the view so the fold's
+// effects (and the next question state) come from the server, never a cache.
+async function answerQuestion(card, answer, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    const r = await tauri.core.invoke("answer_question", { factKey: card.factKey, answer });
+    _questionCard = null;
+    const applied = r && typeof r.appended === "number" ? r.appended : 0;
+    showToast({
+      kind: "success",
+      title: answer ? "Got it — yes" : "Got it — no",
+      body: applied > 1
+        ? `Recorded, and applied ${applied} changes it unlocked.`
+        : "Recorded — I'll organize with that in mind.",
+    });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] answer_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't record that", body: "Try again in a moment." });
+  }
+}
+
+// Not now: permanent fact-keyed suppression server-side — the question never
+// re-surfaces. Same re-enter discipline as answer.
+async function dismissQuestion(card, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("dismiss_question", { factKey: card.factKey });
+    _questionCard = null;
+    showToast({ kind: "idempotent", title: "Not now", body: "I won't ask that again." });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] dismiss_question failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+    showToast({ kind: "failure", title: "Couldn't dismiss", body: "Try again in a moment." });
+  }
+}
+
 // The authority tag on a rule's `effect`. A soft prior can auto-apply (it only nudges
 // ranking); a viewer overlay is a placement the engine will suggest but not enact.
 function ruleAuthorityLabel(effect) {
@@ -7329,6 +7504,9 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // WP-Rule-Cards — develop the LLM-cited rules + "combine these?" suggestions for
     // the "Patterns I've noticed" surface. Empty on settled corpora; failure-safe.
     await refreshDevelopedRules();
+    // MVP-Librarian Phase 3 — re-fetch the surfaced question in lockstep (never
+    // cached: answered/dismissed questions are suppressed server-side forever).
+    await refreshQuestionCard();
   } catch (err) {
     console.warn("[main] fetch_decision_log_full failed:", err);
     if (statusEl) {
@@ -7400,6 +7578,10 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // step 5 — ActionCandidateView mode per record; step 6 — per-record "who".
     actionKinds: data && data.actionKinds ? data.actionKinds : {},
     recordRelationship: data && data.recordRelationship ? data.recordRelationship : {},
+    // MVP-Librarian Phase 4 — the nursery shelf: new/uncategorized jobs the
+    // incremental-ingest path abstained on ({jobKey, jobName, firstSeenTd,
+    // docIds}). Backend companion may not be live yet — absent/empty ⇒ hidden.
+    nursery: Array.isArray(data && data.nursery) ? data.nursery : [],
   };
   renderDecisions();
 }
@@ -8036,7 +8218,7 @@ function renderDecisions() {
   const statusEl = document.getElementById("decisions-status");
   const subEl = document.getElementById("decisions-sub");
   if (!_decisionsCtx || !listEl) return;
-  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat } = _decisionsCtx;
+  const { items, docProjects, edges, byId, baseUrl, aliases, jobNames, recordJobs, frames, facets, jobHeat, nursery } = _decisionsCtx;
 
   // MVP-Librarian 2.2/2.3 — a re-render rebuilds every checkbox unticked, so the
   // selection state must reset with it (stale jobKeys/recordIds never replay).
@@ -8075,6 +8257,11 @@ function renderDecisions() {
   // project lens, above the frame list. buildPatternsSection returns null when there's
   // nothing to review (empty corpus), so nothing intrusive renders on settled data.
   if (_decisionsLens === "project") {
+    // MVP-Librarian Phase 3 — the ONE question (or its pull affordance) sits at
+    // the very top of the forest, above the ambient patterns. Null when the
+    // question engine is off server-side (503) — nothing renders at all.
+    const questionSection = buildQuestionSection();
+    if (questionSection) listEl.appendChild(questionSection);
     const patterns = buildPatternsSection();
     if (patterns) listEl.appendChild(patterns);
   }
@@ -8330,8 +8517,90 @@ function renderDecisions() {
     groupEl.appendChild(body);
     listEl.appendChild(groupEl);
   }
+  // MVP-Librarian Phase 4 — the nursery shelf: honest abstention made visible.
+  // New/uncategorized jobs sit at the BOTTOM of the By-project view, on a shelf
+  // (not a frame), each with the Move affordance so the user files them manually.
+  if (_decisionsLens === "project" && nursery && nursery.length) {
+    listEl.appendChild(buildNurseryShelf(nursery));
+  }
   // Fold away any sections the user had collapsed (persists across frame-edit re-renders).
   if (framed) applyFrameCollapse(listEl);
+}
+
+// MVP-Librarian Phase 4 — render the nursery shelf. Each entry is a job the
+// incremental-ingest path declined to place ({jobKey, jobName, firstSeenTd,
+// docIds}); all fields defensive since the backend companion may lag this UI.
+// The Move affordance reuses openMovePicker — a nursery job has no home top
+// frame, so a new category lands top-level and the move emits the same
+// overlay-backed `move` event every filed job gets.
+function buildNurseryShelf(nursery) {
+  const section = document.createElement("section");
+  section.className = "nursery-shelf";
+
+  const header = document.createElement("div");
+  header.className = "nursery-header";
+  const title = document.createElement("span");
+  title.className = "nursery-title";
+  title.textContent = "New / uncategorized";
+  header.appendChild(title);
+  const count = document.createElement("span");
+  count.className = "nursery-count";
+  count.textContent = String(nursery.length);
+  header.appendChild(count);
+  section.appendChild(header);
+
+  const hint = document.createElement("div");
+  hint.className = "nursery-hint";
+  hint.textContent = "New work I haven't filed yet — move each one where it belongs.";
+  section.appendChild(hint);
+
+  const rows = document.createElement("div");
+  rows.className = "nursery-rows";
+  for (const entry of nursery) {
+    if (!entry || !entry.jobKey) continue;
+    const label = (entry.jobName || "").trim() || jobKeyLabel(entry.jobKey);
+    const row = document.createElement("div");
+    row.className = "nursery-row";
+
+    const name = document.createElement("span");
+    name.className = "nursery-job-name";
+    name.textContent = label;
+    row.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "nursery-job-meta";
+    const docCount = Array.isArray(entry.docIds) ? entry.docIds.length : 0;
+    const parts = [`${docCount} ${docCount === 1 ? "doc" : "docs"}`];
+    const seen = formatNurseryDate(entry.firstSeenTd);
+    if (seen) parts.push(`first seen ${seen}`);
+    meta.textContent = parts.join(" · ");
+    row.appendChild(meta);
+
+    const mv = document.createElement("span");
+    mv.className = "job-move-btn";
+    mv.textContent = "Move";
+    mv.setAttribute("role", "button");
+    mv.tabIndex = 0;
+    mv.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openMovePicker(mv, { key: entry.jobKey, label });
+    });
+    row.appendChild(mv);
+    rows.appendChild(row);
+  }
+  section.appendChild(rows);
+  return section;
+}
+
+// firstSeenTd arrives in learned-fold-io conventions — usually an ISO-ish date
+// string. Format when parseable; otherwise show it verbatim; empty ⇒ omit.
+function formatNurseryDate(td) {
+  if (td == null) return "";
+  const s = String(td).trim();
+  if (!s) return "";
+  const ms = Date.parse(s);
+  if (Number.isNaN(ms)) return s;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /** One compact card for the browser: type chip + state, summary, owner · due,

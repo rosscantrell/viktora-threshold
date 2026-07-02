@@ -3858,6 +3858,143 @@ code {
 }
 .disjunction-confirm { font-style: italic; }
 
+/* ── MVP-Librarian Phase 3 — the Question Engine card + pull affordance ──────
+   One question at a time, in the rule-card language but with a gold spine so it
+   reads as the engine ASKING (not just noticing). The pull affordance is
+   deliberately understated — plain text, no chrome until hover. */
+.question-section { margin: 0 0 14px; }
+.question-card {
+  border-left: 2px solid var(--accent-gold, #c8a24a);
+  background: rgba(200, 162, 74, 0.05);
+}
+.question-tag {
+  color: var(--accent-gold, #c8a24a);
+  border-color: rgba(200, 162, 74, 0.4);
+  background: rgba(200, 162, 74, 0.1);
+}
+.question-why {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  line-height: 1.4;
+}
+.question-futures {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 9px;
+}
+.question-future {
+  font-size: 12px;
+  line-height: 1.4;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+  color: var(--glass-text-dim);
+}
+.question-future-verb {
+  font-weight: 600;
+  color: var(--glass-text);
+}
+.question-no-btn {
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border-strong);
+  background: var(--glass-surface);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.question-no-btn:hover { background: var(--glass-surface-hover); }
+.question-pull-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.question-pull-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  border-radius: 12px;
+  border: 1px solid var(--glass-border);
+  background: transparent;
+  color: var(--glass-text-faint);
+  cursor: pointer;
+}
+.question-pull-btn:hover {
+  color: var(--glass-text);
+  background: var(--glass-surface-hover);
+}
+.question-pull-btn:disabled { opacity: 0.6; cursor: default; }
+.question-pull-note {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--glass-text-faint);
+}
+
+/* ── MVP-Librarian Phase 4 — the nursery shelf ───────────────────────────────
+   Honest abstention, visibly a SHELF (dashed boundary), not a frame. Sits at
+   the bottom of the By-project view; each job carries the same Move control
+   the framed job rows use. */
+.nursery-shelf {
+  margin: 18px 0 8px;
+  border: 1px dashed var(--glass-border-strong);
+  border-radius: var(--glass-radius-md, 9px);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+}
+.nursery-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.nursery-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text);
+  letter-spacing: 0.01em;
+}
+.nursery-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface-hover);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.nursery-hint {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+.nursery-rows {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.nursery-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.02);
+}
+.nursery-job-name {
+  flex: 1 1 auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--glass-text);
+}
+.nursery-job-meta {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+
 .frame-move-menu {
   position: fixed;
   z-index: 1000;
