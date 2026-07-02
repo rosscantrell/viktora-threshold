@@ -7875,19 +7875,12 @@ async function enterDecisionsView(initialFilter, navCtx) {
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log_full");
-    // WP-Frame-HITL "adapts" tier — refresh ambient learned suggestions in lockstep
-    // with the Log data so job rows can render the inline "Suggested: X" chips.
-    await refreshLearnedSuggestions();
-    // Phase 0 — pull the learned-state (containment signals etc.) into memory. Not
-    // rendered as a header chip anymore (redundant once the frame is already nested);
-    // kept as plumbing for the forthcoming surfaces (suggest-vs-auto, "group under X?").
-    await refreshContainmentSignals();
-    // WP-Rule-Cards — develop the LLM-cited rules + "combine these?" suggestions for
-    // the "Patterns I've noticed" surface. Empty on settled corpora; failure-safe.
-    await refreshDevelopedRules();
-    // MVP-Librarian Phase 3 — re-fetch the surfaced question in lockstep (never
-    // cached: answered/dismissed questions are suppressed server-side forever).
-    await refreshQuestionCard();
+    // PERF: the ambient enrichment (learned-suggestion chips, the "Patterns I've
+    // noticed" rules, and the Question-Engine card) USED to be awaited here, BEFORE the
+    // first paint. But the Question-Engine generation alone can take ~30s (doc-type +
+    // index extraction + membership embeddings + simulation + judge), so the decisions
+    // — ready in ~50ms — sat blocked behind it. It now fires fire-and-forget AFTER the
+    // paint (below `renderDecisions()`), each patching itself in when it lands.
   } catch (err) {
     console.warn("[main] fetch_decision_log_full failed:", err);
     if (statusEl) {
@@ -7965,6 +7958,16 @@ async function enterDecisionsView(initialFilter, navCtx) {
     nursery: Array.isArray(data && data.nursery) ? data.nursery : [],
   };
   renderDecisions();
+
+  // Ambient enrichment — fetched OFF the critical path so nothing blocks the paint
+  // above (the Question-Engine card can take ~30s). Fired in parallel; each re-renders
+  // when it lands. Guarded so one slow/failed enrichment can't abort the view or the
+  // others. (Order-independent: each sets its own module state that renderDecisions reads.)
+  const _reDecisions = () => { try { renderDecisions(); } catch (_e) { /* redraw best-effort */ } };
+  refreshLearnedSuggestions().then(_reDecisions).catch((e) => console.warn("[main] learned suggestions:", e));
+  refreshContainmentSignals().catch((e) => console.warn("[main] containment signals:", e));
+  refreshDevelopedRules().then(_reDecisions).catch((e) => console.warn("[main] developed rules:", e));
+  refreshQuestionCard().then(_reDecisions).catch((e) => console.warn("[main] question card:", e));
 }
 
 /** Conflicts lens — promotes the contradiction edges with inline confirm/dismiss
