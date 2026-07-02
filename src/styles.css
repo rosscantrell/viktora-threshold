@@ -3486,6 +3486,21 @@ code {
 }
 .frame-heat-fire { color: #ffb59a; background: rgba(255, 96, 56, 0.18); border: 1px solid rgba(255, 96, 56, 0.45); }
 .frame-heat-active { color: var(--glass-text-faint); background: var(--glass-surface); border: 1px solid var(--glass-border); }
+/* Phase 0 — learned-containment chip. Quiet, sentence-case (not a label): it reports
+   what the engine learned from a past merge/re-home. Whisper, not shout — faint text,
+   dashed border to read as inferred/reversible rather than an asserted fact. */
+.frame-learned-chip {
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px dashed var(--glass-border);
+  cursor: default;
+}
 /* Workstream sub-header — a quieter label that opens a nested sub-section. */
 .frame-ws-header {
   display: flex;
@@ -3692,6 +3707,156 @@ code {
   cursor: pointer;
 }
 .learned-review-ghost:hover { color: var(--glass-text); }
+
+/* WP-Rule-Cards — "Patterns I've noticed" surface (project lens, above the frames). */
+.patterns-section {
+  margin: 0 0 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md, 9px);
+  background: var(--glass-surface);
+  overflow: hidden;
+}
+.patterns-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  color: var(--glass-text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.patterns-header:hover { background: var(--glass-surface-hover); }
+.patterns-chevron { color: var(--glass-text-faint); width: 12px; flex-shrink: 0; }
+.patterns-title { font-size: 12px; font-weight: 600; letter-spacing: 0.01em; }
+.patterns-count {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface-hover);
+  border: 1px solid var(--glass-border);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.patterns-body {
+  padding: 4px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rule-card {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm, 8px);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 10px 12px;
+}
+.rule-card-busy { opacity: 0.5; pointer-events: none; }
+.rule-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.rule-card-statement {
+  flex: 1 1 auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--glass-text);
+  line-height: 1.35;
+}
+.rule-auth {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  border: 1px solid var(--glass-border);
+}
+.rule-auth-auto { color: var(--glass-success); border-color: rgba(93, 202, 165, 0.4); background: rgba(93, 202, 165, 0.1); }
+.rule-auth-suggest { color: var(--glass-text-dim); background: var(--glass-surface-hover); }
+.rule-card-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+.rule-card-members {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.rule-card-member {
+  font-size: 12px;
+  line-height: 1.4;
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-strong);
+}
+.rule-card-member-name { color: var(--glass-text); font-weight: 500; }
+.rule-card-member-why { color: var(--glass-text-dim); display: block; margin-top: 1px; }
+.rule-card-evidence {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  line-height: 1.4;
+}
+.rule-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.rule-card-primary {
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--accent-gold, #c8a24a);
+  background: rgba(200, 162, 74, 0.16);
+  color: var(--glass-text);
+  cursor: pointer;
+}
+.rule-card-primary:hover { background: rgba(200, 162, 74, 0.26); }
+.rule-card-ghost {
+  padding: 5px 12px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  color: var(--glass-text-faint);
+  cursor: pointer;
+}
+.rule-card-ghost:hover { color: var(--glass-text); }
+
+/* Disjunction "combine these?" card — a distinct accent so it reads as a proposal. */
+.disjunction-card { border-left: 2px solid var(--glass-link); }
+.disjunction-label { font-style: italic; }
+.disjunction-arms {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.disjunction-arm {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm, 8px);
+  padding: 7px 9px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.disjunction-arm-label { font-size: 12px; font-weight: 600; color: var(--glass-text); }
+.disjunction-arm .rule-card-members { margin-top: 5px; }
+.disjunction-or {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-faint);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.disjunction-confirm { font-style: italic; }
 
 .frame-move-menu {
   position: fixed;

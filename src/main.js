@@ -6085,6 +6085,19 @@ async function frameEdit(edit) {
   try {
     await tauri.core.invoke("frame_edit", { edit });
     await enterDecisionsView();
+    // Phase 0 — structural-edit learning. A successful merge or reparent teaches the
+    // engine a containment/placement prior; confirm it as LEARNING (not just "done")
+    // so the felt outcome matches what the backend recorded. Understated, no CTA.
+    if (edit && edit.eventType === "reparent") {
+      const parent = (edit.newParentFrameName || "").trim();
+      if (parent) {
+        showToast({ kind: "success", title: "Learned", body: `I'll keep new items grouped under ${parent}.` });
+      } else {
+        showToast({ kind: "success", title: "Learned", body: "Promoted to its own top-level category." });
+      }
+    } else if (edit && edit.eventType === "merge") {
+      showToast({ kind: "success", title: "Combined", body: "I'll treat these as one going forward." });
+    }
     // WP-Frame-HITL "adapts" tier — felt learning. After a MOVE, ask the learner
     // whether the same explicit feature explains other jobs, and surface a visible
     // "move them too?" offer. The user still confirms; nothing auto-moves.
@@ -6273,6 +6286,405 @@ async function refreshLearnedSuggestions() {
   } catch (e) {
     _learnedSuggestions = new Map();
   }
+}
+
+// Phase 0 — structural-edit learning. Containment signals the engine picked up from
+// merge/reparent gestures (child frame ⊂ parent). Keyed by lowercased child-frame
+// name so buildFrameHeader can match the proper-cased rendered name against it.
+// Failure-safe: any error degrades to no chips (the frames still render).
+let _containmentSignals = new Map();
+async function refreshContainmentSignals() {
+  try {
+    const res = await tauri.core.invoke("fetch_learning_state");
+    const m = new Map();
+    for (const s of (res && res.containmentSignals) || []) {
+      if (s && typeof s.frame === "string") m.set(s.frame.toLowerCase(), s);
+    }
+    _containmentSignals = m;
+  } catch (e) {
+    _containmentSignals = new Map();
+  }
+}
+
+// WP-Rule-Cards — "Patterns I've noticed". The LLM rule-development engine's output:
+// `developed` = cited rules (predicate + per-job "why"), `disjunctionSuggestions` =
+// "these two groups look like one category — combine?" proposals (always suggest-only).
+// Fetched once per Log render, in lockstep with the decision-log data. Failure or an
+// empty corpus (settled data → no fresh patterns) degrades to an empty state that the
+// renderer omits entirely — no broken shell. State is held so renderDecisions can draw
+// the surface at the top of the project lens without re-fetching.
+let _developedRules = [];
+let _disjunctionSuggestions = [];
+async function refreshDevelopedRules() {
+  try {
+    const res = await tauri.core.invoke("develop_rules");
+    _developedRules = Array.isArray(res && res.developed) ? res.developed : [];
+    _disjunctionSuggestions = Array.isArray(res && res.disjunctionSuggestions)
+      ? res.disjunctionSuggestions : [];
+  } catch (e) {
+    console.warn("[main] develop_rules failed:", e);
+    _developedRules = [];
+    _disjunctionSuggestions = [];
+  }
+}
+
+// The authority tag on a rule's `effect`. A soft prior can auto-apply (it only nudges
+// ranking); a viewer overlay is a placement the engine will suggest but not enact.
+function ruleAuthorityLabel(effect) {
+  if (effect === "soft_prior") return { text: "Can auto-apply", cls: "rule-auth-auto" };
+  return { text: "Suggesting", cls: "rule-auth-suggest" };
+}
+
+// Build the "Patterns I've noticed" surface: a collapsible section holding one card per
+// developed rule + one "combine these?" card per disjunction suggestion. Returns null
+// when there is nothing to show (so the caller omits it entirely — no empty shell).
+function buildPatternsSection() {
+  const rules = _developedRules || [];
+  const disj = _disjunctionSuggestions || [];
+  if (!rules.length && !disj.length) return null;
+
+  const section = document.createElement("section");
+  section.className = "patterns-section";
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "patterns-header";
+  const total = rules.length + disj.length;
+  const expanded = _patternsExpanded;
+  header.setAttribute("aria-expanded", expanded ? "true" : "false");
+  header.innerHTML =
+    `<span class="patterns-chevron" aria-hidden="true">${expanded ? "▾" : "▸"}</span>` +
+    `<span class="patterns-title">Patterns I've noticed</span>` +
+    `<span class="patterns-count">${total}</span>`;
+  section.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "patterns-body";
+  body.style.display = expanded ? "block" : "none";
+  for (const rule of rules) body.appendChild(buildRuleCard(rule));
+  for (const s of disj) body.appendChild(buildDisjunctionCard(s));
+  section.appendChild(body);
+
+  header.addEventListener("click", () => {
+    _patternsExpanded = !_patternsExpanded;
+    body.style.display = _patternsExpanded ? "block" : "none";
+    header.setAttribute("aria-expanded", _patternsExpanded ? "true" : "false");
+    const chev = header.querySelector(".patterns-chevron");
+    if (chev) chev.textContent = _patternsExpanded ? "▾" : "▸";
+  });
+  return section;
+}
+let _patternsExpanded = true;
+
+// One developed rule → a card. Shows the rule statement, an authority tag, the member
+// jobs each with their cited "why", a compact evidence line, and Endorse / Dismiss.
+function buildRuleCard(rule) {
+  const card = document.createElement("div");
+  card.className = "rule-card";
+
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = rule.predicateLabel || "Unlabeled pattern";
+  top.appendChild(stmt);
+  const auth = ruleAuthorityLabel(rule.cappedEffect || rule.developedEffect || rule.effect);
+  const tag = document.createElement("span");
+  tag.className = "rule-auth " + auth.cls;
+  tag.textContent = auth.text;
+  top.appendChild(tag);
+  card.appendChild(top);
+
+  const preferred = (rule.preferredFrame || "").trim();
+  if (preferred) {
+    const sub = document.createElement("div");
+    sub.className = "rule-card-sub";
+    sub.textContent = "Groups under: " + preferred;
+    card.appendChild(sub);
+  }
+
+  // Member jobs, each with the cited "why". Live endpoint keys: `verified` (the
+  // re-grounded member jobKeys) + `citations` ({jobKey → {feature,value}}).
+  const cites = rule.citations && typeof rule.citations === "object" ? rule.citations : {};
+  const members = Array.isArray(rule.verified) ? rule.verified
+    : (Array.isArray(rule.members) ? rule.members : Object.keys(cites));
+  if (members.length) {
+    const ul = document.createElement("ul");
+    ul.className = "rule-card-members";
+    for (const m of members) {
+      const li = document.createElement("li");
+      li.className = "rule-card-member";
+      const name = document.createElement("span");
+      name.className = "rule-card-member-name";
+      name.textContent = jobKeyLabel(m);
+      li.appendChild(name);
+      const why = citeText(cites[m]);
+      if (why) {
+        const w = document.createElement("span");
+        w.className = "rule-card-member-why";
+        w.textContent = why;
+        li.appendChild(w);
+      }
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+  }
+
+  // Compact evidence line — the cited artifacts, i.e. "why this reads as one group".
+  const evidence = [...new Set(Object.values(cites).map(citeText).filter(Boolean))];
+  if (evidence.length) {
+    const ev = document.createElement("div");
+    ev.className = "rule-card-evidence";
+    ev.textContent = "Why this reads as one group: " + evidence.slice(0, 3).join(" · ") +
+      (evidence.length > 3 ? ` · +${evidence.length - 3} more` : "");
+    card.appendChild(ev);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "rule-card-actions";
+  const endorse = document.createElement("button");
+  endorse.type = "button";
+  endorse.className = "rule-card-primary";
+  endorse.textContent = "Endorse";
+  endorse.addEventListener("click", () => endorseRule(rule, card));
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "rule-card-ghost";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => dismissRule(rule, card));
+  actions.appendChild(endorse);
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
+// Endorse a rule: apply its member placements to the preferred frame, reusing the
+// apply-to-similar "resolve" machinery (the same path openLearnedReview commits with).
+// The members become explicit placements; the engine credits the rule for next time.
+// Render a citation {feature, value} (or a plain string) as a human "why".
+function citeText(c) {
+  if (!c) return "";
+  if (typeof c === "string") return c;
+  const f = c.feature, v = c.value;
+  if (f === "job_name_ngram") return `name mentions "${v}"`;
+  if (f === "semantic_concept") return "semantically similar";
+  if (f === "identifier_class") return `carries ${v}`;
+  if (f === "doc_project_tag") return `tagged ${v}`;
+  if (f === "people") return `involves ${v}`;
+  if (f === "section") return `in "${v}"`;
+  return v ? `${f}: ${v}` : String(f || "");
+}
+async function endorseRule(rule, cardEl) {
+  const toFrameName = (rule.preferredFrame || "").trim();
+  const members = Array.isArray(rule.verified) ? rule.verified
+    : (Array.isArray(rule.members) ? rule.members : Object.keys(rule.citations || {}));
+  if (!toFrameName || !members.length) {
+    showToast({ kind: "error", title: "Can't endorse", body: "This pattern has no target category yet." });
+    return;
+  }
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    const r = await tauri.core.invoke("apply_to_similar", {
+      action: "resolve",
+      body: {
+        selectedJobKeys: members,
+        rejectedJobKeys: [],
+        toFrameName,
+        predicate: rule.predicate || rule.predicateLabel,
+        // Record a non-destructive endorse_rule event so this actioned card stops
+        // re-surfacing until the pattern grows (the endorse-recurrence fix). The
+        // placements/credit above are unchanged; this only quiets the ambient card.
+        endorseRule: true,
+      },
+    });
+    const applied = (r && r.applied) || members.length;
+    showToast({
+      kind: "success",
+      title: `Endorsed — applied to ${applied} ${applied === 1 ? "job" : "jobs"}`,
+      body: `${rule.predicateLabel} → ${toFrameName}. I'll suggest this next time.`,
+    });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] endorseRule failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+  }
+}
+
+// Dismiss a rule: reject + suppress so the engine stops proposing it (the same
+// "Don't learn this" path openLearnedReview uses). No placement changes.
+async function dismissRule(rule, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("apply_to_similar", {
+      action: "reject",
+      body: { predicate: rule.predicate || rule.predicateLabel, suppressRule: true },
+    });
+    if (cardEl) cardEl.remove();
+    // Drop from state so a re-render doesn't resurrect it.
+    _developedRules = _developedRules.filter((r) => r !== rule);
+    showToast({ kind: "idempotent", title: "Won't suggest that", body: `Stopped learning: ${rule.predicateLabel}.` });
+  } catch (e) {
+    console.warn("[main] dismissRule failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+  }
+}
+
+// One disjunction suggestion → a "combine these?" card. ALWAYS a proposal (suggestOnly);
+// shows both arms' members + the LLM's confirm state, a Combine action, and Dismiss.
+function buildDisjunctionCard(s) {
+  const card = document.createElement("div");
+  card.className = "rule-card disjunction-card";
+
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = "These two groups look like one category — combine?";
+  top.appendChild(stmt);
+  card.appendChild(top);
+
+  const arms = Array.isArray(s.arms) ? s.arms : [];
+  const label = s.predicateLabel ||
+    (arms.length >= 2 ? `${arms[0].predicateLabel} or ${arms[1].predicateLabel}` : "");
+  if (label) {
+    const sub = document.createElement("div");
+    sub.className = "rule-card-sub disjunction-label";
+    sub.textContent = label;
+    card.appendChild(sub);
+  }
+
+  // Both arms, each with its members. The "or" between them is the whole point.
+  const armsWrap = document.createElement("div");
+  armsWrap.className = "disjunction-arms";
+  arms.forEach((arm, i) => {
+    if (i > 0) {
+      const orEl = document.createElement("div");
+      orEl.className = "disjunction-or";
+      orEl.textContent = "or";
+      armsWrap.appendChild(orEl);
+    }
+    const armEl = document.createElement("div");
+    armEl.className = "disjunction-arm";
+    const armLbl = document.createElement("div");
+    armLbl.className = "disjunction-arm-label";
+    armLbl.textContent = arm.predicateLabel || `Group ${i + 1}`;
+    armEl.appendChild(armLbl);
+    const armMembers = Array.isArray(arm.members) ? arm.members : [];
+    if (armMembers.length) {
+      const ul = document.createElement("ul");
+      ul.className = "rule-card-members";
+      for (const m of armMembers) {
+        const li = document.createElement("li");
+        li.className = "rule-card-member";
+        const name = document.createElement("span");
+        name.className = "rule-card-member-name";
+        name.textContent = jobKeyLabel(m);
+        li.appendChild(name);
+        ul.appendChild(li);
+      }
+      armEl.appendChild(ul);
+    }
+    armsWrap.appendChild(armEl);
+  });
+  card.appendChild(armsWrap);
+
+  // The LLM's confirm state, surfaced honestly (confirmed / not_applicable / etc.).
+  if (s.llmConfirmState) {
+    const state = document.createElement("div");
+    state.className = "rule-card-evidence disjunction-confirm";
+    state.textContent = "Engine check: " + humanizeConfirmState(s.llmConfirmState);
+    card.appendChild(state);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "rule-card-actions";
+  const combine = document.createElement("button");
+  combine.type = "button";
+  combine.className = "rule-card-primary";
+  combine.textContent = "Combine";
+  combine.addEventListener("click", () => combineDisjunction(s, card));
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "rule-card-ghost";
+  dismiss.textContent = "Dismiss";
+  dismiss.addEventListener("click", () => dismissDisjunction(s, card));
+  actions.appendChild(combine);
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
+function humanizeConfirmState(st) {
+  switch (st) {
+    case "confirmed": return "confirmed these belong together";
+    case "not_applicable": return "not applicable";
+    case "unavailable": return "couldn't check (LLM unavailable)";
+    case "declined": return "declined — kept separate";
+    default: return String(st);
+  }
+}
+
+// Combine a disjunction: merge the union under the preferred frame. Reuses the
+// frameEdit "merge" machinery — each non-preferred arm's members are reparented into
+// the preferred frame so the two groups become one. suggestOnly means we only act
+// on explicit Combine; nothing here auto-applies.
+async function combineDisjunction(s, cardEl) {
+  const toFrameName = (s.preferredFrame || "").trim();
+  const members = Array.isArray(s.unionMembers) ? s.unionMembers
+    : (Array.isArray(s.arms) ? s.arms.flatMap((a) => a.members || []) : []);
+  if (!toFrameName || !members.length) {
+    showToast({ kind: "error", title: "Can't combine", body: "This suggestion has no target category yet." });
+    return;
+  }
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    const r = await tauri.core.invoke("apply_to_similar", {
+      action: "resolve",
+      body: {
+        selectedJobKeys: members,
+        rejectedJobKeys: [],
+        toFrameName,
+        predicate: s.predicate || s.predicateLabel,
+      },
+    });
+    const applied = (r && r.applied) || members.length;
+    showToast({
+      kind: "success",
+      title: "Combined",
+      body: `Merged ${applied} ${applied === 1 ? "job" : "jobs"} under ${toFrameName}. I'll treat these as one going forward.`,
+    });
+    await enterDecisionsView();
+  } catch (e) {
+    console.warn("[main] combineDisjunction failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+  }
+}
+
+async function dismissDisjunction(s, cardEl) {
+  if (cardEl) cardEl.classList.add("rule-card-busy");
+  try {
+    await tauri.core.invoke("apply_to_similar", {
+      action: "reject",
+      body: { predicate: s.predicate || s.predicateLabel, suppressRule: true },
+    });
+    if (cardEl) cardEl.remove();
+    _disjunctionSuggestions = _disjunctionSuggestions.filter((x) => x !== s);
+    showToast({ kind: "idempotent", title: "Kept separate", body: "Won't suggest combining these again." });
+  } catch (e) {
+    console.warn("[main] dismissDisjunction failed:", e);
+    if (cardEl) cardEl.classList.remove("rule-card-busy");
+  }
+}
+
+// job:<slug> → a human label. Reuses the existing jobNames map from the decision-log
+// context when present; otherwise prettifies the slug tail.
+function jobKeyLabel(jobKey) {
+  const key = String(jobKey || "");
+  const names = (_decisionsCtx && _decisionsCtx.jobNames) || {};
+  if (names[key]) return names[key];
+  const tail = key.replace(/^job:/, "");
+  if (names[tail]) return names[tail];
+  return prettySlug(tail) || key;
 }
 
 // Accept one ambient suggestion: move the job + credit the rule (a preview-weighted
@@ -6596,6 +7008,13 @@ async function enterDecisionsView(initialFilter, navCtx) {
     // WP-Frame-HITL "adapts" tier — refresh ambient learned suggestions in lockstep
     // with the Log data so job rows can render the inline "Suggested: X" chips.
     await refreshLearnedSuggestions();
+    // Phase 0 — pull the learned-state (containment signals etc.) into memory. Not
+    // rendered as a header chip anymore (redundant once the frame is already nested);
+    // kept as plumbing for the forthcoming surfaces (suggest-vs-auto, "group under X?").
+    await refreshContainmentSignals();
+    // WP-Rule-Cards — develop the LLM-cited rules + "combine these?" suggestions for
+    // the "Patterns I've noticed" surface. Empty on settled corpora; failure-safe.
+    await refreshDevelopedRules();
   } catch (err) {
     console.warn("[main] fetch_decision_log_full failed:", err);
     if (statusEl) {
@@ -7334,6 +7753,13 @@ function renderDecisions() {
   if (framed) ordered = applyFrameLayout(ordered, frames, jobHeat);
 
   listEl.innerHTML = "";
+  // WP-Rule-Cards — "Patterns I've noticed" belongs where ambient learning lives: the
+  // project lens, above the frame list. buildPatternsSection returns null when there's
+  // nothing to review (empty corpus), so nothing intrusive renders on settled data.
+  if (_decisionsLens === "project") {
+    const patterns = buildPatternsSection();
+    if (patterns) listEl.appendChild(patterns);
+  }
   if (framed) {
     const fb = buildFacetBar(facets);
     if (fb) listEl.appendChild(fb);
