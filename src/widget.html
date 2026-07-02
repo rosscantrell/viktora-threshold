@@ -102,6 +102,23 @@
       ></button>
 
       <!--
+        WP-CASCADE-PRODUCTION WP-T1 — proxy-inbox pending badge. Amber, count-
+        bearing, distinct from BOTH the gold 💡 tidbit badge (top-right) and the
+        amber-orange "needs attention" log badge (top-left) — this one sits
+        bottom-right and shows the count of pending proxy-fleet proposals
+        (fetch via get_proxy_queue_count). Same fetch-on-start/hourly best-effort
+        posture as the log badge; hidden at zero. Clicking invokes
+        widget_expand("proxy-queue") to open the proxy inbox.
+      -->
+      <button
+        id="proxy-indicator"
+        type="button"
+        title="Proxy fleet has proposals — open the inbox"
+        aria-label="Open the proxy inbox"
+        hidden
+      ></button>
+
+      <!--
         Always-visible expand affordance. The widget previously only expanded
         via the right-click menu's "Expand…" item (not discoverable). This
         small bottom-left button invokes `widget_expand` (no target → main

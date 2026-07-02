@@ -294,3 +294,59 @@ html, body {
                 0 0 0 5px rgba(245, 158, 66, 0.28);
   }
 }
+
+/* WP-CASCADE-PRODUCTION WP-T1 — proxy-inbox pending badge.
+ * ────────────────────────────────────────────────────────────────────────
+ * Distinct from the other two badges by position + count-semantics: it lives
+ * bottom-LEFT (the only free corner — tidbit=top-right, log/expand=top-left,
+ * status-dot=bottom-right), carries a pending count, and uses a warmer amber
+ * (#f5a623) so it reads as the same amber family as the log badge without
+ * being confusable with it. Hidden at zero; pill-sizes for 1–3 digits. */
+#proxy-indicator {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: rgba(245, 166, 35, 0.95);
+  border: 1px solid rgba(250, 185, 70, 0.95);
+  color: #1c1e26;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
+              0 0 0 2px rgba(245, 166, 35, 0.18);
+  animation: proxy-breathe 2.4s ease-in-out infinite;
+  z-index: 2;
+}
+
+#proxy-indicator[hidden] {
+  display: none;
+}
+
+#proxy-indicator:hover {
+  background: rgba(250, 180, 60, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+              0 0 0 3px rgba(245, 166, 35, 0.32);
+}
+
+#proxy-indicator:active {
+  transform: scale(0.92);
+}
+
+@keyframes proxy-breathe {
+  0%, 100% {
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35),
+                0 0 0 2px rgba(245, 166, 35, 0.18);
+  }
+  50% {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+                0 0 0 5px rgba(245, 166, 35, 0.28);
+  }
+}

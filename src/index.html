@@ -926,6 +926,62 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-CASCADE-PRODUCTION WP-T1 — Proxy-fleet inbox.
+         Reached via widget_expand(target_tab="proxy-queue") (ambient amber
+         badge / right-click menu). main.js's hash-router detects
+         #proxy-queue and calls enterProxyQueueView(), which loads the queue
+         via the fetch_proxy_queue IPC (fixture-first; WP-E5 endpoint later).
+
+         Two piles by axes-agreement confidence:
+           - "Filed confidently" — high-band items, collapsed + skimmable,
+             each with an undo affordance (reuses undoDismiss).
+           - "Wants your eye" — adjudicate-band items as FULL cards, reusing
+             the record-card family (renderRecordCard chrome + the
+             appendDismissControl / appendResolveSnoozeControls gesture
+             affordances). One-line question + evidence panel (verbatims,
+             dates, owners, cosine band, routing verdicts) + confirm/dismiss.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-proxy-queue" class="view view-proxy-queue" hidden>
+      <header class="proxy-queue-header">
+        <h1 class="proxy-queue-title">Proxy inbox</h1>
+        <p class="proxy-queue-meta" id="proxy-queue-meta"></p>
+        <button type="button" id="btn-proxy-refresh" class="btn btn-secondary">
+          Refresh
+        </button>
+      </header>
+
+      <!-- Pile 1: "Wants your eye" — full cards for adjudicate-band items. -->
+      <section class="proxy-pile proxy-pile-attention" id="proxy-pile-attention" hidden>
+        <h2 class="proxy-pile-heading">Wants your eye</h2>
+        <div class="proxy-queue-list" id="proxy-attention-list"></div>
+      </section>
+
+      <!-- Pile 2: "Filed confidently" — collapsed, skimmable, undo per row. -->
+      <section class="proxy-pile proxy-pile-filed" id="proxy-pile-filed" hidden>
+        <button
+          type="button"
+          class="proxy-pile-heading proxy-pile-filed-toggle"
+          id="proxy-filed-toggle"
+          aria-expanded="false"
+        >
+          <span class="proxy-pile-chevron" aria-hidden="true">▸</span>
+          <span id="proxy-filed-heading-text">Filed confidently</span>
+        </button>
+        <div class="proxy-filed-rows" id="proxy-filed-list" hidden></div>
+      </section>
+
+      <p class="proxy-queue-empty" id="proxy-queue-empty" hidden>
+        All caught up — the proxy fleet has nothing waiting on you.
+      </p>
+
+      <div class="proxy-queue-footer">
+        <button type="button" id="btn-proxy-back" class="btn btn-secondary">
+          ← Back to widget
+        </button>
+      </div>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          WP-ONENOTE-EXPORT-04 — OneNote browse view.
          Reached via right-click menu → "Browse OneNote…" (fires
          widget_expand with target_tab="onenote-browse"). main.js's

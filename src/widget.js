@@ -450,4 +450,53 @@ const LOG_BADGE_REFRESH_MS = 60 * 60 * 1000;
 refreshLogBadge();
 setInterval(refreshLogBadge, LOG_BADGE_REFRESH_MS);
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-CASCADE-PRODUCTION WP-T1 — proxy-inbox pending badge
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Same shape as the ambient log badge (best-effort count, hidden at zero, capped
+// at "99+"), but a DISTINCT badge: bottom-right, amber, count of pending
+// proxy-fleet proposals (get_proxy_queue_count). Clicking opens the proxy inbox.
+
+const proxyIndicator = document.getElementById("proxy-indicator");
+
+if (proxyIndicator) {
+  proxyIndicator.addEventListener("click", async (e) => {
+    if (dragInitiated) return;
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      await invoke("widget_expand", { targetTab: "proxy-queue" });
+    } catch (err) {
+      console.warn("[widget] proxy expand failed:", err);
+    }
+  });
+}
+
+/**
+ * Fetch the pending proxy-queue count via get_proxy_queue_count and reflect it
+ * on the amber badge. Best-effort: the Rust command returns 0 on any error, so
+ * the badge just stays hidden. Hidden at zero; capped display at "99+".
+ */
+async function refreshProxyBadge() {
+  if (!proxyIndicator) return;
+  let shown = false;
+  try {
+    const count = await invoke("get_proxy_queue_count");
+    const n = typeof count === "number" ? count : 0;
+    if (n > 0) {
+      proxyIndicator.textContent = n > 99 ? "99+" : String(n);
+      proxyIndicator.title = `${n} proxy proposal${n === 1 ? "" : "s"} waiting — open the inbox`;
+      shown = true;
+    }
+  } catch (err) {
+    console.warn("[widget] proxy queue count fetch failed:", err);
+  }
+  proxyIndicator.hidden = !shown;
+}
+
+// Same fetch-on-start + hourly cadence as the log badge.
+refreshProxyBadge();
+setInterval(refreshProxyBadge, LOG_BADGE_REFRESH_MS);
+
 init();
