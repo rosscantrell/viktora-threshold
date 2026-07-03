@@ -243,6 +243,27 @@
             <section class="settings-panel is-active" data-panel="connection">
               <h2 class="settings-panel-title">Connection</h2>
 
+              <!-- ── Account (WP-T2b) ──
+                   Signed-in identity + a way to switch accounts. Hidden by
+                   default; enterStandaloneConfigure() reveals + fills it via
+                   renderSettingsIdentity() (GET /api/whoami). Stays hidden in
+                   the first-run wizard, where the user hasn't signed in yet. -->
+              <div id="settings-account" hidden>
+                <h3 class="settings-subhead">Account</h3>
+                <p class="connections-card-status" id="settings-account-email">
+                  Signed in
+                </p>
+                <div class="connections-card-actions">
+                  <button type="button" id="btn-settings-signin" class="btn btn-secondary">
+                    Sign in with a different account
+                  </button>
+                </div>
+                <span class="field-help">
+                  Sending a new sign-in link swaps the identity this app captures
+                  and shares as. Your workspace connection below is unaffected.
+                </span>
+              </div>
+
               <label class="field">
                 <span class="field-label">Apolla base URL</span>
                 <input

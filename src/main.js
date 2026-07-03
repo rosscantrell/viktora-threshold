@@ -642,7 +642,19 @@ async function handleAuthCallback(token) {
     });
     enterMainView(cfg);
   } catch (err) {
-    showLoginResult("check-inbox-result", false, String(err));
+    // Expired / invalid / already-used token, or an offline verify. Never leave
+    // the user in a dead state: if the check-inbox view is up, surface the
+    // reason inline there; otherwise send them back to a clean email-entry
+    // screen (the magic link can arrive while the user is anywhere in the app)
+    // and show the error there so they can request a fresh link.
+    const inboxView = document.getElementById("view-check-inbox");
+    const onInbox = inboxView && !inboxView.hasAttribute("hidden");
+    if (onInbox) {
+      showLoginResult("check-inbox-result", false, String(err));
+    } else {
+      enterWizardWelcome(state.lastConfig || undefined);
+      showLoginResult("login-result", false, "That sign-in link didn't work — it may have expired or already been used. Enter your email to get a new one.");
+    }
     showToast({ kind: "failure", title: "Sign-in failed", body: String(err) });
   }
 }
@@ -796,9 +808,49 @@ function enterStandaloneConfigure() {
   showView("view-configure");
   setNav([{ label: "Settings" }], { back: () => goHome() });
   document.getElementById("config-base-url").focus();
+  // WP-T2b — show the signed-in identity + switch-account affordance. Fire-and-
+  // forget: whoami is a network round-trip and must not block the settings paint
+  // (§2.6). The block stays hidden until whoami resolves to an email.
+  renderSettingsIdentity();
   // Populate the Integrations panel: auto-import block + Plaud connection card.
   initConfigAutoImport();
   refreshPlaudConnectionCard();
+}
+
+// ───────── WP-T2b — signed-in identity in Settings ─────────
+//
+// Shows the viewer's authenticated email (from /api/whoami) in the Settings
+// Connection panel, plus a "sign in with a different account" button that
+// returns to the email screen. Invisible-by-absence: if whoami is null (shared
+// key / auth off / server too old) the Account block stays hidden and Settings
+// looks exactly as it did before this WP.
+async function renderSettingsIdentity() {
+  const block = document.getElementById("settings-account");
+  const emailEl = document.getElementById("settings-account-email");
+  if (!block || !emailEl) return;
+  // Force a fresh whoami — a returning user may have switched accounts since the
+  // cached value was resolved on the first widget_expand of this window.
+  let email = null;
+  try {
+    email = await getViewerEmail(true);
+  } catch (_e) {
+    email = null;
+  }
+  if (email) {
+    emailEl.textContent = "Signed in as " + email;
+    block.removeAttribute("hidden");
+  } else {
+    // No per-user identity (shared-key / auth-off deployment). Keep the block
+    // hidden so nothing implies a sign-in that didn't happen.
+    block.setAttribute("hidden", "");
+  }
+}
+
+// Return to the email sign-in screen to switch accounts. The new magic-link
+// verify (auth_verify) overwrites the persisted bearer + resets the cached
+// viewer identity, so this is a clean re-login, not a second session.
+function handleSettingsSignIn() {
+  enterWizardWelcome(state.lastConfig || undefined);
 }
 
 // ───────── Configure form logic ─────────
@@ -945,8 +997,8 @@ function formatDueDate(iso) {
 // undefined = not yet fetched · null = no identity · string = the viewer email.
 let _viewerEmail = undefined;
 
-async function getViewerEmail() {
-  if (_viewerEmail !== undefined) return _viewerEmail;
+async function getViewerEmail(force) {
+  if (!force && _viewerEmail !== undefined) return _viewerEmail;
   try {
     const r = await tauri.core.invoke("get_whoami");
     _viewerEmail = r && typeof r.email === "string" && r.email ? r.email : null;
@@ -13225,6 +13277,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (loginResendBtn) loginResendBtn.addEventListener("click", handleLoginResend);
   const loginChangeEmailBtn = document.getElementById("btn-login-change-email");
   if (loginChangeEmailBtn) loginChangeEmailBtn.addEventListener("click", handleLoginChangeEmail);
+  // WP-T2b — "sign in with a different account" from the Settings Account block.
+  const settingsSignInBtn = document.getElementById("btn-settings-signin");
+  if (settingsSignInBtn) settingsSignInBtn.addEventListener("click", handleSettingsSignIn);
 
   // Wizard
   document
