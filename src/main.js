@@ -154,6 +154,31 @@ const NAV_DEST_FNS = {
   settings: () => enterStandaloneConfigure(),
 };
 
+// WP-R0 — nav visibility gate. Retired destinations are HIDDEN from nav +
+// all entry points, but their views/routes remain fully intact and return
+// the moment a flag flips (or debug re-entry is enabled). Absent key = visible.
+const VIEW_VISIBILITY = { watching: false, outbox: false, edges: false };
+
+// Debug re-entry: append #debug-views (or #debugviews) to the window's URL
+// hash, or run `localStorage.setItem("threshold.debugViews", "1")` in the
+// devtools console, then reload. Either makes every gated view visible again
+// without touching VIEW_VISIBILITY. Checked once at module eval — reload to
+// pick up a change.
+const VIEW_DEBUG =
+  /(^|[?&#])debug-?views(=1)?([&#]|$)/i.test(window.location.hash) ||
+  (() => {
+    try {
+      return localStorage.getItem("threshold.debugViews") === "1";
+    } catch {
+      return false;
+    }
+  })();
+
+/** Is nav destination `dest` visible right now (flag map + debug override)? */
+function isDestVisible(dest) {
+  return VIEW_DEBUG || VIEW_VISIBILITY[dest] !== false;
+}
+
 let _navBackFn = null;
 
 function hideNav() {
@@ -220,6 +245,12 @@ function setNav(crumbs, opts = {}) {
   const backBtn = document.getElementById("app-nav-back");
   if (backBtn) backBtn.addEventListener("click", () => { if (_navBackFn) _navBackFn(); });
   for (const b of document.querySelectorAll(".app-nav-dest")) {
+    // WP-R0 — retired destinations are hidden from the bar entirely and never
+    // wired, so there's no dead/clickable button left behind.
+    if (!isDestVisible(b.dataset.dest)) {
+      b.setAttribute("hidden", "");
+      continue;
+    }
     const fn = NAV_DEST_FNS[b.dataset.dest];
     if (fn) b.addEventListener("click", fn);
   }
@@ -305,9 +336,13 @@ async function bootstrap() {
       return;
     }
 
-    // WP-THRESHOLD-LOG-UX — widget_expand("edges") / the "Connections" entry
-    // navigates here with #edges. Render the full cross-record edge graph.
-    if (window.location.hash === "#edges") {
+    // WP-THRESHOLD-LOG-UX — #edges once rendered the full cross-record edge graph.
+    // WP-R0 — retired: with the flag off (and no debug override) this hash falls
+    // through to the main view instead of entering a nav-orphaned view. WP-R3
+    // item 4 — the tray has no "Connections…" item either (hide-by-omission in
+    // build_widget_menu, lib.rs), so nothing fires widget_expand("edges") now;
+    // this is the JS-side half of keeping that retired destination unreachable.
+    if (window.location.hash === "#edges" && isDestVisible("edges")) {
       enterEdgesView();
       return;
     }
@@ -607,7 +642,19 @@ async function handleAuthCallback(token) {
     });
     enterMainView(cfg);
   } catch (err) {
-    showLoginResult("check-inbox-result", false, String(err));
+    // Expired / invalid / already-used token, or an offline verify. Never leave
+    // the user in a dead state: if the check-inbox view is up, surface the
+    // reason inline there; otherwise send them back to a clean email-entry
+    // screen (the magic link can arrive while the user is anywhere in the app)
+    // and show the error there so they can request a fresh link.
+    const inboxView = document.getElementById("view-check-inbox");
+    const onInbox = inboxView && !inboxView.hasAttribute("hidden");
+    if (onInbox) {
+      showLoginResult("check-inbox-result", false, String(err));
+    } else {
+      enterWizardWelcome(state.lastConfig || undefined);
+      showLoginResult("login-result", false, "That sign-in link didn't work — it may have expired or already been used. Enter your email to get a new one.");
+    }
     showToast({ kind: "failure", title: "Sign-in failed", body: String(err) });
   }
 }
@@ -761,9 +808,49 @@ function enterStandaloneConfigure() {
   showView("view-configure");
   setNav([{ label: "Settings" }], { back: () => goHome() });
   document.getElementById("config-base-url").focus();
+  // WP-T2b — show the signed-in identity + switch-account affordance. Fire-and-
+  // forget: whoami is a network round-trip and must not block the settings paint
+  // (§2.6). The block stays hidden until whoami resolves to an email.
+  renderSettingsIdentity();
   // Populate the Integrations panel: auto-import block + Plaud connection card.
   initConfigAutoImport();
   refreshPlaudConnectionCard();
+}
+
+// ───────── WP-T2b — signed-in identity in Settings ─────────
+//
+// Shows the viewer's authenticated email (from /api/whoami) in the Settings
+// Connection panel, plus a "sign in with a different account" button that
+// returns to the email screen. Invisible-by-absence: if whoami is null (shared
+// key / auth off / server too old) the Account block stays hidden and Settings
+// looks exactly as it did before this WP.
+async function renderSettingsIdentity() {
+  const block = document.getElementById("settings-account");
+  const emailEl = document.getElementById("settings-account-email");
+  if (!block || !emailEl) return;
+  // Force a fresh whoami — a returning user may have switched accounts since the
+  // cached value was resolved on the first widget_expand of this window.
+  let email = null;
+  try {
+    email = await getViewerEmail(true);
+  } catch (_e) {
+    email = null;
+  }
+  if (email) {
+    emailEl.textContent = "Signed in as " + email;
+    block.removeAttribute("hidden");
+  } else {
+    // No per-user identity (shared-key / auth-off deployment). Keep the block
+    // hidden so nothing implies a sign-in that didn't happen.
+    block.setAttribute("hidden", "");
+  }
+}
+
+// Return to the email sign-in screen to switch accounts. The new magic-link
+// verify (auth_verify) overwrites the persisted bearer + resets the cached
+// viewer identity, so this is a clean re-login, not a second session.
+function handleSettingsSignIn() {
+  enterWizardWelcome(state.lastConfig || undefined);
 }
 
 // ───────── Configure form logic ─────────
@@ -910,8 +997,8 @@ function formatDueDate(iso) {
 // undefined = not yet fetched · null = no identity · string = the viewer email.
 let _viewerEmail = undefined;
 
-async function getViewerEmail() {
-  if (_viewerEmail !== undefined) return _viewerEmail;
+async function getViewerEmail(force) {
+  if (!force && _viewerEmail !== undefined) return _viewerEmail;
   try {
     const r = await tauri.core.invoke("get_whoami");
     _viewerEmail = r && typeof r.email === "string" && r.email ? r.email : null;
@@ -1417,6 +1504,38 @@ async function loadDocsMap() {
     return map;
   })();
   return _docsByIdPromise;
+}
+
+/** WP-R3 item 5 — recordId → documentId, from the decision log (the records
+ *  carry `documentId`). Lets a surface that only knows a recordId (e.g. a proxy
+ *  card's evidence.recordIds) resolve the underlying document, so R1's existing
+ *  jump (renderReceipt opts.jump / appendSourceBadge → openSourcePanel) can open
+ *  the source pane — full reuse, no new pane, no new endpoint. Lazily loaded +
+ *  cached; concurrent callers share one in-flight fetch. */
+let _recordDocById = null;
+let _recordDocByIdPromise = null;
+async function loadRecordDocMap() {
+  if (_recordDocById) return _recordDocById;
+  if (_recordDocByIdPromise) return _recordDocByIdPromise;
+  _recordDocByIdPromise = (async () => {
+    const map = new Map();
+    try {
+      // The FULL log carries every record with its documentId (same source the
+      // Decisions browser joins on). Best-effort — a failure leaves the map empty
+      // so callers render no source affordance (never a broken/dead link).
+      const data = await tauri.core.invoke("fetch_decision_log_full");
+      const records = data && Array.isArray(data.records) ? data.records : [];
+      for (const it of records) {
+        const rec = it && it.record ? it.record : it;
+        if (rec && rec.recordId && rec.documentId) map.set(rec.recordId, rec.documentId);
+      }
+    } catch (err) {
+      console.warn("[main] loadRecordDocMap failed:", err);
+    }
+    _recordDocById = map;
+    return map;
+  })();
+  return _recordDocByIdPromise;
 }
 
 // Design-system line icons (feather-style: 24-viewBox, fill:none,
@@ -2180,12 +2299,15 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     if (meta.childNodes.length) card.appendChild(meta);
   }
 
-  // Verbatim — quotation ONLY when verified.
+  // Verbatim — via the ONE receipt component (quote-only here; the source badge
+  // rides in the actions row below, so jump is off on this instance).
   if (rec.verbatimVerified === true && rec.verbatim) {
-    const quote = document.createElement("blockquote");
-    quote.className = "record-quote";
-    quote.textContent = rec.verbatim;
-    card.appendChild(quote);
+    card.appendChild(
+      renderReceipt(
+        { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified },
+        { jump: false, variant: "receipt-record" },
+      ),
+    );
   }
 
   // Edge callouts (conflict / supersession / resolution / dependency).
@@ -2345,6 +2467,21 @@ async function vvVoidAction(cmd, args) {
     await tauri.core.invoke(cmd, args);
   } catch (err) {
     console.warn(`[main] ${cmd} failed:`, err);
+  }
+  // Re-render whichever surface hosts these void cards. On Today (WP-R2) the
+  // voids live in the Needs-you queue, so re-run the queue's void source (a full
+  // enterLogView would needlessly re-fetch every section); on the (retired)
+  // Watching view, re-enter it. Detect by which view is currently shown.
+  const logView = document.getElementById("view-log");
+  if (logView && !logView.hidden) {
+    // Clear only the void cards from the queue, then re-fetch them. Proxy cards
+    // and the question card in the queue are left in place (different sources).
+    const list = document.getElementById("today-queue-list");
+    if (list) {
+      for (const el of Array.from(list.querySelectorAll(".watching-card"))) el.remove();
+    }
+    loadTodayQueueVoids(() => {}).catch((e) => console.warn("[main] void re-render:", e));
+    return;
   }
   enterWatchingView();
 }
@@ -2585,18 +2722,21 @@ function renderArrivedCard(v) {
   headline.textContent = ctx.blocked ? ctx.blocked.summary : (v.render || "An expected record arrived.");
   card.appendChild(headline);
 
-  // The evidence — the citation-checked quote from the filling document.
-  if (fb.verbatim) {
-    const q = document.createElement("blockquote");
-    q.className = "arrived-quote";
-    q.textContent = `“${fb.verbatim}”`;
-    card.appendChild(q);
-  }
-  if (fb.documentId) {
-    const src = document.createElement("p");
-    src.className = "arrived-source";
-    src.textContent = `from ${fb.documentId}`;
-    card.appendChild(src);
+  // The evidence — the citation-checked quote from the filling document, plus its
+  // provenance line, via the ONE receipt component. Verbatim here is checked by
+  // arrival (no separate verbatimVerified flag), so we mark it verified; jump is
+  // off (the void flow doesn't wire the source pane) so the source shows as text.
+  if (fb.verbatim || fb.documentId) {
+    card.appendChild(
+      renderReceipt(
+        {
+          verbatim: fb.verbatim,
+          verbatimVerified: !!fb.verbatim,
+          sourceFallback: fb.documentId ? `from ${fb.documentId}` : "",
+        },
+        { jump: false, quoteWrap: true, variant: "receipt-arrived" },
+      ),
+    );
   }
 
   // Clear the receipt once seen (acknowledge). A filled void can't re-surface, so
@@ -2720,11 +2860,377 @@ async function enterWatchingView() {
   if (emptyEl) emptyEl.hidden = !(voids.length === 0 && arrived.length === 0);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// WP-R2 Today rebuild — paint-first Today.
+//
+// enterLogView paints the skeleton (index.html's three sections + tray) and any
+// synchronous state IMMEDIATELY, then fires each data source fire-and-forget OFF
+// the critical path. Each source re-renders ONLY its own section when it lands,
+// guarded so a slow/failed/absent one can't blank Today or abort the others.
+// This preserves the < 1s cold first-paint gate (§2.6) — the exact async-
+// enrichment pattern from commit 7a1475f (decisions view), applied to Today.
+//
+// Paint order:
+//   ① SoP header      — fetch_sop (person lens, forest fallback) → loadPersonLensSoP
+//   ② Needs-you queue — fetch_proxy_queue + fetch_question + fetch_vigilance_voids
+//   ③ Filed confidently — the proxy queue's high-confidence pile (same fetch)
+//   + Awaiting-send tray — fetch_outbox (hidden when empty)
+//   + Everything-else / priority / stalled — the decision-log rollup (unchanged
+//     surfaces), now also loaded off the critical path.
+//
+// NOTHING LLM-backed or network-backed is awaited before the first paint below.
+// ══════════════════════════════════════════════════════════════════════════
 async function enterLogView() {
   state.inWizard = false;
   showView("view-log");
   setNav([{ label: "Today" }], { active: "today", back: () => goHome() });
 
+  // Record-level inline editing reload hook (Phase A). Capability flag is set
+  // when the decision-log source lands (renderTodayDecisionLog).
+  _reloadRecordView = enterLogView;
+
+  // ── FIRST PAINT (synchronous) ──────────────────────────────────────────────
+  // Reset each section to its skeleton/empty resting state, wire the idempotent
+  // toggles, and show the collapsible shell. No await, no network — this returns
+  // to the event loop before any data source resolves, so the paint is immediate.
+  renderTodaySkeleton();
+  wireSopLensToggle();
+  wireTodayFiledToggle();
+
+  // ── FIRE-AND-FORGET ENRICHMENT (off the critical path) ──────────────────────
+  // Each source patches its own section when it lands; each is independently
+  // guarded so a slow/failed/absent one can't blank Today or abort the others.
+
+  // ① SoP header — person-lens narrative (forest fallback with no identity). The
+  //    person lens needs the viewer identity; loadTodayContext resolves it, then
+  //    the SoP + the decision-log rollup (which use viewer attribution) fire.
+  loadTodayContext()
+    .then(() => {
+      loadPersonLensSoP().catch((e) => console.warn("[main] SoP header:", e));
+      renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log rollup:", e));
+    })
+    .catch((e) => {
+      console.warn("[main] Today context:", e);
+      // Context failed (no viewer identity resolvable) — still load the lenses
+      // that don't strictly need it (they degrade to the forest fallback).
+      loadPersonLensSoP().catch(() => {});
+      renderTodayDecisionLog().catch(() => {});
+    });
+
+  // ② + ③ Needs-you queue + Filed-confidently — both piles from the proxy queue,
+  //    plus the question card and the vigilance voids folded into the queue.
+  loadTodayQueue().catch((e) => console.warn("[main] Needs-you queue:", e));
+
+  // + Awaiting-send tray — hidden when there are no staged drafts.
+  loadTodayOutboxTray().catch((e) => console.warn("[main] Outbox tray:", e));
+}
+
+// Reset every Today section to its resting skeleton/empty state (synchronous —
+// no network). Called at the top of every enterLogView so a re-entry starts
+// clean before the async sources repopulate.
+function renderTodaySkeleton() {
+  // ① SoP — skeleton line; the lens bar hides until prose resolves.
+  const sopPanel = document.getElementById("log-sop-lens-panel");
+  if (sopPanel) sopPanel.innerHTML = '<div class="sop-status today-sop-skeleton">Composing your state of play…</div>';
+  const sopBar = document.getElementById("log-sop-lens");
+  if (sopBar) sopBar.hidden = true;
+
+  // ② Needs-you queue — clear the lists, show the skeleton, hide the empty state.
+  const qList = document.getElementById("today-queue-list");
+  if (qList) qList.innerHTML = "";
+  const qSlot = document.getElementById("today-question-slot");
+  if (qSlot) qSlot.innerHTML = "";
+  const qSkel = document.getElementById("today-queue-skeleton");
+  if (qSkel) qSkel.hidden = false;
+  const qEmpty = document.getElementById("today-queue-empty");
+  if (qEmpty) qEmpty.hidden = true;
+  const qCount = document.getElementById("today-queue-count");
+  if (qCount) qCount.textContent = "";
+
+  // ③ Filed confidently — hidden until the proxy source lands with any.
+  const filedSection = document.getElementById("today-filed-section");
+  if (filedSection) filedSection.hidden = true;
+  const filedList = document.getElementById("today-filed-list");
+  if (filedList) filedList.innerHTML = "";
+
+  // Tray — hidden until fetch_outbox lands with staged drafts.
+  const tray = document.getElementById("today-outbox-tray");
+  if (tray) tray.hidden = true;
+  const trayList = document.getElementById("today-outbox-list");
+  if (trayList) trayList.innerHTML = "";
+
+  // Legacy rollup surfaces reset to a calm resting state (repopulated by
+  // renderTodayDecisionLog / loadTodayPriority / loadStalledChaseList).
+  const statesStrip = document.getElementById("log-states-strip");
+  if (statesStrip) statesStrip.hidden = true;
+  const everySection = document.getElementById("log-everything-section");
+  if (everySection) everySection.hidden = true;
+  const statusEl = document.getElementById("log-status");
+  if (statusEl) statusEl.hidden = true;
+
+  // WP-R2 amendment item 1/4 — the cut priority + stalled rails. Empty their
+  // containers so nothing dangles when the debug flag is off (they only refill
+  // under VIEW_DEBUG). Keeps the empty-Today state free of orphaned sections.
+  const priorityWrap = document.getElementById("log-priority-sections");
+  if (priorityWrap) priorityWrap.innerHTML = "";
+  const stalledWrap = document.getElementById("log-stalled-sections");
+  if (stalledWrap) stalledWrap.innerHTML = "";
+
+  // WP-R2 amendment item 3 — reset the "Everything else" cross-path signals so a
+  // re-entry re-derives them (queue empty state unknown until it settles again).
+  _todayQueueEmpty = null;
+  _everythingElseHasContent = false;
+}
+
+// Toggle the Today "Filed confidently" pile (collapsed by default). Idempotent —
+// binds the click handler once across re-renders.
+function wireTodayFiledToggle() {
+  const toggle = document.getElementById("today-filed-toggle");
+  const list = document.getElementById("today-filed-list");
+  if (!toggle || !list || toggle.dataset.wired) return;
+  toggle.dataset.wired = "1";
+  const chevron = toggle.querySelector(".proxy-pile-chevron");
+  toggle.addEventListener("click", () => {
+    const open = list.hidden; // about to open if currently hidden
+    list.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (chevron) chevron.textContent = open ? "▾" : "▸";
+  });
+}
+
+// ── Today context: viewer identity + capture-attribution join ───────────────
+// Resolves the viewer email/slug (for the Mine filter + person-lens SoP) and the
+// documentId → submitter map (for the attribution join on the decision-log
+// rollup). Best-effort: a null identity hides the toggle + the person lens (the
+// forest fallback is used); a failed /api/data join simply omits attribution.
+// Stored on _todayCtx so the SoP + rollup can read it without re-fetching.
+async function loadTodayContext() {
+  await refreshDismissedIds();
+  await loadDocsMap();
+  const viewerEmail = await getViewerEmail();
+  const submitterByDoc = new Map();
+  try {
+    const docsResp = await tauri.core.invoke("fetch_documents");
+    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+    for (const d of docs) {
+      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
+        submitterByDoc.set(d.id, d.submittedByEmail);
+      }
+    }
+  } catch (err) {
+    console.warn("[main] fetch_documents failed (attribution omitted):", err);
+  }
+  _todayCtx = {
+    needsAttention: (_todayCtx && _todayCtx.needsAttention) || [],
+    submitterByDoc,
+    viewerEmail,
+    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
+  };
+  // The Mine / Everyone toggle exists only for an identified viewer.
+  const filterEl = document.getElementById("log-filter");
+  if (filterEl) filterEl.hidden = !viewerEmail;
+  setTodayFilter("everyone"); // default Everyone on each view load
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// ② + ③ Needs-you queue + Filed-confidently.
+//
+// ONE card family (§2.3). Three async sources fill the queue, each appending its
+// own cards as it arrives (the queue is order-independent):
+//   · proxy "Wants your eye" cards (renderProxyCard) + the high-confidence pile
+//     into "Filed confidently" (renderProxyFiledRow)
+//   · the Question-Engine pull card / affordance (buildQuestionSection)
+//   · vigilance-void chase cards (renderVoidCard)
+// Each source is independently guarded; a failed/absent one leaves the others.
+// The skeleton hides + the empty state shows only after ALL THREE settle empty.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayQueue() {
+  // Track completion of the three sources so the empty/skeleton state resolves
+  // correctly regardless of arrival order.
+  const settled = { proxy: false, question: false, voids: false };
+  const filled = { proxy: false, question: false, voids: false };
+  const settle = (key, didFill) => {
+    settled[key] = true;
+    if (didFill) filled[key] = true;
+    reconcileTodayQueueEmptyState(settled, filled);
+  };
+
+  // Fire all three in parallel; each appends when it lands.
+  loadTodayQueueProxy(settle).catch((e) => { console.warn("[main] proxy queue:", e); settle("proxy", false); });
+  loadTodayQueueQuestion(settle).catch((e) => { console.warn("[main] question card:", e); settle("question", false); });
+  loadTodayQueueVoids(settle).catch((e) => { console.warn("[main] vigilance voids:", e); settle("voids", false); });
+}
+
+// Show the empty state (and hide the skeleton) only once all three sources have
+// settled; keep the skeleton up until the first one lands. When any source
+// filled the queue, no empty state — just hide the skeleton.
+function reconcileTodayQueueEmptyState(settled, filled) {
+  const skel = document.getElementById("today-queue-skeleton");
+  const empty = document.getElementById("today-queue-empty");
+  const anyFilled = filled.proxy || filled.question || filled.voids;
+  const allSettled = settled.proxy && settled.question && settled.voids;
+  // Hide the skeleton as soon as anything filled OR everything has settled.
+  if (skel) skel.hidden = anyFilled || allSettled;
+  if (empty) empty.hidden = !(allSettled && !anyFilled);
+  // WP-R2 amendment item 3 — publish the queue's empty signal so the "Everything
+  // else" fallback (owned by the decision-log rollup) can show only when empty.
+  // Known only once all three sources settle; anyFilled ⇒ not empty.
+  if (allSettled) {
+    _todayQueueEmpty = !anyFilled;
+    reconcileEverythingElseVisibility();
+  } else if (anyFilled) {
+    // A card landed before everything settled — the queue is definitely non-empty.
+    _todayQueueEmpty = false;
+    reconcileEverythingElseVisibility();
+  }
+  // Live count of queue cards (proxy "wants your eye" + voids + a question card).
+  const list = document.getElementById("today-queue-list");
+  const qSlotCards = document.querySelectorAll("#today-question-slot .rule-card").length;
+  const n = (list ? list.children.length : 0) + qSlotCards;
+  const countEl = document.getElementById("today-queue-count");
+  if (countEl) countEl.textContent = n > 0 ? String(n) : "";
+}
+
+// Proxy source — the fleet inbox. "Wants your eye" cards append to the queue;
+// the high-confidence pile lands in "Filed confidently" (§ the second pile).
+async function loadTodayQueueProxy(settle) {
+  const list = document.getElementById("today-queue-list");
+  const filedSection = document.getElementById("today-filed-section");
+  const filedList = document.getElementById("today-filed-list");
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_proxy_queue");
+  } catch (err) {
+    console.warn("[main] fetch_proxy_queue failed (Today queue):", err);
+    settle("proxy", false);
+    return;
+  }
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+
+  // "Wants your eye" — full cards, into the shared queue (same card family).
+  if (list) {
+    for (const item of wantsEye) {
+      try { list.appendChild(renderProxyCard(item)); } catch (e) { console.warn("[main] renderProxyCard:", e); }
+    }
+  }
+  // "Filed confidently" — collapsed rows, undo per row. Hidden when none.
+  if (filed.length && filedList && filedSection) {
+    for (const item of filed) {
+      try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
+    }
+    filedSection.hidden = false;
+    const headText = document.getElementById("today-filed-heading-text");
+    if (headText) headText.textContent = `Filed confidently · ${filed.length}`;
+  }
+  settle("proxy", wantsEye.length > 0);
+}
+
+// Question source — the "Anything you need from me?" pull. Reuses the exact
+// project-lens question surface (buildQuestionSection → buildQuestionCard). The
+// surface renders into its own slot (so re-renders of the other sources don't
+// clear it). Off / empty ⇒ the calm pull affordance (which itself counts as
+// filling the section only when a real card is surfaced).
+async function loadTodayQueueQuestion(settle) {
+  const slot = document.getElementById("today-question-slot");
+  await refreshQuestionCard(); // sets _questionCard / _questionEngineOff (fail-safe)
+  const section = buildQuestionSection(); // null when the engine is off
+  if (slot) {
+    slot.innerHTML = "";
+    if (section) slot.appendChild(section);
+  }
+  // A surfaced card (not the bare pull affordance) counts as filling the queue.
+  settle("question", !!_questionCard);
+}
+
+// Vigilance-void source — the retired Watching surface's value, re-landed as
+// queue cards. Reuses renderVoidCard (dismiss/snooze via vvVoidAction). Loads
+// grouped so the silent-Nd join + low-impact suppression match the old ledger;
+// only the primary (non-low-impact) voids surface on Today. Degrades silently.
+async function loadTodayQueueVoids(settle) {
+  const list = document.getElementById("today-queue-list");
+  await loadDocsMap(); // void cards' source badges read _docsById (best-effort)
+  let data, grouped;
+  try {
+    const result = await fetchVigilanceGrouped();
+    if (!result) throw new Error("vigilance fetch failed");
+    data = result.voidData;
+    grouped = result.grouped; // null when flag off / old backend
+  } catch (err) {
+    console.warn("[main] fetch_vigilance_voids failed (Today queue):", err);
+    settle("voids", false);
+    return;
+  }
+  const voids = Array.isArray(data && data.voids) ? data.voids : [];
+  const ageByVoid = new Map();
+  const lowImpactVoidIds = new Set();
+  if (grouped && Array.isArray(grouped.stalledJobs)) {
+    for (const job of grouped.stalledJobs) {
+      const isPrimary = stalledIsPrimary(job, stalledBand(job.jobKey));
+      const isSingleton = (job.voidCount || 0) <= 1 && !(job.blockerCount || 0);
+      for (const sv of job.scoredVoids || []) {
+        if (typeof sv.ageDays === "number") ageByVoid.set(sv.voidId, sv.ageDays);
+        if (!isPrimary || isSingleton) lowImpactVoidIds.add(sv.voidId);
+      }
+    }
+  }
+  const primaryVoids = voids.filter((v) => !lowImpactVoidIds.has(v.voidId));
+  if (list) {
+    for (const v of primaryVoids) {
+      try {
+        list.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
+      } catch (e) { console.warn("[main] renderVoidCard (Today queue):", e); }
+    }
+  }
+  settle("voids", primaryVoids.length > 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Awaiting-send / Sent tray — the Outbox demotion. A small tray that appears
+// ONLY when there are staged drafts (empty ⇒ hidden). Sourced from fetch_outbox
+// (the same path enterOutboxView used); each draft renders via the existing
+// renderOutboxCard. Fire-and-forget: a failure/absence just leaves it hidden.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayOutboxTray() {
+  const tray = document.getElementById("today-outbox-tray");
+  const list = document.getElementById("today-outbox-list");
+  const countEl = document.getElementById("today-outbox-count");
+  if (!tray || !list) return;
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_outbox");
+  } catch (err) {
+    console.warn("[main] fetch_outbox failed (Today tray):", err);
+    tray.hidden = true; // empty ⇒ hidden (never an error surface on Today)
+    return;
+  }
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  if (!items.length) {
+    tray.hidden = true;
+    return;
+  }
+  list.innerHTML = "";
+  for (const item of items) {
+    try { list.appendChild(renderOutboxCard(item)); }
+    catch (e) { console.warn("[main] renderOutboxCard (Today tray):", e); }
+  }
+  if (countEl) countEl.textContent = String(items.length);
+  tray.hidden = false;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// Decision-log rollup — the "Everything else" collapsible + states strip +
+// priority + stalled surfaces. This is the former blocking body of enterLogView,
+// now loaded fire-and-forget so nothing here blocks the first paint. Renders the
+// needs-attention rows, conflicts, workload, and the priority/stalled rails.
+// ══════════════════════════════════════════════════════════════════════════
+async function renderTodayDecisionLog() {
   const statusEl = document.getElementById("log-status");
   const attentionList = document.getElementById("log-attention-list");
   const attentionEmpty = document.getElementById("log-attention-empty");
@@ -2734,16 +3240,6 @@ async function enterLogView() {
   const ownersStrip = document.getElementById("log-owners-strip");
   const statesStrip = document.getElementById("log-states-strip");
   const subEl = document.getElementById("log-sub");
-
-  // Loading state.
-  if (statusEl) {
-    statusEl.hidden = false;
-    statusEl.dataset.kind = "loading";
-    statusEl.textContent = "Loading the log…";
-  }
-
-  await refreshDismissedIds();
-  await loadDocsMap();
 
   let data;
   try {
@@ -2756,20 +3252,13 @@ async function enterLogView() {
     if (contradictionsSection) contradictionsSection.hidden = true;
     if (ownersSection) ownersSection.hidden = true;
     if (statesStrip) statesStrip.hidden = true;
-    if (statusEl) {
-      statusEl.hidden = false;
-      statusEl.dataset.kind = "error";
-      statusEl.textContent =
-        "Couldn't reach Apolla. Check your connection in Configure, then Refresh.";
-    }
+    // Degrade quietly — the queue/SoP/tray sections carry Today on their own; a
+    // decision-log outage must not blank Today or surface a hard error banner.
     return;
   }
 
-  if (statusEl) statusEl.hidden = true;
-
-  // Record-level inline editing capability + reload hook (Phase A).
+  // Record-level inline editing capability.
   _recordEditsEnabled = !!(data && data.editsEnabled);
-  _reloadRecordView = enterLogView;
 
   const summary = data && data.summary ? data.summary : {};
   const states = summary.states || {};
@@ -2815,36 +3304,15 @@ async function enterLogView() {
     statesStrip.hidden = !any;
   }
 
-  // WP-N1 #6/#8 — viewer identity (for attribution + the Mine filter) and the
-  // documentId → submitter map (for the Today attribution join). Both best-
-  // effort: a null identity hides the toggle + the "you" distinction; a failed
-  // /api/data join simply omits attribution. The documents array is already
-  // disclosure-sliced server-side, so the join never sees a hidden doc.
-  const viewerEmail = await getViewerEmail();
-  const submitterByDoc = new Map();
-  try {
-    const docsResp = await tauri.core.invoke("fetch_documents");
-    const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
-    for (const d of docs) {
-      if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
-        submitterByDoc.set(d.id, d.submittedByEmail);
-      }
-    }
-  } catch (err) {
-    console.warn("[main] fetch_documents failed (attribution omitted):", err);
+  // WP-N1 #6/#8 — the viewer identity + attribution join now resolve in
+  // loadTodayContext (off the critical path, before this rollup fires), so
+  // _todayCtx already carries submitterByDoc / viewerSlug. Fold the freshly-
+  // fetched needs-attention list onto it and re-render the rows under the
+  // current filter. Guard against a context that hasn't populated (defensive).
+  if (!_todayCtx) {
+    _todayCtx = { submitterByDoc: new Map(), viewerEmail: null, viewerSlug: null };
   }
-
-  _todayCtx = {
-    needsAttention,
-    submitterByDoc,
-    viewerEmail,
-    viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
-  };
-
-  // The Mine / Everyone toggle exists only for an identified viewer.
-  const filterEl = document.getElementById("log-filter");
-  if (filterEl) filterEl.hidden = !viewerEmail;
-  setTodayFilter("everyone"); // default Everyone on each view load
+  _todayCtx.needsAttention = needsAttention;
   renderTodayAttention();
 
   // Contradictions.
@@ -2873,17 +3341,21 @@ async function enterLogView() {
     }
   }
 
-  // "Everything else" — reveal the grouped legacy sections + wire the collapsible
-  // (idempotent: the click handler binds once across re-renders).
-  const everySection = document.getElementById("log-everything-section");
+  // "Everything else" — the grouped legacy fallback. WP-R2 amendment item 3: it
+  // renders ONLY when the Needs-you queue is empty (nothing actionable), and item
+  // 4: never as a header alone — only when the rollup produced content. Record
+  // both signals, then reconcile against the queue's empty state (which may have
+  // already settled on its own async path). The status pills (item 2) are handled
+  // above, independent of this — they stay visible regardless.
   const everyToggle = document.getElementById("log-everything-toggle");
   const everyBody = document.getElementById("log-everything-body");
   const everyCount = document.getElementById("log-everything-count");
-  if (everySection) everySection.hidden = false;
+  const everyContentCount = needsAttention.length + contradictions.length;
+  _everythingElseHasContent = everyContentCount > 0;
   if (everyCount) {
-    const n = needsAttention.length + contradictions.length;
-    everyCount.textContent = n ? String(n) : "";
+    everyCount.textContent = everyContentCount ? String(everyContentCount) : "";
   }
+  reconcileEverythingElseVisibility();
   if (everyToggle && everyBody && !everyToggle.dataset.wired) {
     everyToggle.dataset.wired = "1";
     const caret = everyToggle.querySelector(".log-collapse-caret");
@@ -2892,23 +3364,23 @@ async function enterLogView() {
       everyBody.hidden = !open;
       if (caret) caret.textContent = open ? "▾" : "▸";
       everyToggle.setAttribute("aria-expanded", open ? "true" : "false");
-      if (everySection) everySection.classList.toggle("log-collapsed", !open);
+      const sec = document.getElementById("log-everything-section");
+      if (sec) sec.classList.toggle("log-collapsed", !open);
     });
   }
 
-  // WP-WorkForest-Native-SoP (UI-1 + UI-6) — the top-of-Today SoP narrative +
-  // Person/Forest lens toggle, above the Focus rail. Additive + silent: bar +
-  // panel stay hidden when the endpoint is unavailable.
-  wireSopLensToggle();
-  loadPersonLensSoP();
-
-  // WP-Priority-Operator — Focus + Watch sections at the top of Today, loaded
-  // independently of the State-of-Play digest. Additive + silent if the flag's off.
-  loadTodayPriority();
-
-  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list, just below the Focus
-  // rail. Additive + silent: renders nothing when grouped vigilance data is absent.
-  loadStalledChaseList();
+  // WP-R2 amendment item 1 — the legacy priority rail (Focus + Watch) and the
+  // Stalled/Chasing chase-list are CUT as Today sections: their value is re-homed
+  // (focus → the SoP's "calls only you can make"; watch → vigilance-void cards in
+  // the Needs-you queue), so on the default Today they're pure duplication. Gated
+  // behind R0's VIEW_DEBUG (never deleted) — they return with #debug-views set.
+  // Their containers stay empty otherwise (cleared in renderTodaySkeleton).
+  if (VIEW_DEBUG) {
+    // WP-Priority-Operator — Focus + Watch sections (the priority rail).
+    loadTodayPriority();
+    // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list.
+    loadStalledChaseList();
+  }
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -2916,6 +3388,31 @@ async function enterLogView() {
 // toggle re-renders without re-fetching.
 let _todayFilter = "everyone"; // "everyone" | "mine"
 let _todayCtx = null;
+
+// WP-R2 amendment item 3 — cross-path signal for the "Everything else"
+// collapsible. It's the fallback surface: shown ONLY when the Needs-you queue is
+// empty. The queue settles in loadTodayQueue (a different async path than the
+// decision-log rollup that owns the section), so both paths write here and call
+// reconcileEverythingElseVisibility, which reads the latest of the two.
+//   null  = queue hasn't settled yet (unknown)
+//   true  = queue settled empty  → "Everything else" may show
+//   false = queue has cards       → hide "Everything else"
+let _todayQueueEmpty = null;
+// Whether the decision-log rollup produced any "Everything else" content this
+// render (needs-attention rows or contradictions). No content ⇒ header must not
+// paint alone (item 4), independent of the queue signal.
+let _everythingElseHasContent = false;
+
+// Show/hide the "Everything else" collapsible from the two signals: the queue's
+// empty state AND whether the rollup produced content. Shown only when the queue
+// is settled-empty AND there's content to show. Until the queue settles we keep
+// it hidden (queue skeleton is still up; nothing actionable is confirmed yet).
+function reconcileEverythingElseVisibility() {
+  const everySection = document.getElementById("log-everything-section");
+  if (!everySection) return;
+  const queueEmpty = _todayQueueEmpty === true;
+  everySection.hidden = !(queueEmpty && _everythingElseHasContent);
+}
 
 /** Set the active filter + reflect it on the segmented control's buttons. */
 function setTodayFilter(filter) {
@@ -3162,6 +3659,33 @@ function personLens(viewerSlug) {
   return viewerSlug ? "person:" + viewerSlug : null;
 }
 
+// WP-R3 item 1 — render any receipt-shaped evidence a SoP section/digest carries
+// through the ONE receipt component (§2.4). `raw` may be a single receipt object
+// or an array; each entry is shape-tolerant ({record} envelope OR bare). Silent
+// when there's nothing citeable — renderReceipt itself shows a quote only when
+// verbatimVerified, so nothing is invented and the license framing stays honest.
+function appendSoPReceipts(container, raw) {
+  if (!raw) return;
+  const list = Array.isArray(raw) ? raw : [raw];
+  let wrap = null;
+  for (const entry of list) {
+    const rec = entry && entry.record ? entry.record : entry;
+    if (!rec || typeof rec !== "object") continue;
+    if (!((rec.verbatimVerified === true && rec.verbatim) || rec.documentId)) continue;
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.className = "sop-receipts";
+    }
+    wrap.appendChild(
+      renderReceipt(
+        { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified, documentId: rec.documentId },
+        { variant: "receipt-sop", compact: true },
+      ),
+    );
+  }
+  if (wrap) container.appendChild(wrap);
+}
+
 // Render the SoP prose into a container. `sections`, when present, render as
 // labelled sub-blocks beneath the lead prose; otherwise the prose alone shows.
 // No jargon translation here — the backend already voiced it. `opts.compact`
@@ -3193,8 +3717,17 @@ function renderSoPProse(container, data, opts) {
       p.textContent = body;
       block.appendChild(p);
     }
+    // WP-R3 item 1 — receipted claims. When a section (or the digest itself)
+    // carries evidence, it renders through the ONE receipt component (§2.4):
+    // verbatim quote (verified-only) + jump-to-source. Shape-tolerant + silent —
+    // absent evidence adds nothing, so the license framing stays intact (no
+    // invented specifics; renderReceipt only shows a quote when verbatimVerified).
+    appendSoPReceipts(block, sec.receipts || sec.evidence);
     container.appendChild(block);
   }
+
+  // Digest-level receipts (evidence attached to the lead prose, not a section).
+  appendSoPReceipts(container, data.receipts || data.evidence);
 
   // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
   // dim, single line; omitted in compact mode and when absent.
@@ -3884,12 +4417,15 @@ function renderWhyStalledDrawer(receipt) {
       line.textContent = v.render || v.summary || "";
       li.appendChild(line);
 
-      // Citation-checked verbatim, ONLY when verified (trust property).
+      // Citation-checked verbatim, ONLY when verified (trust property) — via the
+      // ONE receipt component (quote-only; the drawer doesn't wire the source pane).
       if (v.verbatim && v.verbatimVerified) {
-        const q = document.createElement("blockquote");
-        q.className = "stalled-void-quote";
-        q.textContent = `“${v.verbatim}”`;
-        li.appendChild(q);
+        li.appendChild(
+          renderReceipt(
+            { verbatim: v.verbatim, verbatimVerified: v.verbatimVerified },
+            { jump: false, quoteWrap: true, variant: "receipt-stalled" },
+          ),
+        );
       }
 
       // Waiting-on records (the enabling records this void is blocked behind).
@@ -4604,11 +5140,17 @@ function renderPriorityCard(item, isTracked) {
 }
 
 // "Links" — jump from Today to the cross-record edge graph (Connections view).
+// WP-R0 — retired: hide the button and skip wiring when edges is gated off,
+// so there's no dead click path left on the Today header.
 const logEdgesBtn = document.getElementById("btn-log-edges");
 if (logEdgesBtn) {
-  logEdgesBtn.addEventListener("click", () => {
-    enterEdgesView();
-  });
+  if (!isDestVisible("edges")) {
+    logEdgesBtn.setAttribute("hidden", "");
+  } else {
+    logEdgesBtn.addEventListener("click", () => {
+      enterEdgesView();
+    });
+  }
 }
 
 const openLogBtn = document.getElementById("btn-open-log");
@@ -5216,11 +5758,17 @@ for (const b of document.querySelectorAll("#edges-lenses .decisions-lens-btn")) 
   });
 }
 
+// WP-R0 — retired: hide the button and skip wiring when edges is gated off,
+// so there's no dead click path left on the Home header.
 const openEdgesBtn = document.getElementById("btn-open-edges");
 if (openEdgesBtn) {
-  openEdgesBtn.addEventListener("click", () => {
-    enterEdgesView();
-  });
+  if (!isDestVisible("edges")) {
+    openEdgesBtn.setAttribute("hidden", "");
+  } else {
+    openEdgesBtn.addEventListener("click", () => {
+      enterEdgesView();
+    });
+  }
 }
 
 // ───────── Definition card — per-entity "what is this, here, now" (WP-THRESHOLD-LOG-UX) ─────────
@@ -6457,7 +7005,24 @@ async function pullQuestion(btn, noteEl) {
     const res = await tauri.core.invoke("fetch_question", { pull: true });
     if (res && !res.disabled && res.question) {
       _questionCard = res.question;
-      renderDecisions();          // redraw — the card replaces the affordance
+      // Redraw the surface that hosts this affordance — the card replaces it.
+      // On Today (WP-R2) the pull lives in #today-question-slot; on Decisions it
+      // lives in the decisions render. Detect by the button's DOM ancestry so the
+      // right surface repaints (and the queue count re-reconciles on Today).
+      if (btn.closest && btn.closest("#today-question-slot")) {
+        const slot = document.getElementById("today-question-slot");
+        const section = buildQuestionSection();
+        if (slot) { slot.innerHTML = ""; if (section) slot.appendChild(section); }
+        const countEl = document.getElementById("today-queue-count");
+        if (countEl) {
+          const list = document.getElementById("today-queue-list");
+          const qCards = document.querySelectorAll("#today-question-slot .rule-card").length;
+          const n = (list ? list.children.length : 0) + qCards;
+          countEl.textContent = n > 0 ? String(n) : "";
+        }
+      } else {
+        renderDecisions();        // Decisions view — the card replaces the affordance
+      }
       return;
     }
   } catch (e) {
@@ -6546,31 +7111,26 @@ function buildQuestionCard(card) {
     const doc = _docsById.get(qsrc.docId);
     const label = qsrc.docTitle || (doc ? sourceFromDoc(doc).label : "your notes");
     const allTexts = qsrc.items.flatMap(itemHighlightStrings);
+    // The authored hot-list source, via the ONE receipt component's authored-
+    // source jump variant: opens the authored doc highlighting every item at once.
     const row = document.createElement("div");
     row.className = "question-source-row";
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "source-badge question-source-badge";
-    chip.title = "Open your authored list beside this — " + label;
-    const icon = document.createElement("span");
-    icon.className = "source-badge-icon";
-    icon.innerHTML = SOURCE_ICONS[doc ? sourceFromDoc(doc).iconKey : "doc"] || SOURCE_ICONS.doc;
-    chip.appendChild(icon);
-    const lab = document.createElement("span");
-    lab.className = "source-badge-label";
-    lab.textContent = "View in your notes";
-    chip.appendChild(lab);
-    if (qsrc.docTitle) {
-      const det = document.createElement("span");
-      det.className = "source-badge-detail";
-      det.textContent = "· " + qsrc.docTitle;
-      chip.appendChild(det);
-    }
-    chip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openSourcePanel(qsrc.docId, allTexts[0], allTexts.slice(1), { authoredOnly: true });
-    });
-    row.appendChild(chip);
+    row.appendChild(
+      renderReceipt(
+        {},
+        {
+          variant: "receipt-question",
+          authoredSource: {
+            docId: qsrc.docId,
+            primaryText: allTexts[0],
+            extraTexts: allTexts.slice(1),
+            label: "View in your notes",
+            detail: qsrc.docTitle || "",
+            iconKey: doc ? sourceFromDoc(doc).iconKey : "doc",
+          },
+        },
+      ),
+    );
     el.appendChild(row);
   }
 
@@ -8351,7 +8911,7 @@ function mountComposeStart(wrap, ctx) {
       wrap.innerHTML = '<div class="sop-status">No team update to compose for this area right now.</div>';
       return;
     }
-    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {} });
+    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {}, items: Array.isArray(res.items) ? res.items : [] });
   });
 }
 
@@ -8388,6 +8948,39 @@ function renderComposeEditor(wrap, ctx) {
   ta.rows = Math.min(22, Math.max(8, generated.split("\n").length + 1));
   ta.value = generated;
   wrap.appendChild(ta);
+
+  // WP-R3 item 2 — the citations behind the draft, through the ONE receipt
+  // component (§2.4), so the compose preview is consistent with every other
+  // receipted surface. The compose payload carries the underlying SoP `items`;
+  // each renders as its verbatim quote (verified-only) + jump-to-source. Shape-
+  // tolerant ({record} envelope OR a bare record) and defensive: renderReceipt
+  // renders nothing without a verified verbatim or documentId, and the block is
+  // omitted entirely when no item yields evidence (no empty "Sources" header).
+  const citeItems = Array.isArray(ctx.items) ? ctx.items : [];
+  if (citeItems.length) {
+    const cites = document.createElement("div");
+    cites.className = "sop-compose-cites";
+    let any = 0;
+    for (const it of citeItems) {
+      const rec = it && it.record ? it.record : it;
+      if (!rec || typeof rec !== "object") continue;
+      if (!((rec.verbatimVerified === true && rec.verbatim) || rec.documentId)) continue;
+      cites.appendChild(
+        renderReceipt(
+          { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified, documentId: rec.documentId },
+          { variant: "receipt-compose", compact: true },
+        ),
+      );
+      any++;
+    }
+    if (any) {
+      const head = document.createElement("div");
+      head.className = "sop-compose-cites-head";
+      head.textContent = any === 1 ? "Source" : "Sources";
+      cites.insertBefore(head, cites.firstChild);
+      wrap.appendChild(cites);
+    }
+  }
 
   const proposals = document.createElement("div");
   proposals.className = "sop-proposals";
@@ -8499,6 +9092,30 @@ async function copyAllStateOfPlay(btn) {
 // WP-THRESHOLD-STATE-OF-PLAY — PROJECT altitude on the By-project lens: the
 // team-addressed email PLUS per-teammate "copy individually" chips, on demand.
 const _projectPolish = {};
+
+// WP-R3 item 1 — per-project State-of-Play header. Sits at the top of a project
+// group and auto-loads the PROJECT-altitude SoP prose (via the shared fetch_sop
+// path, level='project', keyed on the project slug), rendered through the
+// receipted prose renderer (renderSoPProse → renderReceipt for any citeable
+// claims + the license footnote). Defensive per the #61 pattern: loadSoP returns
+// null on empty / flag-off / server-too-old / unreachable, and the header then
+// removes itself — never a blank block or an error surface. No new endpoint, no
+// blocking work before paint (it fires after the group is in the DOM).
+function buildProjectSopHeader(slug, label) {
+  const header = document.createElement("div");
+  header.className = "sop-project-header";
+  header.hidden = true; // stays hidden until prose lands (invisible-by-absence)
+  // Fire-and-forget; the group is already painted. A failure/absence just leaves
+  // the header hidden — the team-email bar below carries the project on its own.
+  loadSoP("project", slug, null)
+    .then((data) => {
+      if (!data) { header.remove(); return; }
+      renderSoPProse(header, data, {});
+      header.hidden = false;
+    })
+    .catch((e) => { console.warn("[main] project SoP header (" + slug + "):", e); header.remove(); });
+  return header;
+}
 
 function buildProjectSopBar(slug, label) {
   const wrap = document.createElement("div");
@@ -8831,6 +9448,10 @@ function renderDecisions() {
     if (_decisionsLens === "people" && !grp.muted) {
       body.appendChild(buildSopBar(grp.key, grp.label));
     } else if (_decisionsLens === "project" && !grp.muted && !framed) {
+      // WP-R3 item 1 — per-project State-of-Play header, at the top of the group.
+      // Receipted prose (project altitude) via the shared fetch_sop path; hides
+      // itself when unavailable. Sits ABOVE the team-email compose bar.
+      body.appendChild(buildProjectSopHeader(grp.key, grp.label));
       // Project altitude — the team email + per-teammate digests for this project.
       body.appendChild(buildProjectSopBar(grp.key, grp.label));
     }
@@ -9028,6 +9649,19 @@ function shortenSummary(s, max) {
 
 function recordById(ctx, id) {
   return id && ctx.byId ? ctx.byId.get(id) : null;
+}
+
+// WP-R3 item 3 — resolve a record's lifecycle state (open/superseded/resolved)
+// from the live context. byId holds bare records (no state); the {record,state}
+// envelopes live on ctx.items, so scan those. Defaults to "open" when unknown so
+// the dependency popover's status pill only shows for genuinely-closed ends.
+function recordStateById(ctx, id) {
+  if (!id || !ctx || !Array.isArray(ctx.items)) return "open";
+  for (const it of ctx.items) {
+    const rec = it && it.record ? it.record : it;
+    if (rec && rec.recordId === id) return (it && it.state) || "open";
+  }
+  return "open";
 }
 
 // depends_on edges (recordA depends on recordB — A blocked, B the unblocker).
@@ -9263,10 +9897,19 @@ function positionPopover(menu, anchorBtn) {
 // A compact read-only view of a linked record, shown inline in the dependency
 // popover so the relationship is visible in place — no jumping away (Trisha
 // 2026-06-29: the jump is disorienting with no way back).
-function renderLinkedRecord(rec) {
+//
+// WP-R3 item 3 (relationships fold-in) — the popover now shows the OTHER end's
+// full context inline: owner, a status pill (open / resolved / replaced), and —
+// per §2.4 — its evidence (verbatim quote + jump-to-source) through the ONE
+// renderReceipt component, exactly like every other receipted surface. Trisha's
+// explicit ask was the edge context IN PLACE on the record, not a navigation to
+// the retired global edges view. `recState` is the linked record's lifecycle
+// state (optional; the caller resolves it from the live context's state map).
+function renderLinkedRecord(rec, recState) {
   const row = document.createElement("div");
   row.className = "linked-rec";
   row.dataset.type = rec.type || "";
+  if (recState) row.dataset.state = recState;
   const head = document.createElement("div");
   head.className = "linked-rec-head";
   const t = document.createElement("span");
@@ -9274,6 +9917,16 @@ function renderLinkedRecord(rec) {
   t.dataset.type = rec.type || "";
   t.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   head.appendChild(t);
+  // Status pill — mirrors the record card's lifecycle pill so the popover shows
+  // whether the other end is still standing (open) or already closed. Only when
+  // the state is known and non-open (an open item needs no pill — that's the norm).
+  if (recState && recState !== "open") {
+    const pill = document.createElement("span");
+    pill.className = "linked-rec-state";
+    pill.dataset.state = recState;
+    pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
+    head.appendChild(pill);
+  }
   const bits = [];
   if (rec.owner) bits.push(prettySlug(rec.owner));
   if (rec.due) bits.push("due " + formatDueDate(rec.due));
@@ -9288,6 +9941,22 @@ function renderLinkedRecord(rec) {
   sum.className = "linked-rec-summary";
   sum.textContent = rec.summary || "";
   row.appendChild(sum);
+  // Evidence — the linked record's verbatim quote + jump-to-source, via the ONE
+  // receipt component (§2.4). renderReceipt renders nothing when there's no
+  // verified verbatim and no documentId, so a bare record adds no empty block;
+  // when the source pane is reachable (doc in _docsById) the badge opens it.
+  if ((rec.verbatimVerified === true && rec.verbatim) || rec.documentId) {
+    row.appendChild(
+      renderReceipt(
+        {
+          verbatim: rec.verbatim,
+          verbatimVerified: rec.verbatimVerified,
+          documentId: rec.documentId,
+        },
+        { variant: "receipt-linked", compact: true },
+      ),
+    );
+  }
   // Optional: jump to the item in the list (closes the popover first).
   if (rec.recordId) {
     const jump = document.createElement("button");
@@ -9322,7 +9991,10 @@ function openLinkedMenu(anchorBtn, heading, recs) {
   h.textContent = heading;
   menu.appendChild(h);
 
-  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec));
+  // WP-R3 item 3 — thread each linked record's lifecycle state through so the
+  // popover shows its status pill + receipted evidence in place.
+  const ctx = _decisionsCtx || {};
+  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec, recordStateById(ctx, rec.recordId)));
 
   document.body.appendChild(menu);
   positionPopover(menu, anchorBtn);
@@ -9692,6 +10364,171 @@ async function enterReceiptsView(entity) {
   renderReceiptsChain(items, edges, baseUrl);
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * WP-R1 — the ONE receipt component.
+ *
+ * Every surface that shows "evidence" (a verbatim quote, the source it came
+ * from, the co-sign corroboration count, and the jump-to-source affordance)
+ * renders it through renderReceipt(). The DOM tree it emits is IDENTICAL at
+ * every call site — surface variation is class/attr toggles via `opts`, never
+ * a forked element tree. This reconciles the two prior renderers (the #61
+ * source-pane/question-card treatment and renderReceiptNode's co-sign-bearing
+ * receipt) into a single component.
+ *
+ * `receipt` (normalized; every field optional — absent ⇒ that piece is omitted):
+ *   verbatim         string  the captured text
+ *   verbatimVerified bool    quote is ONLY rendered when this is true (trust gate)
+ *   documentId       string  the source doc → drives the source badge + jump
+ *   sourceFallback   string  plain text shown when documentId has no doc metadata
+ *                            AND opts.jump is false (e.g. "from EMAIL-123")
+ *   coSign           {captureCount, status}  "N captures corroborate" (≥2 only)
+ *   copy             {markdown, html}  when present, a copy-to-clipboard action
+ *                            (the share artifact) is added; reuses copy_receipts
+ *
+ * `opts`:
+ *   compact       bool    dense variant (data-compact="true")
+ *   jump          bool    default true; false ⇒ no clickable source (fallback text)
+ *   quoteWrap     bool    render the quote wrapped in curly quotes (legacy look)
+ *   variant       string  surface class hook appended to the root (parity only)
+ *   authoredSource {docId, primaryText, extraTexts, label, iconKey}  the
+ *                          question-card "View in your notes" jump variant:
+ *                          opens the authored doc highlighting every item at once
+ *   onCopyToast   fn      optional callback after a successful copy (toast)
+ *
+ * Returns a single <div class="receipt …"> element — the SAME tree everywhere.
+ * Renders only from data already in hand (no blocking work on the paint path).
+ * ───────────────────────────────────────────────────────────────────────── */
+function renderReceipt(receipt, opts) {
+  const r = receipt || {};
+  const o = opts || {};
+  const jump = o.jump !== false;
+
+  const root = document.createElement("div");
+  root.className = "receipt";
+  if (o.variant) root.classList.add(o.variant);
+  if (o.compact) root.dataset.compact = "true";
+
+  // 1. Verbatim quote — ONLY when verified (the trust property). Border-left
+  //    inset, italic. quoteWrap adds the curly quotes some surfaces show.
+  if (r.verbatimVerified === true && r.verbatim) {
+    const quote = document.createElement("blockquote");
+    quote.className = "receipt-quote";
+    quote.textContent = o.quoteWrap ? `“${r.verbatim}”` : r.verbatim;
+    root.appendChild(quote);
+  }
+
+  // 2. Co-sign — count-only corroboration ("N captures corroborate"), rendered
+  //    ONLY at captureCount ≥ 2, honoring confirmed/proposed. Never the emails —
+  //    count only.
+  const cs = r.coSign;
+  if (cs && typeof cs.captureCount === "number" && cs.captureCount >= 2) {
+    const chip = document.createElement("span");
+    chip.className = "receipt-cosign";
+    chip.dataset.status = cs.status === "confirmed" ? "confirmed" : "proposed";
+    chip.textContent = `✓ ${cs.captureCount} captures corroborate`;
+    root.appendChild(chip);
+  }
+
+  // 3. Source + jump-to-source. The authored-source variant (question card) opens
+  //    the authored doc highlighting every item at once; the standard variant
+  //    reuses renderSourceBadge (source-type chip) → opens the source pane beside
+  //    the view. When jump is off, or no doc metadata is available, we fall back
+  //    to a plain non-clickable source line.
+  const footer = document.createElement("div");
+  footer.className = "receipt-source";
+  let sourced = false;
+  if (jump && o.authoredSource && o.authoredSource.docId) {
+    const a = o.authoredSource;
+    const doc = _docsById ? _docsById.get(a.docId) : null;
+    const iconKey = a.iconKey || (doc ? sourceFromDoc(doc).iconKey : "doc");
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "source-badge";
+    chip.title = "Open your authored list beside this" + (a.detail ? " — " + a.detail : a.label ? " — " + a.label : "");
+    const icon = document.createElement("span");
+    icon.className = "source-badge-icon";
+    icon.innerHTML = SOURCE_ICONS[iconKey] || SOURCE_ICONS.doc; // constant SVG
+    chip.appendChild(icon);
+    const lab = document.createElement("span");
+    lab.className = "source-badge-label";
+    lab.textContent = a.label || "View in your notes";
+    chip.appendChild(lab);
+    if (a.detail) {
+      const det = document.createElement("span");
+      det.className = "source-badge-detail";
+      det.textContent = "· " + a.detail;
+      chip.appendChild(det);
+    }
+    const extras = Array.isArray(a.extraTexts) ? a.extraTexts : [];
+    chip.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSourcePanel(a.docId, a.primaryText, extras, { authoredOnly: true });
+    });
+    footer.appendChild(chip);
+    sourced = true;
+  } else if (jump && r.documentId) {
+    const chip = renderSourceBadge(r.documentId, r.verbatim);
+    if (chip) {
+      footer.appendChild(chip);
+      sourced = true;
+    } else {
+      // No doc metadata loaded yet: a plain "source ↗" button that still opens it.
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "receipt-source-link";
+      btn.textContent = "source ↗";
+      btn.addEventListener("click", () => openSourcePanel(r.documentId, r.verbatim));
+      footer.appendChild(btn);
+      sourced = true;
+    }
+  } else if (r.sourceFallback) {
+    // Non-clickable provenance line (used where the source pane isn't wired).
+    const p = document.createElement("span");
+    p.className = "receipt-source-text";
+    p.textContent = r.sourceFallback;
+    footer.appendChild(p);
+    sourced = true;
+  }
+
+  // 4. The share artifact — copy the "compiled from N captures" block. Reuses the
+  //    existing deterministic serializers (buildReceiptsMarkdown/Html) via the
+  //    caller-supplied {markdown, html}; we do NOT re-serialize here.
+  if (r.copy && (r.copy.markdown || r.copy.html)) {
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "receipt-copy";
+    copyBtn.textContent = "Copy receipt";
+    copyBtn.title = "Copy this as a paste-able, source-cited block";
+    copyBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await tauri.core.invoke("copy_receipts", {
+          html: r.copy.html || "",
+          markdown: r.copy.markdown || "",
+        });
+        const original = copyBtn.textContent;
+        copyBtn.textContent = "Copied ✓";
+        copyBtn.disabled = true;
+        setTimeout(() => {
+          copyBtn.textContent = original;
+          copyBtn.disabled = false;
+        }, 1600);
+        if (typeof o.onCopyToast === "function") o.onCopyToast();
+      } catch (err) {
+        console.warn("[main] copy_receipts failed:", err);
+        const original = copyBtn.textContent;
+        copyBtn.textContent = "Copy failed";
+        setTimeout(() => { copyBtn.textContent = original; }, 1600);
+      }
+    });
+    footer.appendChild(copyBtn);
+    sourced = true;
+  }
+
+  if (sourced) root.appendChild(footer);
+  return root;
+}
+
 /** Build the source-doc deep link for a record, reusing the tidbit scheme.
  *  Returns "" when no base URL is configured. */
 function receiptsDeepLink(baseUrl, documentId) {
@@ -9739,6 +10576,34 @@ function renderReceiptsChain(items, edges, baseUrl) {
   const chainEl = document.getElementById("receipts-chain");
   if (!chainEl) return;
   chainEl.innerHTML = "";
+
+  // Share artifact — the "compiled from N captures" copy action, on the ONE
+  // receipt component. Reuses the deterministic buildReceiptsMarkdown/Html
+  // serializers (NOT a second serializer); the same copy_receipts IPC the
+  // view's toolbar button uses. Rendered once at the head of the chain so any
+  // receipted set is one click from a paste-able, source-cited block.
+  if (currentReceipts && Array.isArray(currentReceipts.items) && currentReceipts.items.length) {
+    const { entity, items: cItems, edges: cEdges, baseUrl: cUrl } = currentReceipts;
+    chainEl.appendChild(
+      renderReceipt(
+        {
+          copy: {
+            markdown: buildReceiptsMarkdown(entity, cItems, cEdges, cUrl),
+            html: buildReceiptsHtml(entity, cItems, cEdges, cUrl),
+          },
+        },
+        {
+          variant: "receipt-share",
+          onCopyToast: () =>
+            showToast({
+              kind: "success",
+              title: "Receipt copied",
+              body: `Compiled from ${cItems.length} capture${cItems.length === 1 ? "" : "s"}.`,
+            }),
+        },
+      ),
+    );
+  }
 
   const edgesByRecord = new Map();
   for (const e of Array.isArray(edges) ? edges : []) {
@@ -9801,16 +10666,8 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
   title.textContent = rec.summary || "";
   body.appendChild(title);
 
-  // Verbatim quote — ONLY when verified (the trust property). Border-left only,
-  // no box.
-  if (rec.verbatimVerified === true && rec.verbatim) {
-    const quote = document.createElement("blockquote");
-    quote.className = "rec-quote";
-    quote.textContent = rec.verbatim;
-    body.appendChild(quote);
-  }
-
-  // Edge chips — supersession/conflict (red family), resolution (green).
+  // Edge chips — supersession/conflict (red family), resolution (green). These
+  // are relationship annotations, NOT evidence, so they stay bespoke here.
   for (const e of recEdges) {
     const phrasing = edgePhrasing(e, rec.recordId);
     if (!phrasing) continue;
@@ -9821,34 +10678,21 @@ function renderReceiptNode(rec, recState, recEdges, baseUrl, coSign) {
     body.appendChild(chipEl);
   }
 
-  // WP-N1 #7 — count-only co-sign ("N captures corroborate"): independent
-  // capture corroboration, green-family chip. confirmed = solid, proposed =
-  // dimmer. Server emits it only at captureCount ≥ 2; absent ⇒ no chip. NEVER
-  // the corroborating emails — count only.
-  if (coSign && typeof coSign.captureCount === "number" && coSign.captureCount >= 2) {
-    const cs = document.createElement("span");
-    cs.className = "rec-cosign";
-    cs.dataset.status = coSign.status === "confirmed" ? "confirmed" : "proposed";
-    cs.textContent = `✓ ${coSign.captureCount} captures corroborate`;
-    body.appendChild(cs);
-  }
-
-  // Source — opens the captured document in the in-app reader, BESIDE the chain
-  // (no browser round-trip). The source-type badge is the affordance when doc
-  // metadata is loaded; otherwise a plain "source ↗" button that still opens it.
-  if (rec.documentId) {
-    const chip = renderSourceBadge(rec.documentId, rec.verbatim);
-    if (chip) {
-      body.appendChild(chip);
-    } else {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "rec-source";
-      btn.textContent = "source ↗";
-      btn.addEventListener("click", () => openSourcePanel(rec.documentId, rec.verbatim));
-      body.appendChild(btn);
-    }
-  }
+  // Evidence — verbatim quote (verified-only), the count-only co-sign, and the
+  // jump-to-source, all via the ONE receipt component. This is the richest call
+  // site (it carries the co-sign) and the reference the component was distilled
+  // from; it now renders through it like every other surface.
+  body.appendChild(
+    renderReceipt(
+      {
+        verbatim: rec.verbatim,
+        verbatimVerified: rec.verbatimVerified,
+        documentId: rec.documentId,
+        coSign,
+      },
+      { variant: "receipt-chain" },
+    ),
+  );
 
   node.appendChild(body);
   return node;
@@ -10400,12 +11244,51 @@ async function handlePlaudSyncNow() {
 // The one-line question shown at the top of every proxy card, by kind. Matches
 // the brief's card-anatomy copy.
 const PROXY_KIND_QUESTIONS = {
-  merge: "Same commitment — merge?",
-  close: "Looks closed — mark resolved?",
-  combine: "Same initiative — combine?",
-  chase: "Approve this chase note?",
-  escalate: "Re-promised repeatedly — escalate?",
+  merge: "These look like the same thing — merge them?",
+  close: "A commitment looks done — close it?",
+  combine: "These look like the same initiative — combine them?",
+  chase: "This has gone quiet — send a nudge?",
+  escalate: "This keeps getting re-promised — escalate it?",
 };
+
+// Verdict → plain ask, consulted when `kind` doesn't map (dual-schema robustness).
+// The fleet's verdict is the more reliable signal for a couple of legacy items.
+const PROXY_VERDICT_QUESTIONS = {
+  DUPLICATE: "These look like the same thing — merge them?",
+  RESOLVED_EVIDENCE: "A commitment looks done — close it?",
+  RESTATEMENT: "This keeps getting re-promised — nudge it?",
+  RECURRING: "This keeps recurring — is it handled?",
+};
+
+/**
+ * Derive the plain, human-facing card content from a proxy-queue item, tolerating
+ * BOTH schemas (§ WP-R2 amendment item 6):
+ *   · NEW shape (post-E5 cascade §2.11): the item carries a clean `ask` + `why`
+ *     and a separate `debugTrace`. Detect by presence of `ask` OR `debugTrace`;
+ *     when present, display them directly and route `debugTrace` into details.
+ *   · LEGACY shape (today's fleet output / the fixture): jargon lives in
+ *     `evidence.why`, plus `evidence.verdict` / `evidence.routes` / `evidence.cosine`
+ *     and a bare `kind`. We DERIVE the plain ask from kind (falling back to verdict),
+ *     surface the quotes + plain-language confidence, and tuck why/verdict/routes/cos
+ *     into the collapsed "details" affordance.
+ * Returns { ask, isNewShape, debugTrace } — the caller reads why/verdict/etc off the
+ * item for the details panel.
+ */
+function deriveProxyAsk(item) {
+  const ev = (item && item.evidence) || {};
+  const isNewShape =
+    typeof item.ask === "string" && item.ask.trim() !== "" ||
+    item.debugTrace != null;
+  if (isNewShape && typeof item.ask === "string" && item.ask.trim()) {
+    return { ask: item.ask.trim(), isNewShape: true, debugTrace: item.debugTrace };
+  }
+  // Legacy derivation: kind first, verdict as a fallback, generic last resort.
+  const ask =
+    PROXY_KIND_QUESTIONS[item.kind] ||
+    PROXY_VERDICT_QUESTIONS[ev.verdict] ||
+    "Take a look at this?";
+  return { ask, isNewShape: false, debugTrace: item.debugTrace };
+}
 
 // Human labels for the routing-verdict chip.
 const PROXY_VERDICT_LABELS = {
@@ -10546,81 +11429,127 @@ function renderProxyCard(item) {
   card.dataset.kind = item.kind || "";
   card.dataset.id = item.id || "";
 
-  // Header: kind chip + the one-line question (the card's ask).
-  const header = document.createElement("div");
-  header.className = "record-header proxy-card-header";
-  const chip = document.createElement("span");
-  chip.className = "record-chip proxy-kind-chip";
-  chip.dataset.kind = item.kind || "";
-  chip.textContent = prettySlug(item.kind || "");
-  header.appendChild(chip);
-  if (typeof item.confidence === "number") {
-    const conf = document.createElement("span");
-    conf.className = "proxy-confidence";
-    conf.textContent = Math.round(item.confidence * 100) + "% agreement";
-    header.appendChild(conf);
-  }
-  card.appendChild(header);
+  // Card anatomy (§ WP-R2 amendment item 6), in this order:
+  //   1. The ask first — a plain question (derived; dual-schema tolerant).
+  //   2. The two dated quotes — the primary content a human judges (receipts).
+  //   3. Plain-language confidence — "78% confident" (not "agreement/adjudicate-band").
+  //   4. Everything mechanical behind a collapsed "Details" affordance.
+  const derived = deriveProxyAsk(item);
 
+  // ── 1. The ask, first ──────────────────────────────────────────────────────
   const question = document.createElement("p");
   question.className = "proxy-question";
-  question.textContent =
-    PROXY_KIND_QUESTIONS[item.kind] || "Review this proposal?";
+  question.textContent = derived.ask;
   card.appendChild(question);
 
-  // The rationale ("why") — the fleet's one-line reasoning.
-  if (ev.why) {
-    const why = document.createElement("p");
-    why.className = "record-summary proxy-why";
-    why.textContent = ev.why;
-    card.appendChild(why);
-  }
-
-  // Evidence panel: verbatims, then a meta row (dates · owners · cosine ·
-  // routes · verdict). Reuses the record-quote chrome for verbatims.
+  // ── 2. The dated quotes — the decision content, via the ONE receipt component.
+  //    Proxy verbatims are fleet-surfaced evidence (already citation-scoped), so
+  //    they render as quotes (verified); the source pane isn't wired in the proxy
+  //    queue, so jump is off. Each quote is paired with its date when available.
   const evidence = document.createElement("div");
   evidence.className = "proxy-evidence";
-
   const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
-  for (const v of verbatims) {
+  const evDates = Array.isArray(ev.dates) ? ev.dates : [];
+  for (let i = 0; i < verbatims.length; i++) {
+    const v = verbatims[i];
     if (!v) continue;
-    const quote = document.createElement("blockquote");
-    quote.className = "record-quote proxy-verbatim";
-    quote.textContent = v;
-    evidence.appendChild(quote);
-  }
-
-  const metaRow = document.createElement("p");
-  metaRow.className = "record-meta proxy-evidence-meta";
-  const segs = [];
-  const dates = Array.isArray(ev.dates) ? ev.dates.filter(Boolean) : [];
-  if (dates.length) segs.push(dates.map((d) => String(d).slice(0, 10)).join(" → "));
-  const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
-  if (owners.length) segs.push(owners.map(prettySlug).join(", "));
-  if (typeof ev.cosine === "number") segs.push("cos " + ev.cosine.toFixed(2));
-  metaRow.textContent = segs.join(" · ");
-  if (metaRow.textContent) evidence.appendChild(metaRow);
-
-  // Routing verdicts + routes as chips.
-  const routes = Array.isArray(ev.routes) ? ev.routes.filter(Boolean) : [];
-  if (routes.length || ev.verdict) {
-    const chips = document.createElement("div");
-    chips.className = "proxy-route-chips";
-    if (ev.verdict) {
-      const vChip = document.createElement("span");
-      vChip.className = "proxy-route-chip proxy-verdict-chip";
-      vChip.textContent = PROXY_VERDICT_LABELS[ev.verdict] || String(ev.verdict);
-      chips.appendChild(vChip);
+    const receipt = renderReceipt(
+      { verbatim: v, verbatimVerified: true },
+      { jump: false, variant: "receipt-proxy" },
+    );
+    const d = evDates[i];
+    if (d) {
+      const dateEl = document.createElement("span");
+      dateEl.className = "proxy-quote-date";
+      dateEl.textContent = String(d).slice(0, 10);
+      receipt.appendChild(dateEl);
     }
-    for (const r of routes) {
-      const rChip = document.createElement("span");
-      rChip.className = "proxy-route-chip";
-      rChip.textContent = r;
-      chips.appendChild(rChip);
-    }
-    evidence.appendChild(chips);
+    evidence.appendChild(receipt);
   }
   card.appendChild(evidence);
+
+  // ── 3. Plain-language confidence ───────────────────────────────────────────
+  if (typeof item.confidence === "number") {
+    const conf = document.createElement("p");
+    conf.className = "proxy-confidence";
+    conf.textContent = Math.round(item.confidence * 100) + "% confident";
+    card.appendChild(conf);
+  }
+
+  // ── 4. Details — everything mechanical, collapsed by default. Legacy jargon
+  //    (why / verdict / routes / cosine / owners) OR the new-shape debugTrace all
+  //    live here so the card face stays plain. Only rendered when there's content.
+  const detailBits = [];
+  // New-shape debugTrace routes here verbatim (string or JSON-stringified object).
+  if (derived.debugTrace != null) {
+    const traceText =
+      typeof derived.debugTrace === "string"
+        ? derived.debugTrace
+        : JSON.stringify(derived.debugTrace, null, 2);
+    if (traceText && traceText.trim()) detailBits.push({ type: "trace", text: traceText });
+  }
+  // Legacy mechanical fields. On the new shape these are typically absent.
+  if (ev.why) detailBits.push({ type: "why", text: ev.why });
+  const metaSegs = [];
+  const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
+  if (owners.length) metaSegs.push(owners.map(prettySlug).join(", "));
+  if (typeof ev.cosine === "number") metaSegs.push("cos " + ev.cosine.toFixed(2));
+  if (metaSegs.length) detailBits.push({ type: "meta", text: metaSegs.join(" · ") });
+  const routes = Array.isArray(ev.routes) ? ev.routes.filter(Boolean) : [];
+  const hasChips = routes.length || ev.verdict;
+
+  if (detailBits.length || hasChips) {
+    const details = document.createElement("details");
+    details.className = "proxy-details";
+    const summary = document.createElement("summary");
+    summary.className = "proxy-details-summary";
+    summary.textContent = "Details";
+    details.appendChild(summary);
+
+    const body = document.createElement("div");
+    body.className = "proxy-details-body";
+    for (const bit of detailBits) {
+      const el = document.createElement(bit.type === "trace" ? "pre" : "p");
+      el.className =
+        bit.type === "why"
+          ? "proxy-why"
+          : bit.type === "trace"
+            ? "proxy-debug-trace"
+            : "proxy-evidence-meta";
+      el.textContent = bit.text;
+      body.appendChild(el);
+    }
+    // Routing verdict + routes as chips (mechanical vocabulary).
+    if (hasChips) {
+      const chips = document.createElement("div");
+      chips.className = "proxy-route-chips";
+      if (ev.verdict) {
+        const vChip = document.createElement("span");
+        vChip.className = "proxy-route-chip proxy-verdict-chip";
+        vChip.textContent = PROXY_VERDICT_LABELS[ev.verdict] || String(ev.verdict);
+        chips.appendChild(vChip);
+      }
+      for (const r of routes) {
+        const rChip = document.createElement("span");
+        rChip.className = "proxy-route-chip";
+        rChip.textContent = r;
+        chips.appendChild(rChip);
+      }
+      body.appendChild(chips);
+    }
+
+    // WP-R3 item 5 — open the underlying record's SOURCE in the right-hand pane,
+    // exactly like the Log. Resolve each evidence.recordId → documentId (the
+    // record→doc map, from the decision log), then let R1's existing jump
+    // (renderSourceBadge → openSourcePanel) open the pane. FULL reuse — no new
+    // pane, no new endpoint. Graceful: the FIXTURE's synthetic recordIds won't be
+    // in the corpus log, so they resolve to nothing and NO affordance renders (no
+    // dead link). Async-fills when the maps land; if already cached, fills now.
+    mountProxySourceAffordance(body, ev);
+
+    details.appendChild(body);
+    card.appendChild(details);
+  }
 
   // Actions footer — the SAME `.record-actions` row + gesture affordances the
   // record cards use. Confirm (proxy-specific ratify) + Dismiss (reuses the
@@ -10655,6 +11584,41 @@ function renderProxyCard(item) {
 
   card.appendChild(actions);
   return card;
+}
+
+// WP-R3 item 5 — resolve a proxy item's evidence.recordIds to their source docs
+// and append a "source" affordance (reusing renderSourceBadge → openSourcePanel,
+// the Log's mechanism) into `container`. Async: both the record→doc and doc maps
+// must be loaded so the badge can name the source type + open the pane. Renders
+// NOTHING when nothing resolves — the fixture's synthetic recordIds (rec-4821 …)
+// aren't in the corpus log, so they yield no badge (no broken/dead link). One
+// badge per distinct resolvable document (deduped).
+async function mountProxySourceAffordance(container, ev) {
+  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+  if (!recordIds.length) return;
+  // Both maps are needed: recordId→documentId to resolve, and _docsById (via
+  // loadDocsMap) so renderSourceBadge can render + open. Best-effort; either
+  // failing just leaves the map empty → no affordance.
+  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
+  const seen = new Set();
+  const badges = [];
+  for (const rid of recordIds) {
+    const docId = recDoc.get(rid);
+    if (!docId || seen.has(docId)) continue;
+    // renderSourceBadge returns null when the doc isn't in _docsById (no metadata) —
+    // so an unresolvable/orphan doc adds nothing. This is the graceful path.
+    const chip = renderSourceBadge(docId, null);
+    if (chip) { seen.add(docId); badges.push(chip); }
+  }
+  if (!badges.length) return; // nothing resolved — no dead link
+  const row = document.createElement("div");
+  row.className = "proxy-source-row";
+  const lbl = document.createElement("span");
+  lbl.className = "proxy-source-label";
+  lbl.textContent = badges.length === 1 ? "Source" : "Sources";
+  row.appendChild(lbl);
+  for (const b of badges) row.appendChild(b);
+  container.appendChild(row);
 }
 
 /**
@@ -12313,6 +13277,9 @@ window.addEventListener("DOMContentLoaded", () => {
   if (loginResendBtn) loginResendBtn.addEventListener("click", handleLoginResend);
   const loginChangeEmailBtn = document.getElementById("btn-login-change-email");
   if (loginChangeEmailBtn) loginChangeEmailBtn.addEventListener("click", handleLoginChangeEmail);
+  // WP-T2b — "sign in with a different account" from the Settings Account block.
+  const settingsSignInBtn = document.getElementById("btn-settings-signin");
+  if (settingsSignInBtn) settingsSignInBtn.addEventListener("click", handleSettingsSignIn);
 
   // Wizard
   document

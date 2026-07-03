@@ -243,6 +243,27 @@
             <section class="settings-panel is-active" data-panel="connection">
               <h2 class="settings-panel-title">Connection</h2>
 
+              <!-- ── Account (WP-T2b) ──
+                   Signed-in identity + a way to switch accounts. Hidden by
+                   default; enterStandaloneConfigure() reveals + fills it via
+                   renderSettingsIdentity() (GET /api/whoami). Stays hidden in
+                   the first-run wizard, where the user hasn't signed in yet. -->
+              <div id="settings-account" hidden>
+                <h3 class="settings-subhead">Account</h3>
+                <p class="connections-card-status" id="settings-account-email">
+                  Signed in
+                </p>
+                <div class="connections-card-actions">
+                  <button type="button" id="btn-settings-signin" class="btn btn-secondary">
+                    Sign in with a different account
+                  </button>
+                </div>
+                <span class="field-help">
+                  Sending a new sign-in link swaps the identity this app captures
+                  and shares as. Your workspace connection below is unaffected.
+                </span>
+              </div>
+
               <label class="field">
                 <span class="field-label">Apolla base URL</span>
                 <input
@@ -594,21 +615,77 @@
            all projects, on demand. -->
       <div class="sop-panel" id="log-sop-panel" hidden></div>
 
-      <div class="log-states-strip" id="log-states-strip" hidden>
-        <!-- open / resolved / superseded count pills rendered by main.js -->
-      </div>
+      <!-- ══════════════════════════════════════════════════════════════════
+           WP-R2 Today rebuild — three stacked sections (paint order) + a tray.
+           enterLogView paints this skeleton synchronously; every data source is
+           fire-and-forget off the critical path (< 1s cold first paint, §2.6) and
+           re-renders only its own section when it lands. Defensive: an empty or
+           errored payload degrades to a calm empty/hidden state, never a blank
+           screen or thrown exception.
+           ══════════════════════════════════════════════════════════════════ -->
 
-      <!-- WP-WorkForest-Native-SoP (UI-1 + UI-6) — the Work-Forest-native State
-           of Play narrative at the top of Today, above the Focus rail. A small
-           Person / Forest lens toggle picks the altitude: Person = "your jobs
-           today" (own vs touch), Forest = the cross-frame rollup. Populated from
-           GET /api/state-of-play via fetch_sop; additive + silent (empty node
-           when the endpoint is unavailable). -->
-      <div class="sop-lens-bar" id="log-sop-lens" hidden>
-        <button type="button" class="sop-lens-btn" data-lens="person" aria-pressed="true">Your jobs</button>
-        <button type="button" class="sop-lens-btn" data-lens="forest" aria-pressed="false">All work</button>
-      </div>
-      <div class="sop-lens-panel" id="log-sop-lens-panel"></div>
+      <!-- ① SoP header — the person-lens State-of-Play narrative. Skeleton paints
+           immediately; the prose streams in when fetch_sop resolves (person lens,
+           forest fallback when there's no viewer identity). Claims render receipted
+           via renderReceipt; the endpoint governs register (no invented facts). -->
+      <section class="today-sop" id="today-sop-section">
+        <!-- WP-WorkForest-Native-SoP (UI-1 + UI-6) — Person / Forest lens toggle.
+             Hidden until the SoP resolves with prose (loadPersonLensSoP). -->
+        <div class="sop-lens-bar" id="log-sop-lens" hidden>
+          <button type="button" class="sop-lens-btn" data-lens="person" aria-pressed="true">Your jobs</button>
+          <button type="button" class="sop-lens-btn" data-lens="forest" aria-pressed="false">All work</button>
+        </div>
+        <div class="sop-lens-panel" id="log-sop-lens-panel">
+          <div class="sop-status today-sop-skeleton">Composing your state of play…</div>
+        </div>
+      </section>
+
+      <!-- ② Needs you — the ratification queue, ONE card family (§2.3). Filled by
+           three async sources, each appending its cards as it arrives:
+             · proxy-queue "Wants your eye" cards (renderProxyCard / fetch_proxy_queue)
+             · the Question-Engine pull card / affordance (buildQuestionSection)
+             · vigilance-void chase cards (renderVoidCard / fetch_vigilance_voids)
+           Confirm/dismiss/undo (or snooze) live on each card via their existing
+           handlers. Skeleton until the first source lands; empty state when all
+           three resolve to nothing. -->
+      <section class="today-queue" id="today-queue-section">
+        <div class="today-section-head">
+          <h2 class="today-section-title">Needs you</h2>
+          <span class="today-section-count" id="today-queue-count"></span>
+        </div>
+        <!-- The Question-Engine pull affordance / card (its own slot so it isn't
+             cleared when the proxy/void sources re-render). -->
+        <div id="today-question-slot"></div>
+        <div class="today-queue-list" id="today-queue-list"></div>
+        <p class="today-queue-skeleton" id="today-queue-skeleton">Checking what's waiting on you…</p>
+        <p class="log-empty" id="today-queue-empty" hidden>Nothing's waiting on you right now.</p>
+      </section>
+
+      <!-- ③ Filed confidently — the proxy queue's SECOND pile: high-confidence
+           auto-filed items, collapsed + skimmable, undo per row
+           (renderProxyFiledRow). Hidden until the proxy source lands with any. -->
+      <section class="today-filed proxy-pile" id="today-filed-section" hidden>
+        <button
+          type="button"
+          class="today-section-head proxy-pile-heading proxy-pile-filed-toggle"
+          id="today-filed-toggle"
+          aria-expanded="false"
+        >
+          <span class="proxy-pile-chevron" aria-hidden="true">▸</span>
+          <span id="today-filed-heading-text">Filed confidently</span>
+        </button>
+        <div class="proxy-filed-rows" id="today-filed-list" hidden></div>
+      </section>
+
+      <!-- Awaiting send / Sent tray — the Outbox demotion. Appears ONLY when there
+           are staged drafts (empty ⇒ hidden). Sourced from fetch_outbox. -->
+      <section class="today-outbox-tray" id="today-outbox-tray" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title today-tray-title">Awaiting send</h2>
+          <span class="today-section-count" id="today-outbox-count"></span>
+        </div>
+        <div class="today-outbox-list" id="today-outbox-list"></div>
+      </section>
 
       <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
            from GET /api/decision-log/priority (loaded on Today, independent of
@@ -622,8 +699,13 @@
            Additive + silent: empty (no node) when grouped data is absent. -->
       <div id="log-stalled-sections"></div>
 
+      <div class="log-states-strip" id="log-states-strip" hidden>
+        <!-- open / resolved / superseded count pills rendered by main.js -->
+      </div>
+
       <!-- "Everything else" — the prior Today content (needs-attention, conflicts,
-           workload), grouped under one collapsible. -->
+           workload), grouped under one collapsible. Populated by the decision-log
+           source when it lands (fire-and-forget). -->
       <section class="log-collapse" id="log-everything-section" hidden>
         <button type="button" class="log-collapse-head" id="log-everything-toggle" aria-expanded="true">
           <span class="log-collapse-caret">▾</span>

@@ -6317,6 +6317,16 @@ fn build_widget_menu(
         true,
         None::<&str>,
     )?;
+    // WP-R3 item 4 — the retired-edges "Connections…" tray item is intentionally
+    // NOT built. It once opened the cross-record edges view via
+    // widget_expand("edges"); that destination was retired in WP-R0
+    // (VIEW_VISIBILITY.edges = false, gated by isDestVisible in main.js), so the
+    // tray must carry no entry point to it either. Consistent with the other
+    // retired entry points, this is a hide-by-omission: no MenuItem is added and
+    // no MENU_EDGES / handler arm exists. To recover it, re-add a
+    // `MenuItem::with_id(app, MENU_EDGES, "Connections…", …)` here plus a
+    // `MENU_EDGES => widget_expand(…, Some("edges".into()))` arm in the menu event
+    // handler, and flip VIEW_VISIBILITY.edges back on in main.js.
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;

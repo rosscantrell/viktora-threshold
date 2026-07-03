@@ -2235,6 +2235,109 @@ code {
   border-radius: var(--glass-radius-md);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-R2 Today rebuild — SoP header · Needs-you queue · Filed confidently · tray.
+   All dark/glassy tokens only (§2.5); no new colours/fonts.
+   ══════════════════════════════════════════════════════════════════════════ */
+.today-sop,
+.today-queue,
+.today-filed,
+.today-outbox-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+/* WP-R2 amendment item 5 — the tray's `display: flex` (a class rule) outranks the
+   UA `[hidden]{display:none}`, so an empty, `hidden` tray (label included) still
+   painted. Restore the hide: when the tray carries [hidden], nothing renders. */
+.today-outbox-tray[hidden] {
+  display: none;
+}
+
+/* Shared section header (title + count). Matches .log-section-title register. */
+.today-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.today-section-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--glass-text-faint);
+  margin: 0;
+}
+
+.today-section-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--glass-text-dim);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  min-width: 18px;
+  text-align: center;
+}
+.today-section-count:empty { display: none; }
+
+/* ① SoP header — the streamed narrative + skeleton resting state. */
+.today-sop-skeleton {
+  color: var(--glass-text-dim);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ② Needs-you queue — a single stacked card family (proxy / question / void). */
+.today-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.today-queue-skeleton {
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--glass-text-dim);
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+}
+
+/* ③ Filed confidently — collapsed pile header; reuses the proxy-pile chrome. */
+.today-filed .today-section-head {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+}
+.today-filed .proxy-pile-chevron {
+  color: var(--glass-text-dim);
+  font-size: 10px;
+}
+
+/* Awaiting-send / Sent tray — a quiet demoted strip; hidden when empty. */
+.today-outbox-tray {
+  padding: 10px 12px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+}
+.today-tray-title { color: var(--glass-text-dim); }
+.today-outbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 /* Contradictions — compact inline warning chips, not panels. */
 .log-contradictions-list {
   display: flex;
@@ -2749,6 +2852,122 @@ code {
   border-color: rgba(93, 202, 165, 0.25);
   color: rgba(93, 202, 165, 0.7);
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * WP-R1 — the ONE receipt component (renderReceipt). Every evidence render on
+ * every surface uses this element tree; surfaces vary by the .receipt-<name>
+ * variant class + [data-compact], NEVER a forked structure. Token-based only.
+ * ───────────────────────────────────────────────────────────────────────── */
+.receipt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* Verbatim — inset, italic, reads unmistakably as a source quote. */
+.receipt-quote {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--glass-text-dim);
+  background: rgba(0, 0, 0, 0.22);
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
+  word-break: break-word;
+}
+
+/* Count-only co-sign ("N captures corroborate") — green-family chip; proposed
+ * is dimmer than confirmed. */
+.receipt-cosign {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: rgba(93, 202, 165, 0.12);
+  border: 1px solid rgba(93, 202, 165, 0.4);
+  color: #5dcaa5;
+}
+.receipt-cosign[data-status="proposed"] {
+  background: rgba(93, 202, 165, 0.08);
+  border-color: rgba(93, 202, 165, 0.25);
+  color: rgba(93, 202, 165, 0.7);
+}
+
+/* Source/jump/copy footer — a wrap-able row of affordances (source badge,
+ * plain source link/text, copy). The source badge itself is styled by the
+ * shared .source-badge rules. */
+.receipt-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.receipt-source-link {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  color: #7fb3e8;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.receipt-source-link:hover { text-decoration: underline; }
+.receipt-source-text {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+
+/* The share artifact — "Copy receipt" (compiled-from-N-captures). */
+.receipt-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  background: var(--glass-surface, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--glass-border);
+  border-radius: 7px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.receipt-copy:hover { border-color: var(--accent-ring, rgba(127,179,232,0.5)); color: var(--text-primary, #e8eaed); }
+.receipt-copy:disabled { opacity: 0.7; cursor: default; }
+
+/* ── Surface variants: class/attr toggles over the SAME tree ── */
+/* Receipts chain: the co-sign/source annotations hug their content. */
+.receipt.receipt-chain { gap: 6px; }
+.receipt.receipt-chain .receipt-quote {
+  font-size: 13px;
+  color: #e8eaed;
+  background: none;
+  padding: 0 0 0 10px;
+  border-left: 2px solid rgba(255, 255, 255, 0.18);
+  border-radius: 0;
+}
+/* Arrived receipt: tighter, dimmer — the void-flow look. */
+.receipt.receipt-arrived .receipt-quote {
+  padding: 0 0 0 10px;
+  font-size: 12px;
+  background: none;
+  border-left: 2px solid var(--glass-border);
+  border-radius: 0;
+  line-height: 1.4;
+}
+.receipt.receipt-arrived { margin-top: 2px; }
+/* Stalled drawer: same inset look as the record cards. */
+.receipt.receipt-stalled .receipt-quote { font-size: 12px; }
+/* Proxy queue: verbatims sit inside the .proxy-evidence inset panel. */
+.receipt.receipt-proxy .receipt-quote { font-size: 12.5px; }
+/* Question card: source-only (authored jump). */
+.receipt.receipt-question { gap: 0; }
 
 /* #8 Mine / Everyone — ghost segmented control in the Today header row. */
 .log-header-actions {
@@ -4549,6 +4768,33 @@ button.record-action-badge {
   line-height: 1.4;
   color: var(--glass-text);
 }
+/* WP-R3 item 3 — status pill on the other end of the dependency, mirroring the
+ * record card's lifecycle pill (glass.css .record-state-pill) so the popover
+ * shows whether the linked record is still standing or already closed. */
+.linked-rec-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-faint);
+}
+.linked-rec-state[data-state="resolved"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+.linked-rec-state[data-state="superseded"] { text-decoration: line-through; }
+/* The receipted evidence inside a linked-record row sits just under the summary,
+ * a hair inset. renderReceipt owns the quote/source-badge chrome; this only
+ * spaces it within the popover. */
+.linked-rec .receipt.receipt-linked { margin-top: 7px; }
 .linked-rec-jump {
   display: inline-block;
   margin-top: 8px;
@@ -5130,11 +5376,60 @@ button.rec-source {
 .proxy-card-header {
   justify-content: flex-start;
 }
+/* Plain-language confidence line ("78% confident") — sits under the quotes,
+   ahead of the collapsed Details. A quiet, secondary line (not a warning). */
 .proxy-confidence {
-  margin-left: auto;
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--warn-text);
+  color: var(--text-secondary);
+  margin: 0;
+}
+/* Dated quote — the small date paired with each verbatim receipt. */
+.proxy-quote-date {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+/* Details — everything mechanical, collapsed by default. */
+.proxy-details {
+  margin: 0;
+}
+.proxy-details-summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  list-style: none;
+  user-select: none;
+}
+.proxy-details-summary::-webkit-details-marker {
+  display: none;
+}
+.proxy-details-summary::before {
+  content: "▸ ";
+  font-size: 10px;
+}
+.proxy-details[open] .proxy-details-summary::before {
+  content: "▾ ";
+}
+.proxy-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--glass-radius-sm);
+  background: var(--surface-inset);
+  border: 1px solid var(--glass-border);
+}
+.proxy-debug-trace {
+  margin: 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-x: auto;
 }
 .proxy-question {
   font-size: 15px;
@@ -5194,6 +5489,23 @@ button.rec-source {
   background: var(--accent-soft);
   color: var(--accent-hover);
   border-color: var(--accent-ring);
+}
+/* WP-R3 item 5 — source affordance in the proxy Details: a label + one
+ * renderSourceBadge per resolvable underlying document (opens the source pane,
+ * exactly like the Log). Only rendered when a recordId resolved to a doc. */
+.proxy-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.proxy-source-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .proxy-confirm-btn {
