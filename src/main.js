@@ -2883,6 +2883,19 @@ function renderTodaySkeleton() {
   if (everySection) everySection.hidden = true;
   const statusEl = document.getElementById("log-status");
   if (statusEl) statusEl.hidden = true;
+
+  // WP-R2 amendment item 1/4 — the cut priority + stalled rails. Empty their
+  // containers so nothing dangles when the debug flag is off (they only refill
+  // under VIEW_DEBUG). Keeps the empty-Today state free of orphaned sections.
+  const priorityWrap = document.getElementById("log-priority-sections");
+  if (priorityWrap) priorityWrap.innerHTML = "";
+  const stalledWrap = document.getElementById("log-stalled-sections");
+  if (stalledWrap) stalledWrap.innerHTML = "";
+
+  // WP-R2 amendment item 3 — reset the "Everything else" cross-path signals so a
+  // re-entry re-derives them (queue empty state unknown until it settles again).
+  _todayQueueEmpty = null;
+  _everythingElseHasContent = false;
 }
 
 // Toggle the Today "Filed confidently" pile (collapsed by default). Idempotent —
@@ -2975,6 +2988,17 @@ function reconcileTodayQueueEmptyState(settled, filled) {
   // Hide the skeleton as soon as anything filled OR everything has settled.
   if (skel) skel.hidden = anyFilled || allSettled;
   if (empty) empty.hidden = !(allSettled && !anyFilled);
+  // WP-R2 amendment item 3 — publish the queue's empty signal so the "Everything
+  // else" fallback (owned by the decision-log rollup) can show only when empty.
+  // Known only once all three sources settle; anyFilled ⇒ not empty.
+  if (allSettled) {
+    _todayQueueEmpty = !anyFilled;
+    reconcileEverythingElseVisibility();
+  } else if (anyFilled) {
+    // A card landed before everything settled — the queue is definitely non-empty.
+    _todayQueueEmpty = false;
+    reconcileEverythingElseVisibility();
+  }
   // Live count of queue cards (proxy "wants your eye" + voids + a question card).
   const list = document.getElementById("today-queue-list");
   const qSlotCards = document.querySelectorAll("#today-question-slot .rule-card").length;
@@ -3233,17 +3257,21 @@ async function renderTodayDecisionLog() {
     }
   }
 
-  // "Everything else" — reveal the grouped legacy sections + wire the collapsible
-  // (idempotent: the click handler binds once across re-renders).
-  const everySection = document.getElementById("log-everything-section");
+  // "Everything else" — the grouped legacy fallback. WP-R2 amendment item 3: it
+  // renders ONLY when the Needs-you queue is empty (nothing actionable), and item
+  // 4: never as a header alone — only when the rollup produced content. Record
+  // both signals, then reconcile against the queue's empty state (which may have
+  // already settled on its own async path). The status pills (item 2) are handled
+  // above, independent of this — they stay visible regardless.
   const everyToggle = document.getElementById("log-everything-toggle");
   const everyBody = document.getElementById("log-everything-body");
   const everyCount = document.getElementById("log-everything-count");
-  if (everySection) everySection.hidden = false;
+  const everyContentCount = needsAttention.length + contradictions.length;
+  _everythingElseHasContent = everyContentCount > 0;
   if (everyCount) {
-    const n = needsAttention.length + contradictions.length;
-    everyCount.textContent = n ? String(n) : "";
+    everyCount.textContent = everyContentCount ? String(everyContentCount) : "";
   }
+  reconcileEverythingElseVisibility();
   if (everyToggle && everyBody && !everyToggle.dataset.wired) {
     everyToggle.dataset.wired = "1";
     const caret = everyToggle.querySelector(".log-collapse-caret");
@@ -3252,18 +3280,23 @@ async function renderTodayDecisionLog() {
       everyBody.hidden = !open;
       if (caret) caret.textContent = open ? "▾" : "▸";
       everyToggle.setAttribute("aria-expanded", open ? "true" : "false");
-      if (everySection) everySection.classList.toggle("log-collapsed", !open);
+      const sec = document.getElementById("log-everything-section");
+      if (sec) sec.classList.toggle("log-collapsed", !open);
     });
   }
 
-  // WP-Priority-Operator — Focus + Watch sections (the priority rail). Additive
-  // + silent if the flag's off. Fired here (after the decision-log resolves so
-  // its own re-renders read the same data), still off the first-paint path.
-  loadTodayPriority();
-
-  // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list. Additive + silent:
-  // renders nothing when grouped vigilance data is absent.
-  loadStalledChaseList();
+  // WP-R2 amendment item 1 — the legacy priority rail (Focus + Watch) and the
+  // Stalled/Chasing chase-list are CUT as Today sections: their value is re-homed
+  // (focus → the SoP's "calls only you can make"; watch → vigilance-void cards in
+  // the Needs-you queue), so on the default Today they're pure duplication. Gated
+  // behind R0's VIEW_DEBUG (never deleted) — they return with #debug-views set.
+  // Their containers stay empty otherwise (cleared in renderTodaySkeleton).
+  if (VIEW_DEBUG) {
+    // WP-Priority-Operator — Focus + Watch sections (the priority rail).
+    loadTodayPriority();
+    // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list.
+    loadStalledChaseList();
+  }
 }
 
 // WP-N1 #8 — Today "Mine / Everyone" filter. Client-side only; default Everyone.
@@ -3271,6 +3304,31 @@ async function renderTodayDecisionLog() {
 // toggle re-renders without re-fetching.
 let _todayFilter = "everyone"; // "everyone" | "mine"
 let _todayCtx = null;
+
+// WP-R2 amendment item 3 — cross-path signal for the "Everything else"
+// collapsible. It's the fallback surface: shown ONLY when the Needs-you queue is
+// empty. The queue settles in loadTodayQueue (a different async path than the
+// decision-log rollup that owns the section), so both paths write here and call
+// reconcileEverythingElseVisibility, which reads the latest of the two.
+//   null  = queue hasn't settled yet (unknown)
+//   true  = queue settled empty  → "Everything else" may show
+//   false = queue has cards       → hide "Everything else"
+let _todayQueueEmpty = null;
+// Whether the decision-log rollup produced any "Everything else" content this
+// render (needs-attention rows or contradictions). No content ⇒ header must not
+// paint alone (item 4), independent of the queue signal.
+let _everythingElseHasContent = false;
+
+// Show/hide the "Everything else" collapsible from the two signals: the queue's
+// empty state AND whether the rollup produced content. Shown only when the queue
+// is settled-empty AND there's content to show. Until the queue settles we keep
+// it hidden (queue skeleton is still up; nothing actionable is confirmed yet).
+function reconcileEverythingElseVisibility() {
+  const everySection = document.getElementById("log-everything-section");
+  if (!everySection) return;
+  const queueEmpty = _todayQueueEmpty === true;
+  everySection.hidden = !(queueEmpty && _everythingElseHasContent);
+}
 
 /** Set the active filter + reflect it on the segmented control's buttons. */
 function setTodayFilter(filter) {
@@ -10954,12 +11012,51 @@ async function handlePlaudSyncNow() {
 // The one-line question shown at the top of every proxy card, by kind. Matches
 // the brief's card-anatomy copy.
 const PROXY_KIND_QUESTIONS = {
-  merge: "Same commitment — merge?",
-  close: "Looks closed — mark resolved?",
-  combine: "Same initiative — combine?",
-  chase: "Approve this chase note?",
-  escalate: "Re-promised repeatedly — escalate?",
+  merge: "These look like the same thing — merge them?",
+  close: "A commitment looks done — close it?",
+  combine: "These look like the same initiative — combine them?",
+  chase: "This has gone quiet — send a nudge?",
+  escalate: "This keeps getting re-promised — escalate it?",
 };
+
+// Verdict → plain ask, consulted when `kind` doesn't map (dual-schema robustness).
+// The fleet's verdict is the more reliable signal for a couple of legacy items.
+const PROXY_VERDICT_QUESTIONS = {
+  DUPLICATE: "These look like the same thing — merge them?",
+  RESOLVED_EVIDENCE: "A commitment looks done — close it?",
+  RESTATEMENT: "This keeps getting re-promised — nudge it?",
+  RECURRING: "This keeps recurring — is it handled?",
+};
+
+/**
+ * Derive the plain, human-facing card content from a proxy-queue item, tolerating
+ * BOTH schemas (§ WP-R2 amendment item 6):
+ *   · NEW shape (post-E5 cascade §2.11): the item carries a clean `ask` + `why`
+ *     and a separate `debugTrace`. Detect by presence of `ask` OR `debugTrace`;
+ *     when present, display them directly and route `debugTrace` into details.
+ *   · LEGACY shape (today's fleet output / the fixture): jargon lives in
+ *     `evidence.why`, plus `evidence.verdict` / `evidence.routes` / `evidence.cosine`
+ *     and a bare `kind`. We DERIVE the plain ask from kind (falling back to verdict),
+ *     surface the quotes + plain-language confidence, and tuck why/verdict/routes/cos
+ *     into the collapsed "details" affordance.
+ * Returns { ask, isNewShape, debugTrace } — the caller reads why/verdict/etc off the
+ * item for the details panel.
+ */
+function deriveProxyAsk(item) {
+  const ev = (item && item.evidence) || {};
+  const isNewShape =
+    typeof item.ask === "string" && item.ask.trim() !== "" ||
+    item.debugTrace != null;
+  if (isNewShape && typeof item.ask === "string" && item.ask.trim()) {
+    return { ask: item.ask.trim(), isNewShape: true, debugTrace: item.debugTrace };
+  }
+  // Legacy derivation: kind first, verdict as a fallback, generic last resort.
+  const ask =
+    PROXY_KIND_QUESTIONS[item.kind] ||
+    PROXY_VERDICT_QUESTIONS[ev.verdict] ||
+    "Take a look at this?";
+  return { ask, isNewShape: false, debugTrace: item.debugTrace };
+}
 
 // Human labels for the routing-verdict chip.
 const PROXY_VERDICT_LABELS = {
@@ -11100,86 +11197,117 @@ function renderProxyCard(item) {
   card.dataset.kind = item.kind || "";
   card.dataset.id = item.id || "";
 
-  // Header: kind chip + the one-line question (the card's ask).
-  const header = document.createElement("div");
-  header.className = "record-header proxy-card-header";
-  const chip = document.createElement("span");
-  chip.className = "record-chip proxy-kind-chip";
-  chip.dataset.kind = item.kind || "";
-  chip.textContent = prettySlug(item.kind || "");
-  header.appendChild(chip);
-  if (typeof item.confidence === "number") {
-    const conf = document.createElement("span");
-    conf.className = "proxy-confidence";
-    conf.textContent = Math.round(item.confidence * 100) + "% agreement";
-    header.appendChild(conf);
-  }
-  card.appendChild(header);
+  // Card anatomy (§ WP-R2 amendment item 6), in this order:
+  //   1. The ask first — a plain question (derived; dual-schema tolerant).
+  //   2. The two dated quotes — the primary content a human judges (receipts).
+  //   3. Plain-language confidence — "78% confident" (not "agreement/adjudicate-band").
+  //   4. Everything mechanical behind a collapsed "Details" affordance.
+  const derived = deriveProxyAsk(item);
 
+  // ── 1. The ask, first ──────────────────────────────────────────────────────
   const question = document.createElement("p");
   question.className = "proxy-question";
-  question.textContent =
-    PROXY_KIND_QUESTIONS[item.kind] || "Review this proposal?";
+  question.textContent = derived.ask;
   card.appendChild(question);
 
-  // The rationale ("why") — the fleet's one-line reasoning.
-  if (ev.why) {
-    const why = document.createElement("p");
-    why.className = "record-summary proxy-why";
-    why.textContent = ev.why;
-    card.appendChild(why);
-  }
-
-  // Evidence panel: verbatims, then a meta row (dates · owners · cosine ·
-  // routes · verdict). Reuses the record-quote chrome for verbatims.
+  // ── 2. The dated quotes — the decision content, via the ONE receipt component.
+  //    Proxy verbatims are fleet-surfaced evidence (already citation-scoped), so
+  //    they render as quotes (verified); the source pane isn't wired in the proxy
+  //    queue, so jump is off. Each quote is paired with its date when available.
   const evidence = document.createElement("div");
   evidence.className = "proxy-evidence";
-
-  // Each captured verbatim via the ONE receipt component. Proxy verbatims are
-  // fleet-surfaced evidence (already citation-scoped), so they render as quotes
-  // (verified); the source pane isn't wired in the proxy queue, so jump is off.
   const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
-  for (const v of verbatims) {
+  const evDates = Array.isArray(ev.dates) ? ev.dates : [];
+  for (let i = 0; i < verbatims.length; i++) {
+    const v = verbatims[i];
     if (!v) continue;
-    evidence.appendChild(
-      renderReceipt(
-        { verbatim: v, verbatimVerified: true },
-        { jump: false, variant: "receipt-proxy" },
-      ),
+    const receipt = renderReceipt(
+      { verbatim: v, verbatimVerified: true },
+      { jump: false, variant: "receipt-proxy" },
     );
-  }
-
-  const metaRow = document.createElement("p");
-  metaRow.className = "record-meta proxy-evidence-meta";
-  const segs = [];
-  const dates = Array.isArray(ev.dates) ? ev.dates.filter(Boolean) : [];
-  if (dates.length) segs.push(dates.map((d) => String(d).slice(0, 10)).join(" → "));
-  const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
-  if (owners.length) segs.push(owners.map(prettySlug).join(", "));
-  if (typeof ev.cosine === "number") segs.push("cos " + ev.cosine.toFixed(2));
-  metaRow.textContent = segs.join(" · ");
-  if (metaRow.textContent) evidence.appendChild(metaRow);
-
-  // Routing verdicts + routes as chips.
-  const routes = Array.isArray(ev.routes) ? ev.routes.filter(Boolean) : [];
-  if (routes.length || ev.verdict) {
-    const chips = document.createElement("div");
-    chips.className = "proxy-route-chips";
-    if (ev.verdict) {
-      const vChip = document.createElement("span");
-      vChip.className = "proxy-route-chip proxy-verdict-chip";
-      vChip.textContent = PROXY_VERDICT_LABELS[ev.verdict] || String(ev.verdict);
-      chips.appendChild(vChip);
+    const d = evDates[i];
+    if (d) {
+      const dateEl = document.createElement("span");
+      dateEl.className = "proxy-quote-date";
+      dateEl.textContent = String(d).slice(0, 10);
+      receipt.appendChild(dateEl);
     }
-    for (const r of routes) {
-      const rChip = document.createElement("span");
-      rChip.className = "proxy-route-chip";
-      rChip.textContent = r;
-      chips.appendChild(rChip);
-    }
-    evidence.appendChild(chips);
+    evidence.appendChild(receipt);
   }
   card.appendChild(evidence);
+
+  // ── 3. Plain-language confidence ───────────────────────────────────────────
+  if (typeof item.confidence === "number") {
+    const conf = document.createElement("p");
+    conf.className = "proxy-confidence";
+    conf.textContent = Math.round(item.confidence * 100) + "% confident";
+    card.appendChild(conf);
+  }
+
+  // ── 4. Details — everything mechanical, collapsed by default. Legacy jargon
+  //    (why / verdict / routes / cosine / owners) OR the new-shape debugTrace all
+  //    live here so the card face stays plain. Only rendered when there's content.
+  const detailBits = [];
+  // New-shape debugTrace routes here verbatim (string or JSON-stringified object).
+  if (derived.debugTrace != null) {
+    const traceText =
+      typeof derived.debugTrace === "string"
+        ? derived.debugTrace
+        : JSON.stringify(derived.debugTrace, null, 2);
+    if (traceText && traceText.trim()) detailBits.push({ type: "trace", text: traceText });
+  }
+  // Legacy mechanical fields. On the new shape these are typically absent.
+  if (ev.why) detailBits.push({ type: "why", text: ev.why });
+  const metaSegs = [];
+  const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
+  if (owners.length) metaSegs.push(owners.map(prettySlug).join(", "));
+  if (typeof ev.cosine === "number") metaSegs.push("cos " + ev.cosine.toFixed(2));
+  if (metaSegs.length) detailBits.push({ type: "meta", text: metaSegs.join(" · ") });
+  const routes = Array.isArray(ev.routes) ? ev.routes.filter(Boolean) : [];
+  const hasChips = routes.length || ev.verdict;
+
+  if (detailBits.length || hasChips) {
+    const details = document.createElement("details");
+    details.className = "proxy-details";
+    const summary = document.createElement("summary");
+    summary.className = "proxy-details-summary";
+    summary.textContent = "Details";
+    details.appendChild(summary);
+
+    const body = document.createElement("div");
+    body.className = "proxy-details-body";
+    for (const bit of detailBits) {
+      const el = document.createElement(bit.type === "trace" ? "pre" : "p");
+      el.className =
+        bit.type === "why"
+          ? "proxy-why"
+          : bit.type === "trace"
+            ? "proxy-debug-trace"
+            : "proxy-evidence-meta";
+      el.textContent = bit.text;
+      body.appendChild(el);
+    }
+    // Routing verdict + routes as chips (mechanical vocabulary).
+    if (hasChips) {
+      const chips = document.createElement("div");
+      chips.className = "proxy-route-chips";
+      if (ev.verdict) {
+        const vChip = document.createElement("span");
+        vChip.className = "proxy-route-chip proxy-verdict-chip";
+        vChip.textContent = PROXY_VERDICT_LABELS[ev.verdict] || String(ev.verdict);
+        chips.appendChild(vChip);
+      }
+      for (const r of routes) {
+        const rChip = document.createElement("span");
+        rChip.className = "proxy-route-chip";
+        rChip.textContent = r;
+        chips.appendChild(rChip);
+      }
+      body.appendChild(chips);
+    }
+    details.appendChild(body);
+    card.appendChild(details);
+  }
 
   // Actions footer — the SAME `.record-actions` row + gesture affordances the
   // record cards use. Confirm (proxy-specific ratify) + Dismiss (reuses the
