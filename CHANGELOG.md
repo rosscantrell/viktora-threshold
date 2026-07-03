@@ -9,12 +9,46 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
-97 commits across PRs #46–#61 since v0.8.1. This wave is dominated by the
-Work-Forest UI build-out (job/frame grouping, State-of-Play digests, the
-Question Engine, and felt/pattern learning surfaces), a Today-surface
-priority/vigilance overhaul (Focus rail, Watching ledger, Outbox), and an
-Outlook write-back surface — plus one perf fix and various UX polish/bugfixes
-gathered along the way.
+## [0.9.0] — 2026-07-03
+
+The biggest feature release yet — the app collapses from one-view-per-engine-concept
+to **one-view-per-user-question**: Today and Projects, plus Settings.
+
+### Added
+- **Today, rebuilt** — a State-of-Play header (person-lens SoP prose, closing with
+  the "calls only you can make"), a "Needs you" ratification queue (proxy-fleet
+  cards + question pull + vigilance chases), a collapsed "Filed confidently" pile,
+  and an approve-and-send tray. First paint <1s cold; all enrichment streams in off
+  the critical path.
+- **Proxy-fleet inbox** (WP-T1) — the cascade's morning ratification queue as a
+  first-class Today surface.
+- **One receipt component, everywhere** — verbatim quote, source doc, date, co-sign
+  count ("N captures corroborate"), tap-to-expand, jump-to-source, and a "compiled
+  from N captures" share action on any receipted card.
+- **Email magic-link sign-in** — onboarding + a Settings identity / switch-account
+  block; deep-link completion; the signed-in email unlocks viewer-scoped features.
+- **Frame-correction tools** — nested category create, reparent ("make this a
+  sub-category of…" / promote to top-level), and sibling-sub-frame merge.
+
+### Changed
+- **View consolidation** — Watching, Outbox, and Relationships demoted from
+  destinations into Today context (recoverable behind a debug flag); the global
+  Connections view retired.
+- **Proxy cards de-jargoned** — a plain ask + dated quotes + plain confidence up
+  front; fleet mechanics (verdict / routes / cosine) behind a Details affordance,
+  with a jump-to-source to the underlying record like the Log.
+- **Evidence made consistent** — every evidence surface renders through the single
+  receipt component; zero bespoke evidence layouts remain.
+
+### Notes
+- Manual install only (no auto-update this release); see PILOT-INSTALL.md for the
+  0.8.1 → 0.9.0 upgrade path.
+
+### Also in this release — Work-Forest wave (PRs #46–#61 since v0.8.1)
+97 commits dominated by the Work-Forest UI build-out (job/frame grouping,
+State-of-Play digests, the Question Engine, felt/pattern learning), a Today-surface
+priority/vigilance overhaul (Focus rail, Watching ledger, Outbox), and an Outlook
+write-back surface — plus one perf fix and various UX polish/bugfixes.
 
 ### Added
 
