@@ -336,12 +336,12 @@ async function bootstrap() {
       return;
     }
 
-    // WP-THRESHOLD-LOG-UX — widget_expand("edges") / the "Connections" entry
-    // navigates here with #edges. Render the full cross-record edge graph.
-    // WP-R0 — retired: with the flag off (and no debug override) this hash
-    // falls through to the main view instead of entering a nav-orphaned view
-    // (the tray's "Connections…" item still fires widget_expand("edges");
-    // this is the JS-side half of hiding that destination).
+    // WP-THRESHOLD-LOG-UX — #edges once rendered the full cross-record edge graph.
+    // WP-R0 — retired: with the flag off (and no debug override) this hash falls
+    // through to the main view instead of entering a nav-orphaned view. WP-R3
+    // item 4 — the tray has no "Connections…" item either (hide-by-omission in
+    // build_widget_menu, lib.rs), so nothing fires widget_expand("edges") now;
+    // this is the JS-side half of keeping that retired destination unreachable.
     if (window.location.hash === "#edges" && isDestVisible("edges")) {
       enterEdgesView();
       return;
@@ -1452,6 +1452,38 @@ async function loadDocsMap() {
     return map;
   })();
   return _docsByIdPromise;
+}
+
+/** WP-R3 item 5 — recordId → documentId, from the decision log (the records
+ *  carry `documentId`). Lets a surface that only knows a recordId (e.g. a proxy
+ *  card's evidence.recordIds) resolve the underlying document, so R1's existing
+ *  jump (renderReceipt opts.jump / appendSourceBadge → openSourcePanel) can open
+ *  the source pane — full reuse, no new pane, no new endpoint. Lazily loaded +
+ *  cached; concurrent callers share one in-flight fetch. */
+let _recordDocById = null;
+let _recordDocByIdPromise = null;
+async function loadRecordDocMap() {
+  if (_recordDocById) return _recordDocById;
+  if (_recordDocByIdPromise) return _recordDocByIdPromise;
+  _recordDocByIdPromise = (async () => {
+    const map = new Map();
+    try {
+      // The FULL log carries every record with its documentId (same source the
+      // Decisions browser joins on). Best-effort — a failure leaves the map empty
+      // so callers render no source affordance (never a broken/dead link).
+      const data = await tauri.core.invoke("fetch_decision_log_full");
+      const records = data && Array.isArray(data.records) ? data.records : [];
+      for (const it of records) {
+        const rec = it && it.record ? it.record : it;
+        if (rec && rec.recordId && rec.documentId) map.set(rec.recordId, rec.documentId);
+      }
+    } catch (err) {
+      console.warn("[main] loadRecordDocMap failed:", err);
+    }
+    _recordDocById = map;
+    return map;
+  })();
+  return _recordDocByIdPromise;
 }
 
 // Design-system line icons (feather-style: 24-viewBox, fill:none,
@@ -3575,6 +3607,33 @@ function personLens(viewerSlug) {
   return viewerSlug ? "person:" + viewerSlug : null;
 }
 
+// WP-R3 item 1 — render any receipt-shaped evidence a SoP section/digest carries
+// through the ONE receipt component (§2.4). `raw` may be a single receipt object
+// or an array; each entry is shape-tolerant ({record} envelope OR bare). Silent
+// when there's nothing citeable — renderReceipt itself shows a quote only when
+// verbatimVerified, so nothing is invented and the license framing stays honest.
+function appendSoPReceipts(container, raw) {
+  if (!raw) return;
+  const list = Array.isArray(raw) ? raw : [raw];
+  let wrap = null;
+  for (const entry of list) {
+    const rec = entry && entry.record ? entry.record : entry;
+    if (!rec || typeof rec !== "object") continue;
+    if (!((rec.verbatimVerified === true && rec.verbatim) || rec.documentId)) continue;
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.className = "sop-receipts";
+    }
+    wrap.appendChild(
+      renderReceipt(
+        { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified, documentId: rec.documentId },
+        { variant: "receipt-sop", compact: true },
+      ),
+    );
+  }
+  if (wrap) container.appendChild(wrap);
+}
+
 // Render the SoP prose into a container. `sections`, when present, render as
 // labelled sub-blocks beneath the lead prose; otherwise the prose alone shows.
 // No jargon translation here — the backend already voiced it. `opts.compact`
@@ -3606,8 +3665,17 @@ function renderSoPProse(container, data, opts) {
       p.textContent = body;
       block.appendChild(p);
     }
+    // WP-R3 item 1 — receipted claims. When a section (or the digest itself)
+    // carries evidence, it renders through the ONE receipt component (§2.4):
+    // verbatim quote (verified-only) + jump-to-source. Shape-tolerant + silent —
+    // absent evidence adds nothing, so the license framing stays intact (no
+    // invented specifics; renderReceipt only shows a quote when verbatimVerified).
+    appendSoPReceipts(block, sec.receipts || sec.evidence);
     container.appendChild(block);
   }
+
+  // Digest-level receipts (evidence attached to the lead prose, not a section).
+  appendSoPReceipts(container, data.receipts || data.evidence);
 
   // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
   // dim, single line; omitted in compact mode and when absent.
@@ -8791,7 +8859,7 @@ function mountComposeStart(wrap, ctx) {
       wrap.innerHTML = '<div class="sop-status">No team update to compose for this area right now.</div>';
       return;
     }
-    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {} });
+    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {}, items: Array.isArray(res.items) ? res.items : [] });
   });
 }
 
@@ -8828,6 +8896,39 @@ function renderComposeEditor(wrap, ctx) {
   ta.rows = Math.min(22, Math.max(8, generated.split("\n").length + 1));
   ta.value = generated;
   wrap.appendChild(ta);
+
+  // WP-R3 item 2 — the citations behind the draft, through the ONE receipt
+  // component (§2.4), so the compose preview is consistent with every other
+  // receipted surface. The compose payload carries the underlying SoP `items`;
+  // each renders as its verbatim quote (verified-only) + jump-to-source. Shape-
+  // tolerant ({record} envelope OR a bare record) and defensive: renderReceipt
+  // renders nothing without a verified verbatim or documentId, and the block is
+  // omitted entirely when no item yields evidence (no empty "Sources" header).
+  const citeItems = Array.isArray(ctx.items) ? ctx.items : [];
+  if (citeItems.length) {
+    const cites = document.createElement("div");
+    cites.className = "sop-compose-cites";
+    let any = 0;
+    for (const it of citeItems) {
+      const rec = it && it.record ? it.record : it;
+      if (!rec || typeof rec !== "object") continue;
+      if (!((rec.verbatimVerified === true && rec.verbatim) || rec.documentId)) continue;
+      cites.appendChild(
+        renderReceipt(
+          { verbatim: rec.verbatim, verbatimVerified: rec.verbatimVerified, documentId: rec.documentId },
+          { variant: "receipt-compose", compact: true },
+        ),
+      );
+      any++;
+    }
+    if (any) {
+      const head = document.createElement("div");
+      head.className = "sop-compose-cites-head";
+      head.textContent = any === 1 ? "Source" : "Sources";
+      cites.insertBefore(head, cites.firstChild);
+      wrap.appendChild(cites);
+    }
+  }
 
   const proposals = document.createElement("div");
   proposals.className = "sop-proposals";
@@ -8939,6 +9040,30 @@ async function copyAllStateOfPlay(btn) {
 // WP-THRESHOLD-STATE-OF-PLAY — PROJECT altitude on the By-project lens: the
 // team-addressed email PLUS per-teammate "copy individually" chips, on demand.
 const _projectPolish = {};
+
+// WP-R3 item 1 — per-project State-of-Play header. Sits at the top of a project
+// group and auto-loads the PROJECT-altitude SoP prose (via the shared fetch_sop
+// path, level='project', keyed on the project slug), rendered through the
+// receipted prose renderer (renderSoPProse → renderReceipt for any citeable
+// claims + the license footnote). Defensive per the #61 pattern: loadSoP returns
+// null on empty / flag-off / server-too-old / unreachable, and the header then
+// removes itself — never a blank block or an error surface. No new endpoint, no
+// blocking work before paint (it fires after the group is in the DOM).
+function buildProjectSopHeader(slug, label) {
+  const header = document.createElement("div");
+  header.className = "sop-project-header";
+  header.hidden = true; // stays hidden until prose lands (invisible-by-absence)
+  // Fire-and-forget; the group is already painted. A failure/absence just leaves
+  // the header hidden — the team-email bar below carries the project on its own.
+  loadSoP("project", slug, null)
+    .then((data) => {
+      if (!data) { header.remove(); return; }
+      renderSoPProse(header, data, {});
+      header.hidden = false;
+    })
+    .catch((e) => { console.warn("[main] project SoP header (" + slug + "):", e); header.remove(); });
+  return header;
+}
 
 function buildProjectSopBar(slug, label) {
   const wrap = document.createElement("div");
@@ -9271,6 +9396,10 @@ function renderDecisions() {
     if (_decisionsLens === "people" && !grp.muted) {
       body.appendChild(buildSopBar(grp.key, grp.label));
     } else if (_decisionsLens === "project" && !grp.muted && !framed) {
+      // WP-R3 item 1 — per-project State-of-Play header, at the top of the group.
+      // Receipted prose (project altitude) via the shared fetch_sop path; hides
+      // itself when unavailable. Sits ABOVE the team-email compose bar.
+      body.appendChild(buildProjectSopHeader(grp.key, grp.label));
       // Project altitude — the team email + per-teammate digests for this project.
       body.appendChild(buildProjectSopBar(grp.key, grp.label));
     }
@@ -9468,6 +9597,19 @@ function shortenSummary(s, max) {
 
 function recordById(ctx, id) {
   return id && ctx.byId ? ctx.byId.get(id) : null;
+}
+
+// WP-R3 item 3 — resolve a record's lifecycle state (open/superseded/resolved)
+// from the live context. byId holds bare records (no state); the {record,state}
+// envelopes live on ctx.items, so scan those. Defaults to "open" when unknown so
+// the dependency popover's status pill only shows for genuinely-closed ends.
+function recordStateById(ctx, id) {
+  if (!id || !ctx || !Array.isArray(ctx.items)) return "open";
+  for (const it of ctx.items) {
+    const rec = it && it.record ? it.record : it;
+    if (rec && rec.recordId === id) return (it && it.state) || "open";
+  }
+  return "open";
 }
 
 // depends_on edges (recordA depends on recordB — A blocked, B the unblocker).
@@ -9703,10 +9845,19 @@ function positionPopover(menu, anchorBtn) {
 // A compact read-only view of a linked record, shown inline in the dependency
 // popover so the relationship is visible in place — no jumping away (Trisha
 // 2026-06-29: the jump is disorienting with no way back).
-function renderLinkedRecord(rec) {
+//
+// WP-R3 item 3 (relationships fold-in) — the popover now shows the OTHER end's
+// full context inline: owner, a status pill (open / resolved / replaced), and —
+// per §2.4 — its evidence (verbatim quote + jump-to-source) through the ONE
+// renderReceipt component, exactly like every other receipted surface. Trisha's
+// explicit ask was the edge context IN PLACE on the record, not a navigation to
+// the retired global edges view. `recState` is the linked record's lifecycle
+// state (optional; the caller resolves it from the live context's state map).
+function renderLinkedRecord(rec, recState) {
   const row = document.createElement("div");
   row.className = "linked-rec";
   row.dataset.type = rec.type || "";
+  if (recState) row.dataset.state = recState;
   const head = document.createElement("div");
   head.className = "linked-rec-head";
   const t = document.createElement("span");
@@ -9714,6 +9865,16 @@ function renderLinkedRecord(rec) {
   t.dataset.type = rec.type || "";
   t.textContent = rec.type === "decision" ? "Decision" : "Commitment";
   head.appendChild(t);
+  // Status pill — mirrors the record card's lifecycle pill so the popover shows
+  // whether the other end is still standing (open) or already closed. Only when
+  // the state is known and non-open (an open item needs no pill — that's the norm).
+  if (recState && recState !== "open") {
+    const pill = document.createElement("span");
+    pill.className = "linked-rec-state";
+    pill.dataset.state = recState;
+    pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
+    head.appendChild(pill);
+  }
   const bits = [];
   if (rec.owner) bits.push(prettySlug(rec.owner));
   if (rec.due) bits.push("due " + formatDueDate(rec.due));
@@ -9728,6 +9889,22 @@ function renderLinkedRecord(rec) {
   sum.className = "linked-rec-summary";
   sum.textContent = rec.summary || "";
   row.appendChild(sum);
+  // Evidence — the linked record's verbatim quote + jump-to-source, via the ONE
+  // receipt component (§2.4). renderReceipt renders nothing when there's no
+  // verified verbatim and no documentId, so a bare record adds no empty block;
+  // when the source pane is reachable (doc in _docsById) the badge opens it.
+  if ((rec.verbatimVerified === true && rec.verbatim) || rec.documentId) {
+    row.appendChild(
+      renderReceipt(
+        {
+          verbatim: rec.verbatim,
+          verbatimVerified: rec.verbatimVerified,
+          documentId: rec.documentId,
+        },
+        { variant: "receipt-linked", compact: true },
+      ),
+    );
+  }
   // Optional: jump to the item in the list (closes the popover first).
   if (rec.recordId) {
     const jump = document.createElement("button");
@@ -9762,7 +9939,10 @@ function openLinkedMenu(anchorBtn, heading, recs) {
   h.textContent = heading;
   menu.appendChild(h);
 
-  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec));
+  // WP-R3 item 3 — thread each linked record's lifecycle state through so the
+  // popover shows its status pill + receipted evidence in place.
+  const ctx = _decisionsCtx || {};
+  for (const rec of recs) menu.appendChild(renderLinkedRecord(rec, recordStateById(ctx, rec.recordId)));
 
   document.body.appendChild(menu);
   positionPopover(menu, anchorBtn);
@@ -11305,6 +11485,16 @@ function renderProxyCard(item) {
       }
       body.appendChild(chips);
     }
+
+    // WP-R3 item 5 — open the underlying record's SOURCE in the right-hand pane,
+    // exactly like the Log. Resolve each evidence.recordId → documentId (the
+    // record→doc map, from the decision log), then let R1's existing jump
+    // (renderSourceBadge → openSourcePanel) open the pane. FULL reuse — no new
+    // pane, no new endpoint. Graceful: the FIXTURE's synthetic recordIds won't be
+    // in the corpus log, so they resolve to nothing and NO affordance renders (no
+    // dead link). Async-fills when the maps land; if already cached, fills now.
+    mountProxySourceAffordance(body, ev);
+
     details.appendChild(body);
     card.appendChild(details);
   }
@@ -11342,6 +11532,41 @@ function renderProxyCard(item) {
 
   card.appendChild(actions);
   return card;
+}
+
+// WP-R3 item 5 — resolve a proxy item's evidence.recordIds to their source docs
+// and append a "source" affordance (reusing renderSourceBadge → openSourcePanel,
+// the Log's mechanism) into `container`. Async: both the record→doc and doc maps
+// must be loaded so the badge can name the source type + open the pane. Renders
+// NOTHING when nothing resolves — the fixture's synthetic recordIds (rec-4821 …)
+// aren't in the corpus log, so they yield no badge (no broken/dead link). One
+// badge per distinct resolvable document (deduped).
+async function mountProxySourceAffordance(container, ev) {
+  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+  if (!recordIds.length) return;
+  // Both maps are needed: recordId→documentId to resolve, and _docsById (via
+  // loadDocsMap) so renderSourceBadge can render + open. Best-effort; either
+  // failing just leaves the map empty → no affordance.
+  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
+  const seen = new Set();
+  const badges = [];
+  for (const rid of recordIds) {
+    const docId = recDoc.get(rid);
+    if (!docId || seen.has(docId)) continue;
+    // renderSourceBadge returns null when the doc isn't in _docsById (no metadata) —
+    // so an unresolvable/orphan doc adds nothing. This is the graceful path.
+    const chip = renderSourceBadge(docId, null);
+    if (chip) { seen.add(docId); badges.push(chip); }
+  }
+  if (!badges.length) return; // nothing resolved — no dead link
+  const row = document.createElement("div");
+  row.className = "proxy-source-row";
+  const lbl = document.createElement("span");
+  lbl.className = "proxy-source-label";
+  lbl.textContent = badges.length === 1 ? "Source" : "Sources";
+  row.appendChild(lbl);
+  for (const b of badges) row.appendChild(b);
+  container.appendChild(row);
 }
 
 /**

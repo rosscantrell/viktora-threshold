@@ -4768,6 +4768,33 @@ button.record-action-badge {
   line-height: 1.4;
   color: var(--glass-text);
 }
+/* WP-R3 item 3 — status pill on the other end of the dependency, mirroring the
+ * record card's lifecycle pill (glass.css .record-state-pill) so the popover
+ * shows whether the linked record is still standing or already closed. */
+.linked-rec-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text-faint);
+}
+.linked-rec-state[data-state="resolved"] {
+  background: rgba(93, 202, 165, 0.15);
+  border-color: rgba(93, 202, 165, 0.5);
+  color: var(--glass-success);
+}
+.linked-rec-state[data-state="superseded"] { text-decoration: line-through; }
+/* The receipted evidence inside a linked-record row sits just under the summary,
+ * a hair inset. renderReceipt owns the quote/source-badge chrome; this only
+ * spaces it within the popover. */
+.linked-rec .receipt.receipt-linked { margin-top: 7px; }
 .linked-rec-jump {
   display: inline-block;
   margin-top: 8px;
@@ -5462,6 +5489,23 @@ button.rec-source {
   background: var(--accent-soft);
   color: var(--accent-hover);
   border-color: var(--accent-ring);
+}
+/* WP-R3 item 5 — source affordance in the proxy Details: a label + one
+ * renderSourceBadge per resolvable underlying document (opens the source pane,
+ * exactly like the Log). Only rendered when a recordId resolved to a doc. */
+.proxy-source-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.proxy-source-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .proxy-confirm-btn {

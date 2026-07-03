@@ -227,6 +227,24 @@ body {
   line-height: 1.5;
   color: var(--glass-text-faint);
 }
+/* WP-R3 item 1 — per-project SoP prose header, at the top of a project group.
+ * A calm inset card so the receipted state-of-play reads as context above the
+ * team-email compose bar. Hidden by JS until prose lands (invisible-by-absence). */
+.sop-project-header {
+  margin: 0 0 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+  background: var(--glass-surface);
+}
+/* WP-R3 item 1 — receipted claims folded under SoP prose/sections. The receipt
+ * component owns its chrome; this only spaces the stack. */
+.sop-receipts {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .sop-maturity-tag {
   font-size: 10px;
   letter-spacing: 0.02em;
@@ -922,6 +940,21 @@ body {
 }
 .sop-compose-actions {
   flex-wrap: wrap;
+}
+/* WP-R3 item 2 — the citations behind the compose draft, each a renderReceipt.
+ * Quiet block beneath the textarea; the receipt component owns its own chrome. */
+.sop-compose-cites {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sop-compose-cites-head {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--glass-text-faint);
 }
 
 /* TYPED-DIFF-CAPTURE Phase A — record-level inline editing (type / summary /
