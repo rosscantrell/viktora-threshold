@@ -289,6 +289,12 @@ body {
   gap: 6px;
   margin: 4px 0 10px;
 }
+/* `hidden` must actually hide — the explicit display:flex above otherwise
+ * overrides the attribute's UA default (the bar rendered as a dangling toggle
+ * with an empty panel on every identity-less install). */
+.sop-lens-bar[hidden] {
+  display: none;
+}
 .sop-lens-btn {
   font-size: 11px;
   padding: 3px 11px;
