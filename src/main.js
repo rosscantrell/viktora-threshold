@@ -107,6 +107,9 @@ const VIEWS = [
   "view-entity-card",
   // WP-THRESHOLD-DECISION-ORG — Decisions browser (by project, filterable)
   "view-decisions",
+  // WP-THRESHOLD-NAV Increment 2 — per-project landing surface (aggregates one
+  // project's SoP + records + relationships). Registered so showView() can un-hide it.
+  "view-project-home",
   // WP-Outlook-Writeback — staged Outbox surface (registered here so showView()
   // can actually un-hide it; without this the view stays hidden = blank screen).
   "view-outbox",
@@ -6550,6 +6553,22 @@ function buildFrameHeader(frame) {
     el.appendChild(sop.toggle);
     sopPanel = sop.panel;
   }
+  // WP-THRESHOLD-NAV Increment 2 — "Open →" into this frame's Project home. A top
+  // frame IS the project in a framed corpus, so the aggregate landing page is
+  // reachable straight from its header (as well as from each job group below).
+  // enterProjectHomeView aggregates every job under this top frame by name.
+  if (frame.fid != null && frame.name) {
+    const home = document.createElement("span");
+    home.className = "frame-open-home-btn";
+    home.textContent = "Open →";
+    home.setAttribute("role", "button");
+    home.tabIndex = 0;
+    home.title = "Open the project home — everything about " + frame.name;
+    const goHomeFrame = (ev) => { ev.stopPropagation(); enterProjectHomeView("frame:" + frame.name, { label: frame.name, lens: "project", top: frame }); };
+    home.addEventListener("click", goHomeFrame);
+    home.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") goHomeFrame(ev); });
+    el.appendChild(home);
+  }
   // WP-Frame-HITL — the frame gesture menu (rename / mark-type / merge).
   const edit = document.createElement("span");
   edit.className = "frame-edit-btn";
@@ -9299,16 +9318,25 @@ function renderDecisions() {
   if (subEl) {
     const n = filtered.length;
     const recs = `${n} ${n === 1 ? "record" : "records"}`;
+    // WP-THRESHOLD-NAV Increment 2 — active-state summary SENTENCE. The two control
+    // systems (status filter + lens) confused Trisha ("I pressed Open. By project?
+    // I don't know what happened."). Render the active combination in plain words
+    // ahead of the counts, so the current view is legible at a glance.
+    const stateWord = { all: "All", open: "Open", resolved: "Resolved", superseded: "Replaced" }[_decisionsFilter] || "All";
+    const lensPhrase = { project: "by project", deadline: "by deadline", people: "by person", conflicts: "conflicts" }[_decisionsLens] || "by project";
+    const active = _decisionsLens === "conflicts"
+      ? `${stateWord} — conflicts`
+      : `${stateWord}, ${lensPhrase}`;
     if (_decisionsLens === "deadline") {
       const overdue = filtered.filter((it) => {
         const r = it.record || it;
         return r.due && new Date(r.due + "T00:00:00") < new Date();
       }).length;
-      subEl.textContent = `${recs} · ${overdue} overdue`;
+      subEl.textContent = `${active} · ${recs} · ${overdue} overdue`;
     } else {
       const real = ordered.filter((g) => !g.muted).length;
       const noun = _decisionsLens === "people" ? (real === 1 ? "person" : "people") : (real === 1 ? "project" : "projects");
-      subEl.textContent = `${recs} · ${real} ${noun}`;
+      subEl.textContent = `${active} · ${recs} · ${real} ${noun}`;
     }
   }
 
@@ -9381,6 +9409,26 @@ function renderDecisions() {
     if (commitments) parts.push(`${commitments} commitment${commitments === 1 ? "" : "s"}`);
     count.textContent = parts.join(" · ");
     head.appendChild(count);
+
+    // WP-THRESHOLD-NAV Increment 2 — "Open →" into this group's Project home,
+    // the aggregate landing page (SoP + every record at every state + inline
+    // relationships). Trisha's "where does LAA live?" A span, since the header is
+    // a <button>. Shown on the genuine-subject lenses (project + people), never on
+    // the "Other"/"Unassigned" catch-all (grp.muted). The whole group — including
+    // its workstream siblings under the same top frame — is aggregated by
+    // enterProjectHomeView from grp.key.
+    if (!grp.muted && (_decisionsLens === "project" || _decisionsLens === "people")) {
+      const open = document.createElement("span");
+      open.className = "job-open-home-btn";
+      open.textContent = "Open →";
+      open.setAttribute("role", "button");
+      open.tabIndex = 0;
+      open.title = "Open the project home — everything about " + grp.label;
+      const go = (ev) => { ev.stopPropagation(); enterProjectHomeView(grp.key, { label: grp.label, lens: _decisionsLens, top: grp._top || null }); };
+      open.addEventListener("click", go);
+      open.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") go(ev); });
+      head.appendChild(open);
+    }
 
     // WP-Frame-HITL — the Move control (a span, since the header is a <button>).
     // One click → pick a destination (or a new category); the move sticks.
@@ -10221,6 +10269,283 @@ function renderDecisionCard(rec, recState, projects) {
   return card;
 }
 
+// ───────── WP-THRESHOLD-NAV Increment 2 — Project home ─────────
+//
+// The single most-requested missing surface (Trisha 2026-06-17: "where does LAA
+// live?"). A group-scoped landing page that aggregates EVERYTHING about one
+// project / job / subject in one place — its State-of-Play narrative, typed
+// counts, a project-scoped relationships summary, and every record at every
+// lifecycle state (not just open) as the SAME renderDecisionCard cards the Log
+// uses (so each carries its inline relationships via the dependency popover).
+// Generalizes the entity-scoped Receipts view to any grouping key.
+//
+// Pure client-side aggregation over the already-fetched _decisionsCtx — no new
+// IPC. Degrades gracefully: if _decisionsCtx isn't loaded yet (project home was
+// somehow reached cold) it fetches the Log first; single-project / frameless
+// corpora resolve to the one matching group and render sensibly (never blank).
+
+let _projectHomeCtx = null; // { key, label, top } — for the Refresh button.
+
+// Resolve the aggregate item set + a SoP slug for a project-home request.
+// `key` is either "frame:<name>" (aggregate every job under that top frame) or a
+// group key (a single job / document-project group). `opts.top` (a top frame),
+// when present, widens the aggregation to the WHOLE project (all its job groups).
+// Returns { items, label, sopSlug, top }.
+function resolveProjectAggregate(ctx, key, opts) {
+  opts = opts || {};
+  const items = Array.isArray(ctx.items) ? ctx.items : [];
+  // Rebuild the groups over ALL states (the home shows resolved + replaced too),
+  // in the SAME lens the entry came from — project (default) or people — so the
+  // key resolves against the matching grouping. Then, for the project lens with
+  // frames, annotate with the top frame exactly like the Log.
+  const lens = opts.lens === "people" ? "people" : "project";
+  let groups = groupRecords(items, lens, ctx.docProjects, ctx.aliases, ctx.jobNames, ctx.recordJobs);
+  const frames = Array.isArray(ctx.frames) ? ctx.frames : [];
+  if (lens === "project" && frames.length) {
+    // applyFrameLayout tags each group with _top; reuse it so "the whole project"
+    // = every group under the same top frame (matching the Log's grouping).
+    groups = applyFrameLayout(groups, frames, ctx.jobHeat || {});
+  }
+
+  const topName = lens === "project"
+    ? (opts.top && opts.top.name ? opts.top.name : (key.startsWith("frame:") ? key.slice("frame:".length) : null))
+    : null;
+  let selected;
+  let label;
+  let sopSlug;
+  if (topName) {
+    // Whole-project aggregation: every job group whose top frame matches by name.
+    selected = groups.filter((g) => g._top && g._top.name === topName);
+    // Fallback: if frame layout produced no _top match (flag drift), fall back to
+    // the exact-key group so the surface still renders something coherent.
+    if (!selected.length) selected = groups.filter((g) => g.key === key);
+    label = (opts.label && String(opts.label)) || topName;
+    // Frame-altitude SoP keys off the frame name; the per-project SoP header
+    // reuses loadSoP("project", slug) — pass the top frame's name as the subject.
+    sopSlug = topName;
+  } else {
+    selected = groups.filter((g) => g.key === key);
+    label = (opts.label && String(opts.label)) || (selected[0] && selected[0].label) || prettySlug(key);
+    sopSlug = key;
+  }
+
+  const agg = [];
+  for (const g of selected) for (const it of g.items) agg.push(it);
+  return { items: agg, label, sopSlug, top: opts.top || null };
+}
+
+// Typed tally chips — decisions vs commitments, and open / resolved / replaced.
+// Addresses the spec's "260 open → typed" nit: the counts are labelled by TYPE
+// and lifecycle state, not a bare number.
+function renderProjectHomeTallies(container, items) {
+  container.innerHTML = "";
+  let decisions = 0, commitments = 0, open = 0, resolved = 0, replaced = 0;
+  for (const it of items) {
+    const rec = it && it.record ? it.record : it;
+    if (!rec) continue;
+    if (rec.type === "decision") decisions++; else commitments++;
+    const st = (it && it.state) || "open";
+    if (st === "superseded") replaced++;
+    else if (st === "resolved") resolved++;
+    else open++;
+  }
+  const chips = [
+    ["decisions", decisions, decisions === 1 ? "decision" : "decisions"],
+    ["commitments", commitments, commitments === 1 ? "commitment" : "commitments"],
+    ["open", open, "open"],
+    ["resolved", resolved, "resolved"],
+    ["replaced", replaced, "replaced"],
+  ];
+  for (const [cls, n, label] of chips) {
+    if (!n) continue; // omit empty buckets — a settled project shouldn't shout "0 open"
+    const chip = document.createElement("span");
+    chip.className = "project-home-tally project-home-tally-" + cls;
+    const num = document.createElement("strong");
+    num.className = "project-home-tally-num";
+    num.textContent = String(n);
+    chip.appendChild(num);
+    chip.appendChild(document.createTextNode(" " + label));
+    container.appendChild(chip);
+  }
+  container.hidden = container.childNodes.length === 0;
+}
+
+// Project-scoped relationships summary — the item-first "what depends on what"
+// for this project, surfaced IN PLACE (finding G). Reuses the SAME dependency
+// popover the Log cards use (openLinkedMenu → renderLinkedRecord): each line is a
+// clickable pill that reveals the other end inline, no jump. Renders only the
+// edges whose BOTH ends live in this project's record set, so it stays scoped.
+function renderProjectHomeRelationships(container, ctx, items) {
+  container.innerHTML = "";
+  const ids = new Set();
+  for (const it of items) {
+    const rec = it && it.record ? it.record : it;
+    if (rec && rec.recordId) ids.add(rec.recordId);
+  }
+  // Edges internal to this project (both ends present) — the ones worth summarizing.
+  const edges = (ctx.edges || []).filter(
+    (e) => e.status !== "dismissed" && ids.has(e.recordA) && ids.has(e.recordB),
+  );
+  if (!edges.length) { container.hidden = true; return; }
+  container.hidden = false;
+
+  const head = document.createElement("div");
+  head.className = "project-home-rels-head";
+  head.textContent = "Relationships in this project";
+  container.appendChild(head);
+
+  // One clickable line per edge, grouped by kind (dependencies first — the most-
+  // requested), reusing the Log's phrasing + inline dependency popover.
+  const ordered = [...edges].sort(
+    (a, b) => EDGE_KIND_ORDER.indexOf(a.kind) - EDGE_KIND_ORDER.indexOf(b.kind),
+  );
+  const list = document.createElement("div");
+  list.className = "project-home-rels-list";
+  for (const e of ordered) {
+    const a = recordById(ctx, e.recordA);
+    const b = recordById(ctx, e.recordB);
+    if (!a || !b) continue;
+    const meta = EDGE_KIND_META[e.kind] || { verb: "relates to", icon: "↔" };
+    const line = document.createElement("button");
+    line.type = "button";
+    line.className = "project-home-rel-line";
+    const icon = document.createElement("span");
+    icon.className = "project-home-rel-icon";
+    icon.textContent = meta.icon || "↔";
+    line.appendChild(icon);
+    const txt = document.createElement("span");
+    txt.className = "project-home-rel-text";
+    txt.textContent = shortenSummary(a.summary, 46) + " · " + meta.verb + " · " + shortenSummary(b.summary, 46);
+    line.appendChild(txt);
+    // Click reveals both ends inline via the shared dependency popover (no jump).
+    line.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      openLinkedMenu(line, meta.plural || meta.label || "Related", [a, b]);
+    });
+    list.appendChild(line);
+  }
+  container.appendChild(list);
+}
+
+// Open the Project home for a grouping key. `opts`: { label, lens, top }.
+async function enterProjectHomeView(key, opts) {
+  opts = opts || {};
+  state.inWizard = false;
+  showView("view-project-home");
+  _projectHomeCtx = { key, label: opts.label, top: opts.top || null, lens: opts.lens || "project" };
+
+  const titleEl = document.getElementById("project-home-title");
+  const eyebrowEl = document.getElementById("project-home-eyebrow");
+  const subEl = document.getElementById("project-home-sub");
+  const talliesEl = document.getElementById("project-home-tallies");
+  const sopEl = document.getElementById("project-home-sop");
+  const relsEl = document.getElementById("project-home-rels");
+  const listEl = document.getElementById("project-home-list");
+  const statusEl = document.getElementById("project-home-status");
+
+  // Breadcrumb: Today › Log › <Project>. Back returns to the Log (its context is
+  // preserved — the Log's own state vars are untouched by this view).
+  const backToLog = () => enterDecisionsView(undefined, { from: "home" });
+  setNav(
+    [
+      { label: "Log", go: backToLog },
+      { label: opts.label ? String(opts.label) : prettySlug(key) },
+    ],
+    { active: "log", back: backToLog },
+  );
+
+  if (eyebrowEl) eyebrowEl.textContent = opts.lens === "people" ? "Person" : "Project";
+  if (titleEl) titleEl.textContent = opts.label ? String(opts.label) : prettySlug(key);
+  if (subEl) subEl.textContent = "";
+  if (talliesEl) { talliesEl.innerHTML = ""; talliesEl.hidden = true; }
+  if (sopEl) sopEl.innerHTML = "";
+  if (relsEl) { relsEl.innerHTML = ""; relsEl.hidden = true; }
+  if (listEl) listEl.innerHTML = "";
+  if (statusEl) { statusEl.hidden = false; statusEl.dataset.kind = "loading"; statusEl.textContent = "Gathering everything for this project…"; }
+
+  // Ensure the Log context is loaded (aggregation reads it). Normal entry is from
+  // within the Log, so it's already populated; this covers a cold/edge entry.
+  let ctx = _decisionsCtx;
+  if (!ctx || !Array.isArray(ctx.items) || !ctx.items.length) {
+    try {
+      await loadDocsMap();
+      const data = await tauri.core.invoke("fetch_decision_log_full");
+      const raw = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+      const byId = new Map();
+      for (const it of raw) { const r = it && it.record ? it.record : it; if (r && r.recordId) byId.set(r.recordId, r); }
+      const docProjects = new Map();
+      try {
+        const docsResp = await tauri.core.invoke("fetch_documents");
+        const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+        for (const d of docs) if (d && d.id) docProjects.set(d.id, Array.isArray(d.projects) ? d.projects : []);
+      } catch (_e) { /* projects omitted */ }
+      ctx = {
+        items: raw, docProjects, byId,
+        edges: Array.isArray(data && data.edges) ? data.edges : [],
+        aliases: (data && data.aliases) || {}, jobNames: (data && data.jobNames) || {},
+        recordJobs: (data && data.recordJobs) || {}, frames: Array.isArray(data && data.frames) ? data.frames : [],
+        jobHeat: (data && data.jobHeat) || {}, actionKinds: (data && data.actionKinds) || {},
+        recordRelationship: (data && data.recordRelationship) || {},
+      };
+      _decisionsCtx = ctx; // share it so cards' badges/popovers resolve normally
+    } catch (err) {
+      console.warn("[main] project home cold fetch failed:", err);
+      if (statusEl) { statusEl.hidden = false; statusEl.dataset.kind = "error"; statusEl.textContent = "Couldn't reach Apolla. Check your connection, then Refresh."; }
+      return;
+    }
+  }
+
+  const agg = resolveProjectAggregate(ctx, key, opts);
+  if (titleEl) titleEl.textContent = agg.label;
+
+  if (!agg.items.length) {
+    // Graceful empty state — never blank/error.
+    if (statusEl) { statusEl.hidden = false; statusEl.dataset.kind = "empty"; statusEl.textContent = "Nothing has landed under " + agg.label + " yet."; }
+    return;
+  }
+  if (statusEl) statusEl.hidden = true;
+
+  // Sub-line: a plain sentence of what this page is.
+  if (subEl) {
+    const n = agg.items.length;
+    subEl.textContent = `Everything about ${agg.label} — ${n} ${n === 1 ? "record" : "records"} across every state.`;
+  }
+
+  // ① Typed tallies.
+  if (talliesEl) renderProjectHomeTallies(talliesEl, agg.items);
+
+  // ② State-of-Play — reuse the Log's per-project SoP header (narrative, receipted,
+  //    self-hides when unavailable) + the team-email compose bar. Keyed by the
+  //    resolved slug. Degrades silently on frameless / SoP-less corpora.
+  if (sopEl) {
+    sopEl.appendChild(buildProjectSopHeader(agg.sopSlug, agg.label));
+    sopEl.appendChild(buildProjectSopBar(agg.sopSlug, agg.label));
+  }
+
+  // ③ Project-scoped relationships summary (inline popover, no jump).
+  if (relsEl) renderProjectHomeRelationships(relsEl, ctx, agg.items);
+
+  // ④ Every record — same cards as the Log, so inline relationships (Blocked by /
+  //    Replaces / Conflicts with) come free via buildActionBadge + the popover.
+  //    Ordered open-first, then by due date, so the actionable items lead.
+  if (listEl) {
+    const ordered = [...agg.items].sort((x, y) => {
+      const sx = (x && x.state) || "open", sy = (y && y.state) || "open";
+      const rank = (s) => (s === "open" ? 0 : s === "resolved" ? 1 : 2);
+      if (rank(sx) !== rank(sy)) return rank(sx) - rank(sy);
+      const rx = x.record || x, ry = y.record || y;
+      const dx = rx && rx.due ? rx.due : "9999-99-99";
+      const dy = ry && ry.due ? ry.due : "9999-99-99";
+      return dx < dy ? -1 : dx > dy ? 1 : 0;
+    });
+    for (const it of ordered) {
+      const rec = it && it.record ? it.record : it;
+      if (!rec) continue;
+      listEl.appendChild(renderDecisionCard(rec, it.state, (ctx.docProjects && ctx.docProjects.get(rec.documentId)) || []));
+    }
+  }
+}
+
 // Shared "back to main" — the ⌂ Main buttons across views (WP-DECISION-ORG nav).
 function goHome() {
   state.inWizard = false;
@@ -10253,6 +10578,15 @@ if (decisionsBackBtn) decisionsBackBtn.addEventListener("click", () => enterLogV
 
 const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
 if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
+
+// WP-THRESHOLD-NAV Increment 2 — Project home Refresh re-fetches the Log context
+// then re-aggregates (re-enters with the same key/opts from _projectHomeCtx).
+const projectHomeRefreshBtn = document.getElementById("btn-project-home-refresh");
+if (projectHomeRefreshBtn) projectHomeRefreshBtn.addEventListener("click", () => {
+  if (!_projectHomeCtx) return;
+  _decisionsCtx = null; // force a fresh fetch inside enterProjectHomeView
+  enterProjectHomeView(_projectHomeCtx.key, { label: _projectHomeCtx.label, top: _projectHomeCtx.top, lens: _projectHomeCtx.lens });
+});
 
 // ⌂ Main — shared back-to-home on every sub-view footer (WP-DECISION-ORG nav).
 for (const id of ["btn-log-home", "btn-watching-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {

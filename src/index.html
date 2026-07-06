@@ -970,6 +970,47 @@
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
+         WP-THRESHOLD-NAV Increment 2 — Project home.
+         The single most-requested missing surface (Trisha: "where does LAA
+         live?"). A group-scoped landing page aggregating EVERYTHING for one
+         project/job/subject: a State-of-Play header, typed counts, all of its
+         records at every lifecycle state (not just open), each carrying its
+         inline relationships (Blocked by / Replaces / Conflicts with) via the
+         same renderDecisionCard cards + dependency popover the Log uses, plus a
+         project-scoped relationships summary. Generalizes the entity-scoped
+         Receipts view to any grouping key. Pure client-side aggregation over the
+         already-fetched _decisionsCtx — no new IPC. Reached via the "Open →"
+         affordance on any Log project/frame header.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-project-home" class="view view-decisions view-project-home" hidden>
+      <header class="decisions-header">
+        <div class="decisions-header-text">
+          <p class="project-home-eyebrow" id="project-home-eyebrow">Project</p>
+          <h1 class="decisions-title" id="project-home-title">—</h1>
+          <p class="decisions-sub" id="project-home-sub"></p>
+        </div>
+        <div class="decisions-header-actions">
+          <button type="button" id="btn-project-home-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <!-- Typed at-a-glance counts (addresses the "260 open" → typed nit). -->
+      <div class="project-home-tallies" id="project-home-tallies" role="group" aria-label="This project at a glance"></div>
+
+      <!-- State-of-Play narrative + team-email compose (buildProjectSopHeader /
+           buildProjectSopBar, keyed by the group slug). Hidden until prose lands. -->
+      <div class="project-home-sop" id="project-home-sop"></div>
+
+      <!-- Project-scoped relationships summary (blocked / waiting / conflicts). -->
+      <div class="project-home-rels" id="project-home-rels"></div>
+
+      <!-- The full record list for this project — same cards as the Log. -->
+      <div class="decisions-list" id="project-home-list" aria-label="Everything in this project"></div>
+
+      <p class="decisions-status" id="project-home-status" hidden></p>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
          WP-PLAUD-04a — Plaud Sync Queue view.
          Reached via right-click menu → "Plaud Sync Queue" (fires
          widget_expand with target_tab="plaud-queue"). main.js's bootstrap
