@@ -3311,6 +3311,7 @@ function renderTodaySkeleton() {
   // re-entry re-derives them (queue empty state unknown until it settles again).
   _todayQueueEmpty = null;
   _everythingElseHasContent = false;
+  _todayRollupSettled = false;
 
   // Needs-attention group expanders start collapsed on each fresh Today entry.
   _attentionExpandedGroups.clear();
@@ -3412,7 +3413,12 @@ function reconcileTodayQueueEmptyState(settled, filled) {
   const allSettled = settled.proxy && settled.question && settled.voids;
   // Hide the skeleton as soon as anything filled OR everything has settled.
   if (skel) skel.hidden = anyFilled || allSettled;
-  if (empty) empty.hidden = !(allSettled && !anyFilled);
+  // WP-TODAY-READ-ACT dedup: when the question PULL AFFORDANCE is up (it renders
+  // without counting as a filled card), its own "nothing right now" answer
+  // already says the queue is clear — a second nothing-line under it is noise.
+  const askSlot = document.getElementById("today-question-slot");
+  const askVisible = !!(askSlot && askSlot.firstElementChild);
+  if (empty) empty.hidden = !(allSettled && !anyFilled) || askVisible;
   // WP-R2 amendment item 3 — publish the queue's empty signal so the "Everything
   // else" fallback (owned by the decision-log rollup) can show only when empty.
   // Known only once all three sources settle; anyFilled ⇒ not empty.
@@ -3703,6 +3709,7 @@ async function renderTodayDecisionLog() {
   const everyCount = document.getElementById("log-everything-count");
   const attentionCount = needsAttention.length;
   _everythingElseHasContent = attentionCount + contradictions.length > 0;
+  _todayRollupSettled = true;
   if (everyCount) {
     everyCount.textContent = attentionCount ? String(attentionCount) : "";
   }
@@ -3750,19 +3757,24 @@ let _todayCtx = null;
 //   false = queue has cards       → hide "Everything else"
 let _todayQueueEmpty = null;
 // Whether the decision-log rollup produced any "Everything else" content this
-// render (needs-attention rows or contradictions). No content ⇒ header must not
-// paint alone (item 4), independent of the queue signal.
+// render (needs-attention rows or contradictions). Still tracked for the count
+// badge, but no-content no longer hides the section (see below).
 let _everythingElseHasContent = false;
+// Whether the rollup has SETTLED this render — the quiet "all clear" line may
+// only paint from a real answer, never from a not-yet-loaded state (a header
+// over an unloaded body would read as broken, WP-R2 item 4's real concern).
+let _todayRollupSettled = false;
 
-// Show/hide the "Everything else" collapsible from the two signals: the queue's
-// empty state AND whether the rollup produced content. Shown only when the queue
-// is settled-empty AND there's content to show. Until the queue settles we keep
-// it hidden (queue skeleton is still up; nothing actionable is confirmed yet).
+// Show/hide the "Needs attention" collapsible: shown once the queue settles
+// empty AND the rollup has settled — WITH content (the worklist) or WITHOUT
+// (renderTodayAttention's calm "you're on top of it" line; WP-TODAY-READ-ACT
+// quiet report — an affirmative all-clear, not a vanished section). Until both
+// settle we keep it hidden (skeletons are still up).
 function reconcileEverythingElseVisibility() {
   const everySection = document.getElementById("log-everything-section");
   if (!everySection) return;
   const queueEmpty = _todayQueueEmpty === true;
-  everySection.hidden = !(queueEmpty && _everythingElseHasContent);
+  everySection.hidden = !(queueEmpty && _todayRollupSettled);
 }
 
 /** Set the active filter + reflect it on the segmented control's buttons. */
@@ -4136,12 +4148,13 @@ async function loadTodayComingUp() {
   if (listEl) listEl.innerHTML = "";
   if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
 
-  // Empty ⇒ absent: no header, no container margin.
-  if (!rows.length) {
-    section.hidden = true;
-    return;
-  }
+  // Empty ⇒ quiet line (WP-TODAY-READ-ACT): "nothing due in the next two weeks"
+  // is affirmative information — the windshield stays present so the morning
+  // report reads complete, instead of the section vanishing into void.
+  const quietEl = document.getElementById("today-comingup-empty");
   section.hidden = false;
+  if (quietEl) quietEl.hidden = rows.length > 0;
+  if (!rows.length) return;
 
   const submitterByDoc = (_todayCtx && _todayCtx.submitterByDoc) || new Map();
   const viewerEmail = _todayCtx && _todayCtx.viewerEmail;
@@ -4861,15 +4874,20 @@ function renderSoPProse(container, data, opts) {
 // lens when an identity is known. Same panel slot + copy/edit affordances as the
 // old corpus altitude; maturity-aware now that the backend gates by frame.
 async function loadCorpusStateOfPlay(panel) {
+  panel.classList.remove("sop-quiet");
   panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
   const data = await loadSoP("forest", null, personLens(_todayCtx && _todayCtx.viewerSlug));
   if (!data) {
+    // Quiet report (WP-TODAY-READ-ACT): the unavailable state is a calm line,
+    // not a boxed callout — .sop-quiet strips the panel chrome.
+    panel.classList.add("sop-quiet");
     panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
     return;
   }
   renderCorpusPanel(panel, data);
 }
 function renderCorpusPanel(panel, data) {
+  panel.classList.remove("sop-quiet");
   panel.innerHTML = "";
   // Flatten the SoP payload to a copy-ready plain-text block (lead prose + any
   // labelled sections), for the Copy button + the inline digest editor.
