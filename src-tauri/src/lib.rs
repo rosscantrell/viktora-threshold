@@ -6608,6 +6608,8 @@ fn widget_expand(
     window
         .set_decorations(true)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
+    // A real window gets the system shadow (the widget boots with shadow:false).
+    let _ = window.set_shadow(true);
     window
         .set_skip_taskbar(false)
         .map_err(|e| format!("set_skip_taskbar failed: {e}"))?;
@@ -6717,6 +6719,9 @@ fn widget_collapse(
     window
         .set_decorations(false)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
+    // Restore the shadowless panel persona — toggling decorations re-enables
+    // the system shadow, which paints a grey halo around the transparent pill.
+    let _ = window.set_shadow(false);
     window
         .set_resizable(false)
         .map_err(|e| format!("set_resizable failed: {e}"))?;
