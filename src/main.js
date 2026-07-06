@@ -3689,6 +3689,100 @@ function appendSoPReceipts(container, raw) {
   if (wrap) container.appendChild(wrap);
 }
 
+// WP-SR1 — claim-level receipts. When SOP_CLAIM_RECEIPTS_ENABLED is on, the
+// /api/state-of-play and /state-of-play/compose payloads carry, beside the
+// prose, `receipts: { claims: [{key, claim, count, refs: [{recordId, verbatim,
+// documentId}]}], receiptlessClaims }` — the records each quantitative claim
+// ("3 overdue", "oldest due 2026-06-12") was mechanically computed FROM. This
+// object shape is distinct from the array/record shape appendSoPReceipts
+// consumes; sopClaimsShaped tells them apart so either payload renders on the
+// path built for it.
+function sopClaimsShaped(raw) {
+  return !!(raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.claims));
+}
+
+// Render the claims block: each claim becomes a disclosure pill (the
+// .sop-frame-toggle idiom — chevron, aria-expanded) that expands to its
+// supporting records, each through the ONE receipt component (§2.4): verbatim
+// quote + jump-to-source. Defensive: returns null unless the payload is
+// claims-shaped AND at least one claim has a renderable ref, so an absent or
+// empty field leaves the surface exactly as before. A claim with no citeable
+// refs renders no pill (fail-closed, matching the engine's framing); claims the
+// engine itself couldn't ground surface as the dim receiptlessClaims note.
+function renderSopClaims(receipts) {
+  if (!sopClaimsShaped(receipts)) return null;
+  const rows = [];
+  for (const c of receipts.claims) {
+    if (!c || typeof c !== "object") continue;
+    const label = typeof c.claim === "string" ? c.claim.trim() : "";
+    const refs = (Array.isArray(c.refs) ? c.refs : []).filter(
+      (r) => r && typeof r === "object" && (r.verbatim || r.documentId),
+    );
+    if (!label || !refs.length) continue;
+    rows.push({ label, refs });
+  }
+  const receiptless = typeof receipts.receiptlessClaims === "number" && receipts.receiptlessClaims > 0
+    ? receipts.receiptlessClaims
+    : 0;
+  if (!rows.length && !receiptless) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "sop-claims";
+  for (const row of rows) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "sop-frame-toggle sop-claim-toggle";
+    toggle.textContent = row.label;
+    toggle.title = row.refs.length === 1
+      ? "Show the record behind this"
+      : "Show the " + row.refs.length + " records behind this";
+    toggle.setAttribute("aria-expanded", "false");
+    const panel = document.createElement("div");
+    panel.className = "sop-claim-panel";
+    panel.hidden = true;
+    toggle.addEventListener("click", () => {
+      const open = toggle.getAttribute("aria-expanded") === "true";
+      if (open) {
+        toggle.setAttribute("aria-expanded", "false");
+        panel.hidden = true;
+        return;
+      }
+      if (!panel.childElementCount) {
+        for (const ref of row.refs) {
+          panel.appendChild(
+            renderReceipt(
+              {
+                verbatim: ref.verbatim,
+                // The engine contract (sopReceipts.ts) emits ref.verbatim as the
+                // record's extractor-grounded source text, never invented, but the
+                // ref triple doesn't carry the verified flag itself — so trust the
+                // contract, while honoring an explicit false should a later
+                // payload add the field.
+                verbatimVerified: ref.verbatimVerified !== false && !!ref.verbatim,
+                documentId: ref.documentId || undefined,
+              },
+              { variant: "receipt-sop-claim", compact: true },
+            ),
+          );
+        }
+      }
+      toggle.setAttribute("aria-expanded", "true");
+      panel.hidden = false;
+    });
+    wrap.appendChild(toggle);
+    wrap.appendChild(panel);
+  }
+  if (receiptless) {
+    const note = document.createElement("div");
+    note.className = "sop-claims-note";
+    note.textContent = receiptless === 1
+      ? "1 more claim couldn't be traced to records."
+      : receiptless + " more claims couldn't be traced to records.";
+    wrap.appendChild(note);
+  }
+  return wrap.childElementCount ? wrap : null;
+}
+
 // Render the SoP prose into a container. `sections`, when present, render as
 // labelled sub-blocks beneath the lead prose; otherwise the prose alone shows.
 // No jargon translation here — the backend already voiced it. `opts.compact`
@@ -3730,7 +3824,15 @@ function renderSoPProse(container, data, opts) {
   }
 
   // Digest-level receipts (evidence attached to the lead prose, not a section).
-  appendSoPReceipts(container, data.receipts || data.evidence);
+  // WP-SR1 claim-level payloads ({claims, receiptlessClaims}) render as
+  // expandable claim pills; the WP-R3 array/record shape keeps the flat receipt
+  // stack. Either way, absent ⇒ nothing.
+  if (sopClaimsShaped(data.receipts)) {
+    const claims = renderSopClaims(data.receipts);
+    if (claims) container.appendChild(claims);
+  } else {
+    appendSoPReceipts(container, data.receipts || data.evidence);
+  }
 
   // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
   // dim, single line; omitted in compact mode and when absent.
@@ -8699,6 +8801,11 @@ function renderSopPanel(panel, data, slug, label) {
 
   panel.appendChild(bar);
   panel.appendChild(msg);
+  // WP-SR1 — claim-level receipts, when the payload carries them. The person
+  // digest doesn't emit the field yet, so this renders nothing today (additive)
+  // and lights up the moment the engine attaches receipts to this altitude.
+  const claimsEl = renderSopClaims(data.receipts);
+  if (claimsEl) panel.appendChild(claimsEl);
   // Phase B — inline digest edit (person altitude).
   attachDigestEditor({ panel, bar, msg, scope: "person", subject: slug, label, message: data.message || "", editsEnabled: data.editsEnabled });
   // WP-Cohesion-Operators — "worth looping in" rail, scoped to this person
@@ -8930,7 +9037,7 @@ function mountComposeStart(wrap, ctx) {
       wrap.innerHTML = '<div class="sop-status">No team update to compose for this area right now.</div>';
       return;
     }
-    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {}, items: Array.isArray(res.items) ? res.items : [] });
+    renderComposeEditor(wrap, { ...ctx, draft: res.draft || "", recipients: res.recipients || {}, items: Array.isArray(res.items) ? res.items : [], receipts: res.receipts });
   });
 }
 
@@ -8967,6 +9074,13 @@ function renderComposeEditor(wrap, ctx) {
   ta.rows = Math.min(22, Math.max(8, generated.split("\n").length + 1));
   ta.value = generated;
   wrap.appendChild(ta);
+
+  // WP-SR1 — the quantitative claims behind the draft ("3 overdue", "oldest due
+  // <date>" …), each expandable to the records it was computed from. Sits above
+  // the flat Sources list so the draft's numbers are checkable before sending.
+  // Absent field ⇒ nothing (renderSopClaims guards the shape).
+  const claimsEl = renderSopClaims(ctx.receipts);
+  if (claimsEl) wrap.appendChild(claimsEl);
 
   // WP-R3 item 2 — the citations behind the draft, through the ONE receipt
   // component (§2.4), so the compose preview is consistent with every other

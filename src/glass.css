@@ -245,6 +245,37 @@ body {
   flex-direction: column;
   gap: 6px;
 }
+/* WP-SR1 — claim-level receipts. Each quantitative claim in the digest is a
+ * disclosure pill (the .sop-frame-toggle idiom) whose panel lists the records
+ * the claim was computed from, each through the ONE receipt component. The
+ * panel spans the full row (flex-basis trick, same as .sop-frame-panel) so an
+ * open claim pushes its neighbours down rather than sideways. */
+.sop-claims {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sop-claim-panel {
+  flex-basis: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-sm);
+  background: var(--glass-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+/* display:flex would defeat the hidden attribute — restore it explicitly. */
+.sop-claim-panel[hidden] {
+  display: none;
+}
+.sop-claims-note {
+  flex-basis: 100%;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+}
 .sop-maturity-tag {
   font-size: 10px;
   letter-spacing: 0.02em;
