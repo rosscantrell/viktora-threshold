@@ -5001,6 +5001,17 @@ button.record-action-badge {
 #btn-connections-back, #btn-auto-import-back {
   display: none !important;
 }
+/* WP-THRESHOLD-NAV Increment 2 (cleanup) — with the footer back/home buttons
+   hidden above, their containers were left as empty flex/padding boxes that added
+   dead vertical space at the bottom of each view. Collapse the ones whose ONLY
+   children were those now-hidden nav buttons (the persistent #app-nav replaced
+   them). Text-bearing footers like .receipts-footer are untouched. */
+.decisions-footer,
+.edges-footer,
+.entity-card-actions,
+.receipts-actions {
+  display: none;
+}
 /* view-main's header destination row is replaced by the persistent nav bar. */
 .main-header-actions { display: none; }
 
@@ -5566,4 +5577,118 @@ button.rec-source {
 }
 .proxy-queue-footer {
   margin-top: 16px;
+}
+
+/* ───────── WP-THRESHOLD-NAV Increment 2 — Project home ─────────
+   The per-project landing surface. Reuses the glass tokens + the Log's card /
+   SoP components; only the page-level scaffolding (eyebrow, tallies, relationship
+   summary) and the two "Open →" entry affordances are new here. */
+
+/* "Open →" entry affordances on the Log's group + frame headers. Matches the
+   .job-move-btn chrome so the header row reads consistently. The frame-level one
+   sits before the ⋯ edit glyph; the group-level one before Move. */
+.job-open-home-btn,
+.frame-open-home-btn {
+  font-size: 10px;
+  color: var(--glass-link, #7fb3e8);
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+  cursor: pointer;
+}
+.job-open-home-btn { margin-left: 8px; }
+.frame-open-home-btn { margin-left: auto; }
+.job-open-home-btn:hover,
+.frame-open-home-btn:hover {
+  background: var(--glass-surface-hover);
+  color: var(--glass-text);
+  border-color: var(--glass-border-strong);
+}
+
+.project-home-eyebrow {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--glass-text-faint);
+  margin: 0 0 2px;
+}
+
+/* Typed at-a-glance tallies — labelled by type + lifecycle state, never a bare
+   number (the "260 open" → typed nit). */
+.project-home-tallies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+.project-home-tally {
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+}
+.project-home-tally-num {
+  color: var(--glass-text);
+  font-weight: 600;
+  margin-right: 2px;
+}
+.project-home-tally-open .project-home-tally-num { color: var(--glass-accent, #ffc440); }
+.project-home-tally-resolved .project-home-tally-num { color: var(--glass-success, #5dcaa5); }
+.project-home-tally-replaced .project-home-tally-num { color: var(--glass-text-dim); }
+
+.project-home-sop { margin-bottom: 14px; }
+.project-home-sop:empty { display: none; }
+
+/* Project-scoped relationships summary — the item-first "what depends on what",
+   each line clickable to reveal both ends inline (shared dependency popover). */
+.project-home-rels {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: var(--glass-radius-md, 9px);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-surface);
+}
+.project-home-rels-head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--glass-text-faint);
+  margin-bottom: 8px;
+}
+.project-home-rels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.project-home-rel-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--glass-text-dim);
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+}
+.project-home-rel-line:hover {
+  background: var(--glass-surface-hover);
+  border-color: var(--glass-border);
+  color: var(--glass-text);
+}
+.project-home-rel-icon {
+  flex: 0 0 auto;
+  color: var(--glass-text-faint);
+}
+.project-home-rel-text {
+  flex: 1 1 auto;
+  min-width: 0;
 }
