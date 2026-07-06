@@ -915,7 +915,7 @@ async function renderEmailCapture() {
     copyBtn.addEventListener("click", async () => {
       try {
         await tauri.core.invoke("copy_text", { text: activeAddr });
-        copyBtn.textContent = "Copied";
+        copyBtn.textContent = "Copied ✓";
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
       } catch (err) {
         showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
@@ -3301,6 +3301,9 @@ function renderTodaySkeleton() {
   // re-entry re-derives them (queue empty state unknown until it settles again).
   _todayQueueEmpty = null;
   _everythingElseHasContent = false;
+
+  // Needs-attention group expanders start collapsed on each fresh Today entry.
+  _attentionExpandedGroups.clear();
 }
 
 // Toggle the demoted "Filed automatically" line inside "Waiting on you"
@@ -3760,12 +3763,59 @@ function setTodayFilter(filter) {
   }
 }
 
+// Needs-attention ordering — deterministic, derived from fields already on each
+// entry (no new fetch). Tier: (0) blocked, (1) overdue, (2) silent, (3) rest.
+// A row is "blocked" when its state flags it or its reason/kind names a blocked
+// dependency; "overdue" when its due date is strictly before today.
+const ATTENTION_TODAY_MS = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
+function attentionIsBlocked(entry) {
+  const st = (entry && entry.state) || (entry && entry.record && entry.record.state) || "";
+  if (String(st).toLowerCase() === "blocked" || (entry && entry.blocked === true)) return true;
+  const reason = String((entry && (entry.reason || entry.kind)) || "").toLowerCase();
+  return reason.includes("block") || reason === "depends-on-incomplete";
+}
+/** Sort key for one needs-attention entry. Lower `tier` sorts first; within a
+ *  tier the secondary key orders (overdue: oldest due asc; silent: longest desc). */
+function attentionRowKey(entry) {
+  const rec = (entry && entry.record) || {};
+  const lc = (entry && entry.lifecycle) || {};
+  const dueDate = parseDueDate(rec.due);
+  const dueMs = dueDate ? dueDate.getTime() : null;
+  const overdue = dueMs != null && dueMs < ATTENTION_TODAY_MS();
+  const silentDays = typeof lc.silentDays === "number" ? lc.silentDays : -1;
+  if (attentionIsBlocked(entry)) return { tier: 0, a: dueMs != null ? dueMs : Infinity, b: -silentDays };
+  if (overdue) return { tier: 1, a: dueMs, b: -silentDays }; // oldest due first
+  if (silentDays > 0) return { tier: 2, a: -silentDays, b: dueMs != null ? dueMs : Infinity }; // longest-silent first
+  return { tier: 3, a: dueMs != null ? dueMs : Infinity, b: -silentDays };
+}
+/** Stable in-place sort of an attention-entry array by the tiered key. */
+function sortAttentionRows(rows) {
+  return rows
+    .map((e, i) => ({ e, i, k: attentionRowKey(e) }))
+    .sort((x, y) => (x.k.tier - y.k.tier) || (x.k.a - y.k.a) || (x.k.b - y.k.b) || (x.i - y.i))
+    .map((o) => o.e);
+}
+/** Group's most-urgent row key — orders GROUPS (blocked ▷ overdue ▷ silent; tie
+ *  breaks on oldest due). Groups are pre-sorted, so [0] is the winner. */
+function groupUrgencyKey(grp) {
+  const items = (grp.items || []).slice();
+  if (!items.length) return { tier: 4, a: Infinity, b: 0 };
+  return attentionRowKey(sortAttentionRows(items)[0]);
+}
+
+// Groups longer than this collapse to the first N rows + a "Show all" expander.
+const ATTENTION_GROUP_COLLAPSE_THRESHOLD = 6;
+const ATTENTION_GROUP_COLLAPSE_VISIBLE = 5;
+// Group keys the user expanded this session (survives re-render; cleared on view enter).
+const _attentionExpandedGroups = new Set();
+
 /** Render the needs-attention list under the current filter, GROUPED BY PROJECT.
  *  "Mine" keeps only rows whose owner slug matches the viewer's (email local-part
  *  → slug). Grouping reuses the Decisions By-project derivation (groupRecords over
- *  the documentId → projects[] map on _todayCtx.docProjects), ordered by the same
- *  attention rank; within each group rows keep the server's attention order.
- *  Degrades to a flat (ungrouped) list when there's no project data. */
+ *  the documentId → projects[] map on _todayCtx.docProjects); rows within a group
+ *  sort blocked ▷ overdue (oldest first) ▷ longest-silent ▷ rest, and groups order
+ *  by their most-urgent row. Degrades to a flat (ungrouped) list when there's no
+ *  project data. Groups over 6 rows collapse to 5 + a "Show all N" expander. */
 function renderTodayAttention() {
   const ctx = _todayCtx;
   const groupsEl = document.getElementById("log-attention-groups");
@@ -3800,10 +3850,15 @@ function renderTodayAttention() {
     // (non-"Other") project. A lone "Other" bucket ⇒ flat list (no project data).
     const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
     if (g.length > 1 || named.length === 1) {
-      // Order groups attention-first (Other stays last, per groupRecords' order key).
+      // Sort each group's rows blocked ▷ overdue ▷ silent ▷ rest so the group's
+      // most-urgent row is [0] and drives group ordering.
+      for (const grp of g) grp.items = sortAttentionRows(grp.items);
+      // Order groups by their most-urgent row ("Other" stays last per groupRecords'
+      // order key; within the same order band, urgency decides).
       grouped = g.slice().sort((a, b) => {
         if ((a.order || 0) !== (b.order || 0)) return (a.order || 0) - (b.order || 0);
-        return groupAttention(b) - groupAttention(a);
+        const ka = groupUrgencyKey(a), kb = groupUrgencyKey(b);
+        return (ka.tier - kb.tier) || (ka.a - kb.a) || (ka.b - kb.b);
       });
     }
   }
@@ -3820,11 +3875,11 @@ function renderTodayAttention() {
       count.textContent = String(grp.items.length);
       head.appendChild(count);
       wrap.appendChild(head);
-      for (const entry of grp.items) wrap.appendChild(renderRow(entry));
+      renderAttentionGroupRows(wrap, grp, renderRow);
       groupsEl.appendChild(wrap);
     }
   } else {
-    for (const entry of rows) listEl.appendChild(renderRow(entry));
+    for (const entry of sortAttentionRows(rows)) listEl.appendChild(renderRow(entry));
   }
 
   if (emptyEl) {
@@ -3836,6 +3891,41 @@ function renderTodayAttention() {
           : "Nothing overdue and silent. You're on top of it.";
     }
   }
+}
+
+/** Append a group's rows into `wrap`. Groups over the threshold render the first
+ *  N rows + a "Show all M →" btn-link that reveals the rest IN PLACE (no view jump,
+ *  aria-expanded). Expansion state is remembered in _attentionExpandedGroups so a
+ *  re-render keeps an opened group open. Rows are pre-sorted by the caller. */
+function renderAttentionGroupRows(wrap, grp, renderRow) {
+  const items = grp.items || [];
+  const overThreshold = items.length > ATTENTION_GROUP_COLLAPSE_THRESHOLD;
+  const expanded = !overThreshold || _attentionExpandedGroups.has(grp.key);
+  const visibleCount = expanded ? items.length : ATTENTION_GROUP_COLLAPSE_VISIBLE;
+
+  const rendered = items.map(renderRow);
+  for (let i = 0; i < rendered.length; i++) {
+    if (i >= visibleCount) rendered[i].hidden = true;
+    wrap.appendChild(rendered[i]);
+  }
+
+  if (!overThreshold) return;
+  const expander = document.createElement("button");
+  expander.type = "button";
+  expander.className = "btn btn-link log-attention-showall";
+  expander.setAttribute("aria-expanded", expanded ? "true" : "false");
+  expander.textContent = expanded ? "Show less" : `Show all ${items.length} →`;
+  expander.addEventListener("click", () => {
+    const nowExpanded = expander.getAttribute("aria-expanded") !== "true";
+    expander.setAttribute("aria-expanded", nowExpanded ? "true" : "false");
+    if (nowExpanded) _attentionExpandedGroups.add(grp.key);
+    else _attentionExpandedGroups.delete(grp.key);
+    for (let i = ATTENTION_GROUP_COLLAPSE_VISIBLE; i < rendered.length; i++) {
+      rendered[i].hidden = !nowExpanded;
+    }
+    expander.textContent = nowExpanded ? "Show less" : `Show all ${items.length} →`;
+  });
+  wrap.appendChild(expander);
 }
 
 /** One needs-attention row: summary, subject, owner, due, silent-days, and
@@ -4149,7 +4239,8 @@ function renderContradictionRow(edge) {
   if (edge.severity) {
     const sev = document.createElement("span");
     sev.className = "log-contradiction-sev";
-    sev.textContent = edge.severity.toUpperCase();
+    // Sentence-case ("High"/"Medium"), not raw caps — display formatting only.
+    sev.textContent = edge.severity.charAt(0).toUpperCase() + edge.severity.slice(1);
     row.appendChild(sev);
   }
 
@@ -4184,19 +4275,7 @@ function renderOwnerChip(o) {
   return chip;
 }
 
-// Today-view buttons: back-to-widget, refresh, and the view-main / post-capture
-// entry points.
-const logBackBtn = document.getElementById("btn-log-back");
-if (logBackBtn) {
-  logBackBtn.addEventListener("click", async () => {
-    try {
-      await tauri.core.invoke("widget_collapse");
-    } catch (err) {
-      console.warn("[main] widget_collapse (log-back) failed:", err);
-    }
-  });
-}
-
+// Today-view buttons: refresh, and the view-main / post-capture entry points.
 const logRefreshBtn = document.getElementById("btn-log-refresh");
 if (logRefreshBtn) {
   logRefreshBtn.addEventListener("click", () => {
@@ -4750,7 +4829,7 @@ function renderInformCard(edge, mode) {
   copyBtn.addEventListener("click", async () => {
     try {
       await tauri.core.invoke("copy_text", { text: sendReady });
-      copyBtn.textContent = "Copied";
+      copyBtn.textContent = "Copied ✓";
       copyBtn.disabled = true;
       setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.disabled = false; }, 1600);
     } catch (e) {
@@ -6230,7 +6309,8 @@ function renderEdgeCard(edge, byId, baseUrl) {
     const sev = document.createElement("span");
     sev.className = "edge-sev-pill";
     sev.dataset.severity = edge.severity;
-    sev.textContent = edge.severity.toUpperCase();
+    // Sentence-case ("High"/"Medium"), not raw caps — display formatting only.
+    sev.textContent = edge.severity.charAt(0).toUpperCase() + edge.severity.slice(1);
     header.appendChild(sev);
   }
   const confirmedPill = document.createElement("span");
@@ -6443,18 +6523,7 @@ function renderEdgeEndpoint(rec, baseUrl) {
   return ep;
 }
 
-// Connections-view buttons: back-to-widget, refresh, and the view-main entry.
-const edgesBackBtn = document.getElementById("btn-edges-back");
-if (edgesBackBtn) {
-  edgesBackBtn.addEventListener("click", async () => {
-    try {
-      await tauri.core.invoke("widget_collapse");
-    } catch (err) {
-      console.warn("[main] widget_collapse (edges-back) failed:", err);
-    }
-  });
-}
-
+// Connections-view buttons: refresh, and the view-main entry.
 const edgesRefreshBtn = document.getElementById("btn-edges-refresh");
 if (edgesRefreshBtn) {
   edgesRefreshBtn.addEventListener("click", () => {
@@ -6643,22 +6712,6 @@ if (receiptsCardBtn) {
   });
 }
 
-// Back — return to the subject's Receipts when we came from there, else collapse.
-const entityCardBackBtn = document.getElementById("btn-entity-card-back");
-if (entityCardBackBtn) {
-  entityCardBackBtn.addEventListener("click", async () => {
-    if (_entityCardReturn) {
-      enterReceiptsView(_entityCardReturn);
-      return;
-    }
-    try {
-      await tauri.core.invoke("widget_collapse");
-    } catch (err) {
-      console.warn("[main] widget_collapse (entity-card-back) failed:", err);
-    }
-  });
-}
-
 // ───────── Decisions browser — by project, status-filterable (WP-THRESHOLD-DECISION-ORG) ─────────
 
 // Records + the documentId→projects map for the current browse, kept so the
@@ -6710,13 +6763,6 @@ function pgOverlay() {
   return o;
 }
 function pgClose(o) { if (o && o.parentNode) o.parentNode.removeChild(o); }
-function pgToast(msg) {
-  const t = document.createElement("div");
-  t.className = "pg-toast";
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => { if (t.parentNode) t.parentNode.removeChild(t); }, 2600);
-}
 
 // Per-view snapshot of which project groups are user-merged — drives the Split
 // affordance + supplies the unmerge restore set. Refreshed on each Decisions enter.
@@ -6874,7 +6920,7 @@ function confirmCombine(sourceGrp, targetGrp, opts) {
 
 async function runCombine(sourceGrp, targetGrp, override, overlay) {
   const fp = await projectCanonFingerprint();
-  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  if (!fp) { pgClose(overlay); showToast({ kind: "failure", title: "Project grouping isn't available on this server." }); return; }
   let actor = "threshold-user";
   try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
   let res;
@@ -6893,7 +6939,7 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
   } catch (err) {
     console.warn("[main] project_canon_merge failed:", err);
     pgClose(overlay);
-    pgToast("Groupings changed since you opened this — refreshing.");
+    showToast({ kind: "idempotent", title: "Groupings changed since you opened this — refreshing." });
     enterDecisionsView();
     return;
   }
@@ -6903,7 +6949,7 @@ async function runCombine(sourceGrp, targetGrp, override, overlay) {
     return;
   }
   pgClose(overlay);
-  pgToast(`Combined into “${targetGrp.label}”.`);
+  showToast({ kind: "success", title: `Combined into “${targetGrp.label}”.` });
   enterDecisionsView();
 }
 
@@ -6960,7 +7006,7 @@ function openRenameDialog(grp) {
 
 async function runRename(grp, newLabel, overlay) {
   const fp = await projectCanonFingerprint();
-  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  if (!fp) { pgClose(overlay); showToast({ kind: "failure", title: "Project grouping isn't available on this server." }); return; }
   let actor = "threshold-user";
   try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
   try {
@@ -6973,12 +7019,12 @@ async function runRename(grp, newLabel, overlay) {
   } catch (err) {
     console.warn("[main] project_canon_rename failed:", err);
     pgClose(overlay);
-    pgToast("Groupings changed since you opened this — refreshing.");
+    showToast({ kind: "idempotent", title: "Groupings changed since you opened this — refreshing." });
     enterDecisionsView();
     return;
   }
   pgClose(overlay);
-  pgToast(`Renamed to “${newLabel}”.`);
+  showToast({ kind: "success", title: `Renamed to “${newLabel}”.` });
   enterDecisionsView();
 }
 
@@ -7025,7 +7071,7 @@ function confirmSplit(grp, merged) {
 
 async function runSplit(grp, merged, overlay) {
   const fp = await projectCanonFingerprint();
-  if (!fp) { pgClose(overlay); pgToast("Project grouping isn't available on this server."); return; }
+  if (!fp) { pgClose(overlay); showToast({ kind: "failure", title: "Project grouping isn't available on this server." }); return; }
   let actor = "threshold-user";
   try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
   try {
@@ -7038,12 +7084,12 @@ async function runSplit(grp, merged, overlay) {
   } catch (err) {
     console.warn("[main] project_canon_unmerge failed:", err);
     pgClose(overlay);
-    pgToast("Groupings changed since you opened this — refreshing.");
+    showToast({ kind: "idempotent", title: "Groupings changed since you opened this — refreshing." });
     enterDecisionsView();
     return;
   }
   pgClose(overlay);
-  pgToast(`Split “${grp.label}” apart.`);
+  showToast({ kind: "success", title: `Split “${grp.label}” apart.` });
   enterDecisionsView();
 }
 
@@ -11298,9 +11344,6 @@ for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
 const decisionsHomeBtn = document.getElementById("btn-decisions-home");
 if (decisionsHomeBtn) decisionsHomeBtn.addEventListener("click", () => goHome());
 
-const decisionsBackBtn = document.getElementById("btn-decisions-back");
-if (decisionsBackBtn) decisionsBackBtn.addEventListener("click", () => enterLogView());
-
 const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
 if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
 
@@ -11312,12 +11355,6 @@ if (projectHomeRefreshBtn) projectHomeRefreshBtn.addEventListener("click", () =>
   _decisionsCtx = null; // force a fresh fetch inside enterProjectHomeView
   enterProjectHomeView(_projectHomeCtx.key, { label: _projectHomeCtx.label, top: _projectHomeCtx.top, lens: _projectHomeCtx.lens });
 });
-
-// ⌂ Main — shared back-to-home on every sub-view footer (WP-DECISION-ORG nav).
-for (const id of ["btn-log-home", "btn-watching-home", "btn-edges-home", "btn-receipts-home", "btn-entity-card-home"]) {
-  const b = document.getElementById(id);
-  if (b) b.addEventListener("click", () => goHome());
-}
 
 // ───────── Receipts — the evidence dossier (WP-THRESHOLD-LOG-UX) ─────────
 
@@ -11904,13 +11941,6 @@ if (receiptsCopyBtn) {
         receiptsCopyBtn.textContent = original;
       }, 1600);
     }
-  });
-}
-
-const receiptsBackBtn = document.getElementById("btn-receipts-back");
-if (receiptsBackBtn) {
-  receiptsBackBtn.addEventListener("click", () => {
-    enterLogView();
   });
 }
 
@@ -12996,43 +13026,74 @@ async function handleOneNoteSendSection(section, pageCount) {
 
   const sectionName = section.name || "this section";
   const estCostUsd = (pageCount * ONENOTE_BULK_SEND_COST_PER_PAGE_USD).toFixed(2);
-  const confirmMsg =
-    `Send all ${pageCount} page${pageCount === 1 ? "" : "s"} in "${sectionName}"?\n\n` +
+
+  // Styled in-DOM confirm (brief §3.4 AC: "Confirm dialog shows estimated LLM
+  // cost"). The actual send runs in the confirm button's click handler.
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = `Send all ${pageCount} page${pageCount === 1 ? "" : "s"} in “${sectionName}”?`;
+  pane.appendChild(title);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "pg-confirm-body";
+  bodyEl.textContent =
     `Estimated cost ~$${ONENOTE_BULK_SEND_COST_PER_PAGE_USD.toFixed(3)} per page ` +
-    `(~$${estCostUsd} total).\n\n` +
-    `Continue?`;
-  if (!window.confirm(confirmMsg)) return;
+    `(~$${estCostUsd} total).`;
+  pane.appendChild(bodyEl);
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Send";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Sending…";
+    pgClose(overlay);
 
-  // Track the in-flight section so the progress handler can drive the UI
-  // and the cancel button has the right context.
-  state.onenoteBulkSend = {
-    sectionId: section.sectionId,
-    sectionName: sectionName,
-  };
-  showOneNoteBulkSendProgress(sectionName, pageCount);
-
-  try {
-    // Returns the same BulkSendReport that gets emitted on the
-    // onenote-bulk-send-complete event; we rely on the event handler to
-    // drive the UI (so the active-section dispatch path from the widget
-    // menu — which doesn't await this IPC — gets the same handling). The
-    // try here is just for the IPC-level error (config missing, etc.) —
-    // per-page errors get aggregated in the BulkSendReport.
-    await tauri.core.invoke("onenote_send_section", {
+    // Track the in-flight section so the progress handler can drive the UI
+    // and the cancel button has the right context.
+    state.onenoteBulkSend = {
       sectionId: section.sectionId,
-    });
-    // Final UI cleanup happens in handleOneNoteBulkSendComplete.
-  } catch (err) {
-    // IPC-level error (e.g., config missing, hierarchy enum failed).
-    // Clear the in-flight tracker + UI; surface via toast.
-    state.onenoteBulkSend = { sectionId: null, sectionName: null };
-    hideOneNoteBulkSendProgress();
-    showToast({
-      kind: "failure",
-      title: `Couldn't send section: ${sectionName}`,
-      body: String(err),
-    });
-  }
+      sectionName: sectionName,
+    };
+    showOneNoteBulkSendProgress(sectionName, pageCount);
+
+    try {
+      // Returns the same BulkSendReport that gets emitted on the
+      // onenote-bulk-send-complete event; we rely on the event handler to
+      // drive the UI (so the active-section dispatch path from the widget
+      // menu — which doesn't await this IPC — gets the same handling). The
+      // try here is just for the IPC-level error (config missing, etc.) —
+      // per-page errors get aggregated in the BulkSendReport.
+      await tauri.core.invoke("onenote_send_section", {
+        sectionId: section.sectionId,
+      });
+      // Final UI cleanup happens in handleOneNoteBulkSendComplete.
+    } catch (err) {
+      // IPC-level error (e.g., config missing, hierarchy enum failed).
+      // Clear the in-flight tracker + UI; surface via toast.
+      state.onenoteBulkSend = { sectionId: null, sectionName: null };
+      hideOneNoteBulkSendProgress();
+      showToast({
+        kind: "failure",
+        title: `Couldn't send section: ${sectionName}`,
+        body: String(err),
+      });
+    }
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
 }
 
 /**
@@ -13783,26 +13844,55 @@ async function handlePlaudCancelClick() {
   }
 }
 
-async function handlePlaudDisconnectClick() {
-  const confirmed = window.confirm(
-    "Disconnect Plaud locally?\n\n" +
-      "This clears Threshold's cached connection status. " +
-      "Plaud tokens remain on the droplet — SSH in and delete " +
-      "/home/deploy/.plaud/tokens.json to fully revoke."
-  );
-  if (!confirmed) return;
-  try {
-    await tauri.core.invoke("plaud_disconnect_soft_clear");
-    renderPlaudConnectionCard(null, { busy: false });
-    const bannerEl = document.getElementById("plaud-disconnect-banner");
-    if (bannerEl) bannerEl.hidden = false;
-  } catch (err) {
-    showToast({
-      kind: "failure",
-      title: "Disconnect failed",
-      body: String(err),
-    });
-  }
+function handlePlaudDisconnectClick() {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Disconnect Plaud locally?";
+  pane.appendChild(title);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "pg-confirm-body";
+  bodyEl.textContent =
+    "This clears Threshold's cached connection status. " +
+    "Plaud tokens remain on the droplet — SSH in and delete " +
+    "/home/deploy/.plaud/tokens.json to fully revoke.";
+  pane.appendChild(bodyEl);
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Disconnect";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Disconnecting…";
+    try {
+      await tauri.core.invoke("plaud_disconnect_soft_clear");
+      pgClose(overlay);
+      renderPlaudConnectionCard(null, { busy: false });
+      const bannerEl = document.getElementById("plaud-disconnect-banner");
+      if (bannerEl) bannerEl.hidden = false;
+    } catch (err) {
+      pgClose(overlay);
+      showToast({
+        kind: "failure",
+        title: "Disconnect failed",
+        body: String(err),
+      });
+    }
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
 }
 
 /**

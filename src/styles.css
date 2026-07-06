@@ -207,17 +207,6 @@ code {
   margin: 0 0 24px 0;
   line-height: 1.5;
 }
-.wizard-bullets {
-  text-align: left;
-  margin: 0 auto 32px auto;
-  padding: 0 0 0 20px;
-  max-width: 420px;
-  color: var(--text-secondary);
-  font-size: 14px;
-  line-height: 1.7;
-}
-.wizard-bullets li { margin-bottom: 4px; }
-
 .wizard-prompts {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -254,7 +243,7 @@ code {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: var(--edge-highlight);
-  color: #e8eaed;
+  color: var(--glass-text);
   margin-bottom: 6px;
 }
 .prompt-icon svg { display: block; }
@@ -652,7 +641,7 @@ code {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: var(--edge-highlight);
-  color: #e8eaed;
+  color: var(--glass-text);
   margin-bottom: 6px;
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
@@ -842,11 +831,6 @@ code {
   gap: 24px;
 }
 
-.tidbit-header {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
 .tidbit-meta {
   font-size: 12px;
@@ -925,36 +909,15 @@ code {
   font-style: italic;
 }
 
-.tidbit-footer {
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 8px;
-}
-
 #btn-tidbit-deeplink {
   text-decoration: none;
   display: inline-block;
 }
 
-.tidbit-empty {
-  font-size: 14px;
-  color: var(--text-secondary);
-  text-align: center;
-  margin: 32px 0 0;
-  padding: 24px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-}
-
 /* ───────── Shared list-view scaffold (Plaud queue / OneNote / Connections / Auto-import) ───────── */
 
 .view-plaud-queue,
-.view-onenote-browse,
-.view-connections,
-.view-auto-import {
+.view-onenote-browse {
   max-width: 720px;
   margin: 0 auto;
   padding: 56px 36px 36px;
@@ -1245,6 +1208,11 @@ code {
   flex-direction: column;
   gap: 10px;
 }
+/* Empty ⇒ absent: JS toggles [hidden] on this element; the flex display would
+   otherwise outrank it, painting an empty progress panel. */
+.onenote-browse-progress[hidden] {
+  display: none;
+}
 
 .onenote-browse-progress-header {
   display: flex;
@@ -1290,22 +1258,6 @@ code {
 }
 
 /* ───────── Connections + Auto-import shared header ───────── */
-
-.connections-header,
-.auto-import-header {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.connections-title,
-.auto-import-title {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--text-primary);
-  margin: 0;
-}
 
 .connections-subtitle,
 .auto-import-subtitle {
@@ -1403,14 +1355,6 @@ code {
   padding: 1px 4px;
   border-radius: 3px;
   color: var(--warn-text);
-}
-
-.connections-footer,
-.auto-import-footer {
-  display: flex;
-  justify-content: flex-start;
-  gap: 12px;
-  padding-top: 8px;
 }
 
 /* ───────── Auto-import source list ───────── */
@@ -1917,8 +1861,7 @@ code {
 
 /* Refresh / Main — the watching view needs the same compact glass buttons the
    log view scopes (otherwise they fall back to the bulky generic .btn). */
-.view-watching #btn-watching-refresh,
-.view-watching #btn-watching-home {
+.view-watching #btn-watching-refresh {
   font-size: 11.5px;
   font-weight: 500;
   padding: 5px 12px;
@@ -1928,21 +1871,17 @@ code {
   border-radius: var(--glass-radius-sm);
   white-space: nowrap;
 }
-.view-watching #btn-watching-refresh:hover,
-.view-watching #btn-watching-home:hover {
+.view-watching #btn-watching-refresh:hover {
   background: var(--glass-surface-hover);
 }
 
-/* Breathing room — header off the first card, a touch more between cards, and
-   the footer off the last card. Scoped so the Today view is untouched. */
+/* Breathing room — header off the first card, a touch more between cards.
+   Scoped so the Today view is untouched. */
 .view-watching .log-header {
   margin-bottom: 16px;
 }
 .view-watching .log-attention-list {
   gap: 10px;
-}
-.view-watching .log-footer {
-  margin-top: 16px;
 }
 
 /* Arrived receipts — a filled void with its evidence. Positive (green) accent. */
@@ -1963,16 +1902,7 @@ code {
 .arrived-pill {
   background: rgba(93, 202, 165, 0.15);
   border-color: rgba(93, 202, 165, 0.5);
-  color: #5dcaa5;
-}
-.arrived-quote {
-  margin: 2px 0 0;
-  padding-left: 10px;
-  border-left: 2px solid var(--glass-border);
-  font-size: 12px;
-  font-style: italic;
-  line-height: 1.4;
-  color: var(--glass-text-dim);
+  color: var(--glass-success);
 }
 .arrived-source {
   margin: 5px 0 0;
@@ -2106,9 +2036,9 @@ code {
 
 /* Refresh + back — secondary glass buttons, scoped (global button system lands
  * with the WP-THRESHOLD-GLASS migration). */
+.view-log #btn-log-sop,
 .view-log #btn-log-refresh,
-.view-log #btn-log-edges,
-.view-log #btn-log-back {
+.view-log #btn-log-edges {
   font-size: 11.5px;
   font-weight: 500;
   padding: 5px 12px;
@@ -2119,9 +2049,9 @@ code {
   white-space: nowrap;
 }
 
+.view-log #btn-log-sop:hover,
 .view-log #btn-log-refresh:hover,
-.view-log #btn-log-edges:hover,
-.view-log #btn-log-back:hover {
+.view-log #btn-log-edges:hover {
   background: var(--glass-surface-hover);
 }
 
@@ -2190,6 +2120,13 @@ code {
   border-radius: 999px;
   padding: 0 7px;
 }
+/* "Show all N" expander on a collapsed needs-attention group — left-aligned,
+   quiet, sits under the last visible row (no view jump; reveals rows in place). */
+.log-attention-showall {
+  align-self: flex-start;
+  font-size: 11.5px;
+  padding: 2px 0;
+}
 
 .log-state-pill {
   display: inline-flex;
@@ -2206,13 +2143,13 @@ code {
 .log-state-pill[data-state="open"] {
   background: rgba(127, 179, 232, 0.15);
   border-color: rgba(127, 179, 232, 0.5);
-  color: #7fb3e8;
+  color: var(--glass-link);
 }
 
 .log-state-pill[data-state="resolved"] {
   background: rgba(93, 202, 165, 0.15);
   border-color: rgba(93, 202, 165, 0.5);
-  color: #5dcaa5;
+  color: var(--glass-success);
 }
 
 .log-section {
@@ -2234,6 +2171,15 @@ code {
   letter-spacing: 0.07em;
   color: var(--glass-text-faint);
   margin: 0;
+}
+/* Today composition voice — the "Conflicts" / "Workload" sub-section headers
+   inside Today's Needs-attention block read sentence-case, matching the composed
+   strata ("Waiting on you" / "Coming up" / "Needs attention"). Scoped to Today
+   only; other views keep the uppercase register (e.g. Watching's "Arrived"). */
+#log-everything-section .log-section-title {
+  text-transform: none;
+  font-size: 12px;
+  letter-spacing: 0.01em;
 }
 
 /* Type chips (.record-chip) are the shared glass.css component — no view-log
@@ -2493,12 +2439,21 @@ code {
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  color: #f09595;
+  color: var(--glass-danger);
 }
 
 .log-contradiction-text {
   color: #f0b5b5;
-  word-break: break-word;
+  /* Wrap to two lines, then ellipsis — never a mid-word truncation with no
+     affordance (Today pixel pass). overflow-wrap keeps long tokens from
+     forcing a horizontal cut before the clamp applies. */
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* Owner load — small ghost cards; overdue count amber. */
@@ -2551,11 +2506,6 @@ code {
   color: #f0b5b5;
 }
 
-.log-footer {
-  display: flex;
-  padding-top: 2px;
-}
-
 /* ════════════════════════════════════════════════════════════════════════════
  * WP-THRESHOLD-LOG-UX — Receipts. Implemented against the mockup CSS skeleton
  * (DESIGN CORRECTION 2): one 640px column; the chain is a single absolute rail
@@ -2591,13 +2541,13 @@ code {
 .receipts-title {
   font-size: 14px;
   font-weight: 500;
-  color: #e8eaed;
+  color: var(--glass-text);
   margin: 0;
 }
 
 .receipts-sub {
   font-size: 11.5px;
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
   margin: 0;
 }
 
@@ -2609,7 +2559,7 @@ code {
   padding: 6px 16px;
   background: rgba(255, 196, 64, 0.14);
   border: 1px solid rgba(255, 196, 64, 0.35);
-  color: #ffc440;
+  color: var(--glass-accent);
   border-radius: 8px;
   box-shadow: none;
 }
@@ -2629,11 +2579,11 @@ code {
   border-radius: 9px;
   padding: 9px 12px;
   font-size: 12px;
-  color: #e8eaed;
+  color: var(--glass-text);
 }
 
 .state-strip .label {
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
 }
 
 /* ── the chain: timeline and content are ONE unit ── */
@@ -2674,19 +2624,19 @@ code {
   font-weight: 600;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.10);
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
 }
 
 .rec-icon[data-type="decision"] {
   background: rgba(127, 179, 232, 0.15);
   border-color: rgba(127, 179, 232, 0.5);
-  color: #7fb3e8;
+  color: var(--glass-link);
 }
 
 .rec-icon[data-type="commitment"] {
   background: rgba(93, 202, 165, 0.15);
   border-color: rgba(93, 202, 165, 0.5);
-  color: #5dcaa5;
+  color: var(--glass-success);
 }
 
 .rec-body {
@@ -2696,24 +2646,14 @@ code {
 
 .rec-meta {
   font-size: 11.5px;
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
   margin: 0 0 3px;
 }
 
 .rec-title {
   font-size: 13px;
-  color: #e8eaed;
+  color: var(--glass-text);
   margin: 0 0 4px;
-  word-break: break-word;
-}
-
-.rec-quote {
-  font-size: 13px;
-  color: #e8eaed;
-  font-style: italic;
-  margin: 0 0 4px;
-  border-left: 2px solid rgba(255, 255, 255, 0.18);
-  padding-left: 10px;
   word-break: break-word;
 }
 
@@ -2731,7 +2671,7 @@ code {
   font-size: 11px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
 }
 
 .rec-edge[data-kind="contradicts"] {
@@ -2743,13 +2683,13 @@ code {
 .rec-edge[data-kind="resolves"] {
   background: rgba(93, 202, 165, 0.12);
   border-color: rgba(93, 202, 165, 0.4);
-  color: #5dcaa5;
+  color: var(--glass-success);
 }
 
 .rec-source {
   display: block;
   font-size: 11.5px;
-  color: #7fb3e8;
+  color: var(--glass-link);
   text-decoration: none;
 }
 
@@ -2765,7 +2705,7 @@ code {
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.09);
-  color: #9aa0a6;
+  color: var(--glass-text-dim);
 }
 
 .receipts-status[data-kind="error"] {
@@ -2780,23 +2720,6 @@ code {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 10.5px;
   color: #6b7178;
-}
-
-/* "Back to Today" sits 24px below the footer line, inside the content column;
- * the content block is top-anchored with a 24px bottom pad (no half-window void
- * — the empty space below is just the window, not floating content). */
-.receipts-actions {
-  padding: 24px 18px;
-}
-
-.view-receipts #btn-receipts-back {
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 5px 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: #e8eaed;
-  border-radius: 8px;
 }
 
 /* "Show receipts" entry buttons on Today rows + record cards. */
@@ -2909,7 +2832,7 @@ code {
 
 .record-reason-item:hover {
   background: var(--surface-2);
-  color: #e8eaed;
+  color: var(--glass-text);
 }
 
 .record-reason-item:focus-visible {
@@ -2962,27 +2885,6 @@ code {
   color: var(--glass-text-dim);
 }
 
-/* #7 co-sign chip (receipts) — green family; confirmed solid, proposed dimmer. */
-.rec-cosign {
-  display: flex;
-  width: fit-content;
-  align-items: center;
-  gap: 6px;
-  border-radius: 7px;
-  padding: 3px 8px;
-  margin: 6px 0;
-  font-size: 11px;
-  background: rgba(93, 202, 165, 0.12);
-  border: 1px solid rgba(93, 202, 165, 0.4);
-  color: #5dcaa5;
-}
-
-.rec-cosign[data-status="proposed"] {
-  background: rgba(93, 202, 165, 0.08);
-  border-color: rgba(93, 202, 165, 0.25);
-  color: rgba(93, 202, 165, 0.7);
-}
-
 /* ─────────────────────────────────────────────────────────────────────────
  * WP-R1 — the ONE receipt component (renderReceipt). Every evidence render on
  * every surface uses this element tree; surfaces vary by the .receipt-<name>
@@ -3021,7 +2923,7 @@ code {
   font-size: 11px;
   background: rgba(93, 202, 165, 0.12);
   border: 1px solid rgba(93, 202, 165, 0.4);
-  color: #5dcaa5;
+  color: var(--glass-success);
 }
 .receipt-cosign[data-status="proposed"] {
   background: rgba(93, 202, 165, 0.08);
@@ -3042,7 +2944,7 @@ code {
   display: inline-flex;
   align-items: center;
   font-size: 11.5px;
-  color: #7fb3e8;
+  color: var(--glass-link);
   background: none;
   border: none;
   padding: 0;
@@ -3076,7 +2978,7 @@ code {
 .receipt.receipt-chain { gap: 6px; }
 .receipt.receipt-chain .receipt-quote {
   font-size: 13px;
-  color: #e8eaed;
+  color: var(--glass-text);
   background: none;
   padding: 0 0 0 10px;
   border-left: 2px solid rgba(255, 255, 255, 0.18);
@@ -3169,8 +3071,7 @@ code {
   margin: 3px 0 0;
 }
 
-.view-edges #btn-edges-refresh,
-.view-edges #btn-edges-back {
+.view-edges #btn-edges-refresh {
   font-size: 11.5px;
   font-weight: 500;
   padding: 5px 12px;
@@ -3180,8 +3081,7 @@ code {
   border-radius: var(--glass-radius-sm);
 }
 
-.view-edges #btn-edges-refresh:hover,
-.view-edges #btn-edges-back:hover {
+.view-edges #btn-edges-refresh:hover {
   background: var(--glass-surface-hover);
 }
 
@@ -3258,14 +3158,6 @@ code {
    group hides cleanly (.edges-filtered-out). Inner layout is the reused
    .decisions-group-* styling, matching the Log view's collapsible groups. */
 
-.edges-group-title {
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--glass-text-faint);
-  margin: 6px 0 0;
-}
 
 /* Connection card — a glass card; a 2px left border keyed to the kind. */
 .edge-card {
@@ -3414,12 +3306,6 @@ code {
 
 .edges-status[data-kind="error"] {
   color: var(--glass-danger);
-}
-
-.edges-footer {
-  display: flex;
-  justify-content: flex-start;
-  padding-top: 4px;
 }
 
 /* HITL — confirm/dismiss controls on each connection card. */
@@ -3583,27 +3469,6 @@ code {
   display: none;
 }
 
-.entity-card-actions {
-  display: flex;
-  justify-content: flex-start;
-  padding-top: 2px;
-}
-
-/* Back — glass secondary, matching the Today/Connections back buttons. */
-.view-entity-card #btn-entity-card-back {
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 5px 12px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border-strong);
-  color: var(--glass-text);
-  border-radius: var(--glass-radius-sm);
-}
-
-.view-entity-card #btn-entity-card-back:hover {
-  background: var(--glass-surface-hover);
-}
-
 /* ═══════ Decisions browser — by project, status-filterable (WP-DECISION-ORG) ═══════ */
 .view-decisions {
   max-width: 600px;
@@ -3643,8 +3508,7 @@ code {
 }
 
 .view-decisions #btn-decisions-home,
-.view-decisions #btn-decisions-refresh,
-.view-decisions #btn-decisions-back {
+.view-decisions #btn-decisions-refresh {
   font-size: 11.5px;
   font-weight: 500;
   padding: 5px 12px;
@@ -3656,8 +3520,7 @@ code {
 }
 
 .view-decisions #btn-decisions-home:hover,
-.view-decisions #btn-decisions-refresh:hover,
-.view-decisions #btn-decisions-back:hover {
+.view-decisions #btn-decisions-refresh:hover {
   background: var(--glass-surface-hover);
 }
 
@@ -4367,7 +4230,6 @@ code {
 .question-source-row {
   margin: 8px 0 2px;
 }
-.question-source-badge { max-width: 100%; }
 /* INSPECT — the inline record panel; reuses .linked-rec cards inside. */
 .question-member-detail {
   margin: 6px 0 2px 12px;
@@ -4993,12 +4855,6 @@ button.record-action-badge {
   color: var(--glass-danger);
 }
 
-.decisions-footer {
-  display: flex;
-  justify-content: flex-start;
-  padding-top: 4px;
-}
-
 /* Today status pills are now buttons (clickable → Decisions filtered). */
 .log-state-pill {
   font-family: inherit;
@@ -5122,25 +4978,9 @@ button.record-action-badge {
 /* The persistent nav bar + the always-visible Collapse button supersede the
  * per-view footer back/home/widget buttons. Hide the redundant ones; keep
  * functional footer actions (Refresh / Copy / Sync / Definition). */
-#btn-log-home, #btn-log-back,
-#btn-edges-home, #btn-edges-back,
-#btn-decisions-home, #btn-decisions-back,
-#btn-receipts-home, #btn-receipts-back,
-#btn-entity-card-home, #btn-entity-card-back,
-#btn-plaud-back, #btn-onenote-browse-back,
-#btn-connections-back, #btn-auto-import-back {
+#btn-decisions-home,
+#btn-plaud-back, #btn-onenote-browse-back {
   display: none !important;
-}
-/* WP-THRESHOLD-NAV Increment 2 (cleanup) — with the footer back/home buttons
-   hidden above, their containers were left as empty flex/padding boxes that added
-   dead vertical space at the bottom of each view. Collapse the ones whose ONLY
-   children were those now-hidden nav buttons (the persistent #app-nav replaced
-   them). Text-bearing footers like .receipts-footer are untouched. */
-.decisions-footer,
-.edges-footer,
-.entity-card-actions,
-.receipts-actions {
-  display: none;
 }
 /* view-main's header destination row is replaced by the persistent nav bar. */
 .main-header-actions { display: none; }
@@ -5356,13 +5196,6 @@ button.rec-source {
 .pg-btn-primary:hover { background: var(--accent-hover); }
 .pg-btn-primary:disabled { opacity: 0.6; cursor: default; }
 .pg-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
-.pg-toast {
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 1100;
-  background: var(--bg-base); background-image: var(--bg-gradient);
-  border: 1px solid var(--border-strong); border-radius: var(--radius-pill);
-  padding: 9px 16px; font-size: 13px; color: var(--text-primary);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-}
 /* ── Privacy / sovereignty panel ──────────────────────────────────────────
    Read-only "where does my data go" indicator (Settings → Privacy), filled by
    renderSovereignty() from GET /api/sovereignty. Matches the card idiom. */
@@ -5513,7 +5346,13 @@ button.rec-source {
   padding-right: 4px;
 }
 
-/* Card = the record-card family; these tune the proxy header + question. */
+/* Card = the record-card family; proxy cards are the derived "we filed this —
+   confirm it" surface, so they carry the same 2px amber accent as the other
+   needs-you cards (the Today attention row + question card family) instead of
+   rendering as a plain unaccented record card. */
+.proxy-card {
+  border-left: 2px solid var(--glass-accent);
+}
 .proxy-card-header {
   justify-content: flex-start;
 }
@@ -5602,10 +5441,6 @@ button.rec-source {
   border-radius: var(--glass-radius-sm);
   background: var(--surface-inset);
   border: 1px solid var(--glass-border);
-}
-.proxy-verbatim {
-  margin: 0;
-  font-size: 12.5px;
 }
 .proxy-evidence-meta {
   font-size: 12px;
@@ -5752,6 +5587,11 @@ button.rec-source {
   flex-wrap: wrap;
   gap: 8px;
   margin: 4px 0 14px;
+}
+/* Empty ⇒ absent: renderProjectHomeTallies sets [hidden] when no buckets fired;
+   the flex display would otherwise outrank it. */
+.project-home-tallies[hidden] {
+  display: none;
 }
 .project-home-tally {
   font-size: 12px;
