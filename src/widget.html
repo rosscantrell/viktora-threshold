@@ -80,7 +80,23 @@
         aria-label="Open tidbit preview"
         hidden
       >
-        💡
+        <!-- Line-style "spark" glyph (no emoji) — the informational preview
+             signal. Inherits currentColor so it tracks the badge's dim/hover
+             text tiers. widget.js never writes textContent here, so this SVG
+             child is stable across show/hide. -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true">
+          <path d="M12 3v2"></path>
+          <path d="M12 19v2"></path>
+          <path d="M5 12H3"></path>
+          <path d="M21 12h-2"></path>
+          <path d="M6.3 6.3 4.9 4.9"></path>
+          <path d="M19.1 19.1l-1.4-1.4"></path>
+          <path d="M17.7 6.3l1.4-1.4"></path>
+          <path d="M4.9 19.1l1.4-1.4"></path>
+          <circle cx="12" cy="12" r="3.2"></circle>
+        </svg>
       </button>
 
       <!--
@@ -103,7 +119,7 @@
 
       <!--
         WP-CASCADE-PRODUCTION WP-T1 — proxy-inbox pending badge. Amber, count-
-        bearing, distinct from BOTH the gold 💡 tidbit badge (top-right) and the
+        bearing, distinct from BOTH the ghost spark tidbit badge (top-right) and the
         amber-orange "needs attention" log badge (top-left) — this one sits
         bottom-right and shows the count of pending proxy-fleet proposals
         (fetch via get_proxy_queue_count). Same fetch-on-start/hourly best-effort
