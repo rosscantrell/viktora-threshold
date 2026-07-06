@@ -137,6 +137,17 @@ pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<
         let new_behavior =
             (current_behavior & !PANEL_BEHAVIOR_BITS) | NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY;
         let _: () = msg_send![win, setCollectionBehavior: new_behavior];
+
+        // A policy change on a RUNNING app does not activate it by itself —
+        // without an explicit activate, the app stays behind and window clicks
+        // de-focus it (the exact .accessory symptom). Kick activation + key.
+        let app = NSApplication::sharedApplication(objc2::MainThreadMarker::new().ok_or("not on main thread")?);
+        let applied: i64 = msg_send![&*app, activationPolicy];
+        eprintln!("[persona] activationPolicy now = {applied} (0=regular, 1=accessory)");
+        let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
+        let _: () = msg_send![win, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+        let key: bool = msg_send![win, isKeyWindow];
+        eprintln!("[persona] window isKeyWindow = {key}");
     }
     Ok(())
 }
@@ -214,6 +225,25 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
     let _: std::marker::PhantomData<NSApplication> = std::marker::PhantomData;
 
     Ok(())
+}
+
+
+/// Print the live NSWindow chrome state — the grey-halo investigation probe.
+/// Reads, never writes. Call on the main thread.
+pub fn debug_window_chrome(ns_window: *mut std::ffi::c_void, tag: &str) {
+    if ns_window.is_null() {
+        eprintln!("[chrome:{tag}] ns_window NULL");
+        return;
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        let has_shadow: bool = msg_send![win, hasShadow];
+        let is_opaque: bool = msg_send![win, isOpaque];
+        let style_mask: u64 = msg_send![win, styleMask];
+        let bg: *mut AnyObject = msg_send![win, backgroundColor];
+        let bg_alpha: f64 = if bg.is_null() { -1.0 } else { msg_send![bg, alphaComponent] };
+        eprintln!("[chrome:{tag}] hasShadow={has_shadow} isOpaque={is_opaque} styleMask={style_mask:#x} bgAlpha={bg_alpha}");
+    }
 }
 
 #[cfg(test)]

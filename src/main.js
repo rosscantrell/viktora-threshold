@@ -276,9 +276,8 @@ async function bootstrap() {
   // top-left padding and its content clears the traffic-light cluster (see
   // .titlebar-overlay .app-nav in styles.css). WKWebView's UA reliably carries
   // "Macintosh"; other platforms keep standard decorations and no offset.
-  if (/Macintosh|Mac OS X/.test(navigator.userAgent || "")) {
-    document.body.classList.add("titlebar-overlay");
-  }
+  // (Overlay titlebar reverted 2026-07-06 — standard decorations carry the
+  // traffic lights, so no nav offset is needed.)
 
   // Subscribe to backend events early so we don't miss any
   await wireBackendEvents();
@@ -9547,7 +9546,7 @@ function attachDigestEditor({ panel, bar, msg, scope, subject, label, message, e
     const row = document.createElement("div");
     row.className = "sop-edit-editor-row";
     const save = document.createElement("button");
-    save.type = "button"; save.className = "sop-edit-btn record-edit-save"; save.textContent = "Save & analyze";
+    save.type = "button"; save.className = "sop-edit-btn record-edit-save"; save.textContent = "Analyze edits";
     save.addEventListener("click", async () => {
       const human = ta.value;
       msg.dataset.editing = ""; msg.textContent = human;
@@ -9833,7 +9832,7 @@ function renderComposeEditor(wrap, ctx) {
     return b;
   };
 
-  const analyze = mkBtn("Save & analyze", "record-share-copy");
+  const analyze = mkBtn("Analyze edits", "record-share-copy");
   analyze.addEventListener("click", async () => {
     const human = ta.value;
     if (human.trim() === generated.trim()) { proposals.innerHTML = '<div class="sop-status">No changes yet — edit the draft, then analyze.</div>'; return; }
@@ -9879,6 +9878,12 @@ function renderComposeEditor(wrap, ctx) {
   row.appendChild(analyze);
   row.appendChild(cancel);
   wrap.appendChild(row);
+  // Verb-truth: "Analyze edits" captures the edit delta for learning — it does
+  // NOT keep the draft. Say where drafts actually live so nobody loses prose.
+  const keepHint = document.createElement("div");
+  keepHint.className = "sop-status compose-keep-hint";
+  keepHint.textContent = "Drafts are kept when sent to Outbox";
+  wrap.appendChild(keepHint);
   wrap.appendChild(proposals);
   ta.focus();
 }

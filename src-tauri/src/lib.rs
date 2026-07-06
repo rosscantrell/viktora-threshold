@@ -6608,6 +6608,8 @@ fn widget_expand(
     window
         .set_decorations(true)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
+    // A real window gets the system shadow (the widget boots with shadow:false).
+    let _ = window.set_shadow(true);
     window
         .set_skip_taskbar(false)
         .map_err(|e| format!("set_skip_taskbar failed: {e}"))?;
@@ -6628,20 +6630,34 @@ fn widget_expand(
     // style; they keep standard decorations.
     #[cfg(target_os = "macos")]
     {
-        let _ = window.set_title("");
-        if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
-            log::warn!("set_title_bar_style(Overlay) failed: {e} — standard decorations retained");
-        }
-        // Flip NSApp → .regular + window collectionBehavior → managed |
-        // fullScreenPrimary so the workspace window is Mission-Control /
-        // Cmd-Tab visible and owns native full-screen.
-        match window.ns_window() {
-            Ok(ns_window) => {
-                if let Err(e) = widget_platform_mac::apply_workspace_window_style(ns_window) {
-                    log::warn!("apply_workspace_window_style failed: {e}");
+        // AppKit work (titlebar restyle, NSApp activationPolicy, window
+        // collectionBehavior) MUST run on the main thread. Tauri commands
+        // execute on a tokio worker thread, and AppKit traps off-main use —
+        // SIGTRAP "Must only be used from the main thread", seen live on the
+        // first expand after #73. Dispatch the whole persona flip.
+        let mt_window = window.clone();
+        eprintln!("[persona] expand: dispatching main-thread persona flip");
+        if let Err(e) = window.run_on_main_thread(move || {
+            eprintln!("[persona] expand closure ENTERED on main thread");
+            // Standard decorations (reverted from Overlay 2026-07-06: overlay
+            // removed the draggable titlebar and confused the chrome; a normal
+            // titled window is the deterministic win).
+            let _ = mt_window.set_title("Threshold");
+            // Flip NSApp → .regular + window collectionBehavior → managed |
+            // fullScreenPrimary so the workspace window is Mission-Control /
+            // Cmd-Tab visible and owns native full-screen.
+            match mt_window.ns_window() {
+                Ok(ns_window) => {
+                    match widget_platform_mac::apply_workspace_window_style(ns_window) {
+                        Ok(()) => eprintln!("[persona] workspace style APPLIED"),
+                        Err(e) => eprintln!("[persona] apply_workspace_window_style FAILED: {e}"),
+                    }
+                    widget_platform_mac::debug_window_chrome(ns_window, "post-expand");
                 }
+                Err(e) => eprintln!("[persona] ns_window() unavailable on expand: {e}"),
             }
-            Err(e) => log::warn!("ns_window() unavailable on expand: {e}"),
+        }) {
+            eprintln!("[persona] main-thread dispatch FAILED on expand: {e}");
         }
     }
 
@@ -6682,14 +6698,22 @@ fn widget_collapse(
     {
         // Restore the Overlay-titlebar-free standard style before dropping
         // decorations, so the transparent-titlebar mask doesn't linger.
-        let _ = window.set_title_bar_style(tauri::TitleBarStyle::Visible);
-        match window.ns_window() {
-            Ok(ns_window) => {
-                if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
-                    log::warn!("restore_widget_window_style failed: {e}");
+        // Same main-thread law as expand — AppKit traps off-main use.
+        let mt_window = window.clone();
+        eprintln!("[persona] collapse: dispatching main-thread persona restore");
+        if let Err(e) = window.run_on_main_thread(move || {
+            eprintln!("[persona] collapse closure ENTERED on main thread");
+            match mt_window.ns_window() {
+                Ok(ns_window) => {
+                    if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
+                        log::warn!("restore_widget_window_style failed: {e}");
+                    }
+                    widget_platform_mac::debug_window_chrome(ns_window, "post-collapse");
                 }
+                Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
             }
-            Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
+        }) {
+            log::warn!("main-thread dispatch failed on collapse: {e}");
         }
     }
     window
@@ -6701,6 +6725,9 @@ fn widget_collapse(
     window
         .set_decorations(false)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
+    // Restore the shadowless panel persona — toggling decorations re-enables
+    // the system shadow, which paints a grey halo around the transparent pill.
+    let _ = window.set_shadow(false);
     window
         .set_resizable(false)
         .map_err(|e| format!("set_resizable failed: {e}"))?;
@@ -7192,6 +7219,7 @@ pub fn run() {
                             } else {
                                 log::info!("widget_platform_mac: non-activating shim applied");
                             }
+                            widget_platform_mac::debug_window_chrome(ns_window, "boot");
                         }
                         Err(e) => {
                             log::warn!("could not obtain NSWindow handle: {e}");

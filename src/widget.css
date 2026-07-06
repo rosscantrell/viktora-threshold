@@ -162,7 +162,7 @@ html, body {
 #status-dot {
   position: absolute;
   bottom: 9px;
-  right: 15px;
+  right: 18px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -184,8 +184,8 @@ html, body {
  * compete with the action buttons; brightens on hover to read as clickable. */
 #expand-btn {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 8px;
+  left: 18px;
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -298,13 +298,13 @@ html, body {
               0 0 0 3px rgba(255, 196, 64, 0.14);
 }
 
-#log-indicator  { top: 6px;    left: 6px;  }
-#proxy-indicator { bottom: 6px; left: 6px;  }
+#log-indicator  { top: 8px;    left: 18px; }
+#proxy-indicator { bottom: 8px; left: 18px; }
 
 /* ── GHOST tier — informational tidbit ── */
 #tidbit-indicator {
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 18px;
   background: var(--w-surface-hi-h);
   border: 0.5px solid var(--w-hairline-h);
   color: var(--w-text);
