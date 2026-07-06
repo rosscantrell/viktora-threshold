@@ -3187,6 +3187,7 @@ async function enterLogView() {
   loadTodayContext()
     .then(() => {
       loadPersonLensSoP().catch((e) => console.warn("[main] SoP header:", e));
+      autoLoadSopPanel();
       renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log rollup:", e));
       // Coming up — forward-looking due-soon window (needs docProjects from context
       // for its project grouping, so it fires here after context resolves).
@@ -3197,9 +3198,30 @@ async function enterLogView() {
       // Context failed (no viewer identity resolvable) — still load the lenses
       // that don't strictly need it (they degrade to the forest fallback).
       loadPersonLensSoP().catch(() => {});
+      autoLoadSopPanel();
       renderTodayDecisionLog().catch(() => {});
       loadTodayComingUp().catch(() => {});
     });
+
+  // The State-of-Play narrative is Today's FIRST stratum — it must load itself.
+  // Historically the panel was click-to-open, and the (since-fixed) identity-less
+  // lens-panel fallback happened to render the forest narrative on entry — the
+  // duplication bug was accidentally the auto-loader. Now the main panel opens
+  // and composes on entry; the header button remains the collapse/expand toggle,
+  // and re-entering Today keeps already-composed prose instead of re-paying the
+  // synthesis.
+  function autoLoadSopPanel() {
+    const panel = document.getElementById("log-sop-panel");
+    if (!panel) return;
+    const btn = document.getElementById("btn-log-sop");
+    if (panel.hidden) {
+      panel.hidden = false;
+      if (btn) btn.setAttribute("aria-expanded", "true");
+    }
+    // Already composed this session (or mid-compose) — don't re-pay the LLM call.
+    if ((panel.textContent || "").trim().length > 40) return;
+    loadCorpusStateOfPlay(panel);
+  }
 
   // ② + ③ Needs-you queue + Filed-confidently — both piles from the proxy queue,
   //    plus the question card and the vigilance voids folded into the queue.
