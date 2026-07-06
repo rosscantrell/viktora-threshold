@@ -2307,6 +2307,33 @@ code {
   display: none;
 }
 
+/* WP-TODAY-READ-ACT — the action-rail wrapper is layout-only: invisible to the
+   single-column flow (display:contents), a pinned flex column in the ≥1200px
+   two-column grid (see the WP-WIDE-TODAY block). */
+#today-rail {
+  display: contents;
+}
+
+/* WP-TODAY-READ-ACT — quiet report: Today's strata empty-lines sit flush under
+   their section titles (left-aligned, tight) so an all-quiet morning reads as a
+   compact report, not centered labels floating in section-sized voids. Scoped
+   to Today's strata — other views keep the centered .log-empty. */
+.today-queue .log-empty,
+.today-comingup .log-empty,
+#log-attention-empty {
+  text-align: left;
+  padding: 4px 0 6px;
+}
+
+/* WP-TODAY-READ-ACT — quiet report: when the overview isn't available the
+   status line drops the panel chrome (a boxed callout reads as an error; a calm
+   line reads as a quiet morning — the glow-up calm-line ruling). */
+#log-sop-panel.sop-quiet {
+  background: transparent;
+  border-color: transparent;
+  padding-left: 0;
+}
+
 /* Coming up — the forward-looking window. Rows reuse .log-attention-row; the due
    date is the prominent signal in the head, urgent (≤48h) borrows the amber
    accent, and a quiet badge flags due-soon-but-silent items. */
@@ -5840,42 +5867,34 @@ button.rec-source {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WP-WIDE-TODAY — two-column Today at ≥1100px.
+   WP-WIDE-TODAY (reworked by WP-TODAY-READ-ACT) — two-column Today at ≥1200px.
    Below the breakpoint #view-log stays plain block flow (the existing single
-   column, byte-for-byte — this media query is the ONLY change and it doesn't
-   fire below the breakpoint). The two subdivisions are GATED ON CARD WIDTH,
-   not raw viewport, so neither ever produces sub-380px card slivers
-   (coordinator amendment 1):
+   column, byte-for-byte — the #today-rail wrapper is display:contents there,
+   so the narrow DOM flow is unchanged).
 
-     · Page-level 2-col split — ONLY at ≥1200px. At that width the left column
-       (60% of the ~1148px content box) is ≈689px ≥ 640px, so its cards keep a
-       comfortable measure. (Below 1200px: single column, byte-for-byte the
-       current layout.) NOTE: this is >1100px on purpose — 1100px would leave
-       the left column ≈612px, under the 640px floor the amendment requires.
+   The composition is "read | act" (Ross-ruled 2026-07-06, supersedes the
+   full-width-narrative band):
 
-     · Needs-attention group 2-col flow — ONLY at ≥1500px, a SEPARATE query.
-       Two group sub-columns with a 20px gutter each need ≥400px; that requires
-       the left column ≥820px, which the ~1447px viewport threshold guarantees.
-       Between 1200–1499px the page splits but groups stay ONE column (no
-       slivers). The State-of-Play prose keeps its ~72ch measure at every width.
+     LEFT  (col 1, ≈60%): the READ — State-of-Play narrative panel (the SoP
+           auto-load renders the narrative into #log-sop-panel, so THAT panel
+           anchors the column; full-width it left a dead right half), then the
+           on-demand SoP section, Focus/Watch, Stalled.
+     RIGHT (col 2, ≈40%): the ACT — #today-rail as ONE flowing sticky column:
+           Waiting on you → Coming up → Awaiting-send tray. A single grid item,
+           so its strata stack tight instead of coupling to left-column rows.
+     BELOW (full width): Needs attention — the worklist packs into responsive
+           ≥420px columns (amendment-1 floor respected) instead of a single
+           narrow tower; 25 items become a scannable board, not a scroll.
 
-     LEFT  (col 1, ≈60%): State-of-Play → (Awaiting send · Focus/Watch ·
-                          Stalled) → Needs attention.
-     RIGHT (col 2, ≈40%): Waiting on you (sticky) → Coming up.
-
-   Full-width band items (header, on-demand SoP button-panel, status) span both
-   columns. Row numbers are explicit so the two columns stack independently
-   (grid auto-flow would otherwise interleave them by source order). No markup
-   wrappers — single-column source order is preserved for the narrow fallback.
+   Full-width band items: header on top, Needs attention + status at the
+   bottom. Explicit rows; the rail spans the left column's rows.
    ══════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 1200px) {
   #view-log:not([hidden]) {
     /* Lift the 560px single-column cap (set on .view-log) so the two-column
        layout can actually use the width. Held to 1480px + centered so an
-       ultra-wide monitor doesn't sprawl edge-to-edge. The cap is chosen so the
-       left column at full width (≈0.6×(1480−80) ≈ 840px) leaves each of the two
-       needs-attention group sub-columns ≈410px — clear of the 400px floor
-       (amendment 1b). The SoP prose keeps its own ~72ch measure inside. */
+       ultra-wide monitor doesn't sprawl edge-to-edge. The SoP prose keeps its
+       own ~72ch measure inside the left column. */
     max-width: 1480px;
     display: grid;
     grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
@@ -5884,43 +5903,41 @@ button.rec-source {
     align-items: start;
   }
 
-  /* Full-width bands: header + on-demand SoP button-panel on top, status at the
-     bottom (row 8, below the taller of the two columns). */
+  /* Full-width bands: header on top; Needs attention + status at the bottom,
+     below the taller of the two columns. */
   #view-log:not([hidden]) > .log-header,
-  #view-log:not([hidden]) > #log-sop-panel,
+  #view-log:not([hidden]) > #log-everything-section,
   #view-log:not([hidden]) > #log-status {
     grid-column: 1 / -1;
   }
   #view-log:not([hidden]) > .log-header { grid-row: 1; }
-  #view-log:not([hidden]) > #log-sop-panel { grid-row: 2; }
+  #view-log:not([hidden]) > #log-everything-section { grid-row: 7; }
   #view-log:not([hidden]) > #log-status { grid-row: 8; }
 
-  /* LEFT column (col 1) — the State-of-Play panel is FIRST (row 3, top of the
-     left column per amendment 3), then the demoted sections, then Needs
-     attention. Explicit rows 3→7 so the column stacks independently of the
-     right rail (auto-flow would otherwise interleave the two by source order).
-     Each item is already a flex/block column, so its children stack normally
-     within the cell. min-height on the SoP section keeps its composing/skeleton
-     state visible (never a zero-height slot that reads as broken). */
+  /* LEFT column (col 1) — the narrative panel FIRST (row 2), then the
+     on-demand SoP section and the demoted sections. Explicit rows so the
+     column stacks independently of the rail. min-height on the SoP section
+     keeps its composing/skeleton state visible (never a zero-height slot
+     that reads as broken). */
+  #view-log:not([hidden]) > #log-sop-panel { grid-column: 1; grid-row: 2; }
   #view-log:not([hidden]) > #today-sop-section {
     grid-column: 1;
     grid-row: 3;
     min-height: 2.5em;
   }
-  #view-log:not([hidden]) > #today-outbox-tray { grid-column: 1; grid-row: 4; }
   #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 5; }
   #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 6; }
-  #view-log:not([hidden]) > #log-everything-section { grid-column: 1; grid-row: 7; }
 
-  /* RIGHT rail (col 2) — Waiting on you (row 3, sticky) then Coming up (row 4). */
-  #view-log:not([hidden]) > #today-queue-section { grid-column: 2; grid-row: 3; }
-  #view-log:not([hidden]) > #today-comingup-section { grid-column: 2; grid-row: 4; }
-
-  /* Right rail: the ratification queue stays pinned as you scroll the long
-     left column. `top` clears the sticky #app-nav (~48px) with breathing room;
-     max-height + overflow so an unusually tall queue scrolls within itself
-     rather than pushing Coming up off-screen. Coming up flows beneath it. */
-  #view-log:not([hidden]) > #today-queue-section {
+  /* RIGHT rail (col 2) — one flowing, sticky action column spanning the left
+     column's rows: Waiting on you → Coming up → Awaiting send. `top` clears
+     the sticky #app-nav (~48px) with breathing room; max-height + overflow so
+     an unusually tall stack scrolls within itself. */
+  #view-log:not([hidden]) > #today-rail {
+    grid-column: 2;
+    grid-row: 2 / 7;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     position: sticky;
     top: 60px;
     align-self: start;
@@ -5929,26 +5946,25 @@ button.rec-source {
   }
 
   /* Needs-attention header row: keep the "Needs attention" title on one line
-     and let the state-count chips wrap below it as a unit when the left column
+     and let the state-count chips wrap below it as a unit when the row
      is tight (amendment 1) — never squeeze the title into vertical text. */
   #view-log:not([hidden]) .log-collapse-head-row {
     flex-wrap: wrap;
   }
+
+  /* Needs-attention density (WP-TODAY-READ-ACT): the full-width worklist packs
+     project groups into responsive columns — each ≥420px (clear of the 400px
+     amendment floor), 3 across at the 1480px cap. Grid (not CSS multi-column)
+     so each group stays intact and rows top-align. */
+  #view-log:not([hidden]) #log-attention-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+    gap: 14px 22px;
+    align-items: start;
+  }
 }
 
-/* Needs-attention group 2-col flow — SEPARATE, wider gate (≥1500px) so each
-   sub-column clears the ≥400px floor. CSS multi-column keeps each group intact
-   (break-inside:avoid → a group never splits across the gutter). Below 1500px
-   the groups stay a single column even though the page is already split. */
-@media (min-width: 1500px) {
-  #view-log:not([hidden]) #log-attention-groups {
-    display: block; /* multi-column context (overrides the flex column) */
-    column-count: 2;
-    column-gap: 20px;
-  }
-  #view-log:not([hidden]) #log-attention-groups > .log-attention-group {
-    break-inside: avoid;
-    -webkit-column-break-inside: avoid;
-    margin-bottom: 14px;
-  }
-}
+/* (The former ≥1500px column-count rule for #log-attention-groups is
+   superseded by the auto-fill grid inside the ≥1200px block above — the
+   worklist now spans the full width, so the density gate rides the same
+   breakpoint as the page split.) */

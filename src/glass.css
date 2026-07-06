@@ -1034,6 +1034,11 @@ body {
   border-radius: 999px;
   padding: 1px 8px;
 }
+/* No count ⇒ no pill — an empty lozenge beside the title reads as a glitch
+   (visible in the quiet all-clear state, where the count is deliberately blank). */
+.log-collapse-count:empty {
+  display: none;
+}
 .log-collapse-body {
   padding-top: 8px;
 }

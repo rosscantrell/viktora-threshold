@@ -661,6 +661,14 @@
         </div>
       </section>
 
+      <!-- WP-TODAY-READ-ACT — the action rail. Layout-only wrapper: display:contents
+           by default (invisible to the single-column flow), a flex column pinned
+           beside the State-of-Play narrative in the ≥1200px two-column grid, so
+           "Waiting on you" / "Coming up" / the outbox tray stack as ONE flowing
+           rail instead of separate grid rows that couple to the left column's
+           heights. -->
+      <div id="today-rail">
+
       <!-- ② Waiting on you — the ratification queue, ONE card family (§2.3).
            Filled by three async sources, each appending its cards as it arrives:
              · proxy-queue "Wants your eye" cards (renderProxyCard / fetch_proxy_queue)
@@ -705,8 +713,9 @@
            told BEFORE the deadline, not the day of. Derived client-side in
            renderTodayComingUp from the full decision-log records (due present,
            state open, dueDate in [today, today+14d]). Grouped by project like
-           "Needs attention"; empty ⇒ absent (the whole section is [hidden] when
-           nothing is due soon — no fabricated demo content). -->
+           "Needs attention"; empty ⇒ the quiet line below (WP-TODAY-READ-ACT:
+           "nothing due" is affirmative information — the section stays present
+           so the morning report reads complete, per the quiet-report ruling). -->
       <section class="today-comingup" id="today-comingup-section" hidden>
         <div class="today-section-head">
           <h2 class="today-section-title">Coming up</h2>
@@ -714,6 +723,7 @@
         </div>
         <div class="log-attention-groups" id="today-comingup-groups"></div>
         <div class="log-attention-list" id="today-comingup-list"></div>
+        <p class="log-empty" id="today-comingup-empty" hidden>Nothing due in the next two weeks.</p>
       </section>
 
       <!-- Awaiting send / Sent tray — the Outbox demotion. Appears ONLY when there
@@ -725,6 +735,8 @@
         </div>
         <div class="today-outbox-list" id="today-outbox-list"></div>
       </section>
+
+      </div><!-- /#today-rail -->
 
       <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
            from GET /api/decision-log/priority (loaded on Today, independent of
