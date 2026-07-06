@@ -130,24 +130,61 @@ code {
 .view { display: block; padding: 40px; }
 .view[hidden] { display: none; }
 
-/* Main capture view — composed to the rule of thirds + golden ratio.
- * The window is ~800×566 (below the titlebar). Content is distributed top→
- * bottom with `space-between` and a golden top:bottom padding bias (≈1.6:1)
- * so the header sits on the upper-third line, the capture tiles fill the
- * central band, and the drop hint lands on the lower-third line — no
- * stranded island, no dead space. `:not([hidden])` keeps the hide rule
- * winning over this display:flex. */
+/* Main capture view — a DESIGNED landing (WP-GLOWUP), not a title + two tiles
+ * floating in the void. A ~720px measure sits anchored under the full-bleed
+ * nav with a deliberate top offset, and the strata (header → capture cards →
+ * drop zone) flow top-down on the shared rhythm. No `justify-content:center`
+ * on 100vh — vertical centring is what made it read as a marooned box at large
+ * window sizes; the content now begins with intent near the top and the
+ * gradient canvas owns the rest of the window. `:not([hidden])` keeps the hide
+ * rule winning over this display:flex. */
 #view-main:not([hidden]) {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 34px;
-  min-height: 100vh;
-  /* ~0.83 of the 800px window → intentional side margins (window/content
-   * ≈ φ⁻¹ band) so the tiles don't run edge-to-edge. */
-  max-width: 664px;
+  gap: var(--strata);
+  max-width: var(--measure-lg);
   margin: 0 auto;
-  padding: 36px 20px;
+  padding: var(--view-pad-top) 24px 48px;
+}
+
+/* view-main header — the landing's title block. Larger, calmer type; the
+ * "Connected to <url>" line becomes a quiet status chip (soft green dot + dim
+ * url) rather than a bare sentence. */
+#view-main .app-header {
+  margin-bottom: 0;
+  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+#view-main .app-header h1 {
+  font-size: 28px;
+  letter-spacing: -0.3px;
+  margin: 0;
+}
+/* The subtitle is rendered as a status chip: main.js sets its text to
+ * "Connected to <url>"; the chip shell + dot are pure CSS. */
+#view-main .subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 4px 11px 4px 9px;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  line-height: 1.3;
+}
+#view-main .subtitle::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--glass-success);
+  box-shadow: 0 0 0 3px rgba(93, 202, 165, 0.14);
+  flex: none;
 }
 
 .wizard-view {
@@ -581,69 +618,80 @@ code {
 .capture-controls {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  gap: 14px;
   margin: 0;
 }
 .capture-button {
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  /* Aspect harmonised with the ~4:3 window (self-similar) rather than a
-   * squat golden-landscape bar — reads as a substantial panel, not a strip. */
-  aspect-ratio: 1.32 / 1;
-  padding: 20px 18px;
+  /* No forced tall aspect ratio (WP-GLOWUP) — the 1.32:1 box left a cavern of
+   * empty space at large sizes and read as an empty panel. Comfortable padding
+   * sizes the card to its content instead. */
+  padding: 28px 22px 24px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  box-shadow: var(--shadow-card);
-  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), background var(--dur) var(--ease);
+  gap: 10px;
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 6px 20px rgba(0, 0, 0, 0.28);
+  transition: border-color 0.14s var(--ease), transform 0.14s var(--ease), box-shadow 0.14s var(--ease), background 0.14s var(--ease);
   font-family: inherit;
-  backdrop-filter: var(--blur);
-  -webkit-backdrop-filter: var(--blur);
 }
+/* Hover: lift + border brighten (neutral — amber is reserved for urgency).
+ * Matches the widget pill's grabbable-object cue: no colour, just light. */
 .capture-button:hover {
-  border-color: var(--accent-ring);
-  background: var(--surface-2);
-  transform: translateY(-3px);
-  box-shadow: var(--edge-highlight), 0 16px 36px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(47, 122, 229, 0.18);
+  border-color: var(--glass-border-strong);
+  background: var(--glass-surface-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.06) inset, 0 12px 30px rgba(0, 0, 0, 0.36);
 }
 .capture-button:hover .capture-icon {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.10);
   border-color: rgba(255, 255, 255, 0.35);
-  transform: translateY(-1px) scale(1.04);
+  color: var(--glass-text);
+  transform: translateY(-1px);
 }
-.capture-button:active { transform: translateY(-1px) scale(0.995); }
+/* Press settle — the card sinks back under the cursor. */
+.capture-button:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.capture-button:focus { outline: none; }
+.capture-button:focus-visible {
+  outline: none;
+  border-color: var(--glass-border-strong);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+}
 .capture-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-  border-color: var(--border-subtle);
+  border-color: var(--glass-border);
   transform: none;
 }
 .capture-button:disabled:hover {
-  border-color: var(--border-subtle);
-  background: var(--surface-card);
+  border-color: var(--glass-border);
+  background: var(--glass-surface);
   transform: none;
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, 0.04) inset, 0 6px 20px rgba(0, 0, 0, 0.28);
 }
 /* Icon chip — matches the collapsed widget pill's action buttons: a neutral
  * circular button with a faint translucent fill + hairline border, so the
  * expanded view reads as the same product as the floating pill. */
 .capture-icon {
-  width: 60px;
-  height: 60px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid var(--glass-border);
   box-shadow: var(--edge-highlight);
-  color: var(--glass-text);
-  margin-bottom: 6px;
-  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+  color: var(--glass-text-dim);
+  margin-bottom: 4px;
+  transition: background 0.14s var(--ease), border-color 0.14s var(--ease), color 0.14s var(--ease), transform 0.14s var(--ease);
 }
 .capture-icon svg { display: block; }
 .capture-label {
@@ -659,25 +707,28 @@ code {
 
 /* ───────── Drop hint ───────── */
 
+/* Drop hint — a subtle full-width ghost drop zone (WP-GLOWUP). Quiet dashed
+ * hairline at rest; on hover the border brightens neutrally (no accent). */
 .drop-hint {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 15px;
+  padding: 18px;
   border-radius: var(--radius-md);
-  border: 1px dashed var(--border-strong);
-  background: var(--surface-1);
+  border: 1px dashed var(--glass-border);
+  background: rgba(255, 255, 255, 0.015);
   font-size: 12px;
-  color: var(--text-secondary);
-  margin-top: 14px;
-  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+  color: var(--glass-text-faint);
+  margin-top: 0;
+  transition: border-color 0.14s var(--ease), color 0.14s var(--ease), background 0.14s var(--ease);
 }
 .drop-hint:hover {
-  border-color: var(--accent-ring);
-  color: var(--text-primary);
+  border-color: var(--glass-border-strong);
+  color: var(--glass-text-dim);
+  background: rgba(255, 255, 255, 0.03);
 }
-.drop-icon { color: var(--text-secondary); line-height: 0; }
+.drop-icon { color: var(--glass-text-faint); line-height: 0; }
 .drop-icon svg { display: block; }
 
 /* ───────── Full-window drag-drop overlay ───────── */
@@ -918,9 +969,9 @@ code {
 
 .view-plaud-queue,
 .view-onenote-browse {
-  max-width: 720px;
+  max-width: var(--measure-lg);
   margin: 0 auto;
-  padding: 56px 36px 36px;
+  padding: var(--view-pad-top) 36px 40px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -1026,15 +1077,14 @@ code {
   padding: 6px 12px;
 }
 
+/* Calm empty state (WP-GLOWUP): one voice app-wide — a quiet centered line, no
+ * bordered box. Matches .proxy-queue-empty and the Today calm lines. */
 .plaud-queue-empty {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--glass-text-faint);
   text-align: center;
-  margin: 32px 0 0;
-  padding: 24px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin: 0;
+  padding: 40px 24px;
 }
 
 .plaud-queue-footer {
@@ -1188,15 +1238,13 @@ code {
   cursor: not-allowed;
 }
 
+/* Calm empty state (WP-GLOWUP) — one voice; quiet centered line, no box. */
 .onenote-browse-empty {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--glass-text-faint);
   text-align: center;
-  margin: 32px 0 0;
-  padding: 24px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  margin: 0;
+  padding: 40px 24px;
 }
 
 .onenote-browse-progress {
@@ -1511,15 +1559,13 @@ code {
 }
 .auto-import-add svg { display: block; }
 
+/* Calm empty state (WP-GLOWUP) — one voice; quiet centered line, no box. */
 .auto-import-empty {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 13px;
+  color: var(--glass-text-faint);
   text-align: center;
   margin: 8px 0;
-  padding: 24px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  padding: 28px 24px;
 }
 
 .auto-import-section-label {
@@ -1597,9 +1643,9 @@ code {
 /* ───────── Post-capture panel ───────── */
 
 .view-postcapture {
-  max-width: 560px;
+  max-width: var(--measure-sm);
   margin: 0 auto;
-  padding: 26px 26px 22px;
+  padding: var(--view-pad-top) 26px 40px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2236,14 +2282,13 @@ code {
   color: var(--glass-accent);
 }
 
+/* Calm empty state (WP-GLOWUP) — one voice; quiet centered line, no box. */
 .log-empty {
-  font-size: 11.5px;
-  color: var(--glass-text-dim);
+  font-size: 12px;
+  color: var(--glass-text-faint);
+  text-align: center;
   margin: 0;
-  padding: 12px 14px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-md);
+  padding: 28px 14px;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2520,8 +2565,9 @@ code {
 }
 
 .receipts-content {
-  max-width: 640px;
+  max-width: var(--measure-md);
   margin: 0 auto;
+  padding: var(--view-pad-top) 26px 40px;
 }
 
 .receipts-header {
@@ -3040,9 +3086,9 @@ code {
  * Each edge shown with BOTH its records inline (a pure display join). Layout +
  * scoping mirror .view-log; colors come from the frozen glass.css tokens. */
 .view-edges {
-  max-width: 560px;
+  max-width: var(--measure-sm);
   margin: 0 auto;
-  padding: 26px 26px 22px;
+  padding: var(--view-pad-top) 26px 40px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -3394,9 +3440,9 @@ code {
 
 /* ═══════ Definition card — per-entity "what is this, here, now" (WP-THRESHOLD-LOG-UX) ═══════ */
 .view-entity-card {
-  max-width: 560px;
+  max-width: var(--measure-sm);
   margin: 0 auto;
-  padding: 26px 26px 22px;
+  padding: var(--view-pad-top) 26px 40px;
 }
 
 .entity-card-content {
@@ -3471,13 +3517,16 @@ code {
 
 /* ═══════ Decisions browser — by project, status-filterable (WP-DECISION-ORG) ═══════ */
 .view-decisions {
-  max-width: 600px;
+  max-width: var(--measure-sm);
   margin: 0 auto;
-  padding: 26px 26px 22px;
+  padding: var(--view-pad-top) 26px 40px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--intra);
 }
+/* The list sits on the full inter-strata rhythm below the control cluster
+ * (header · lenses · filter stay tight together). */
+.view-decisions > .decisions-list { margin-top: calc(var(--strata) - var(--intra)); }
 
 .decisions-header {
   display: flex;
@@ -5277,6 +5326,19 @@ button.rec-source {
  * the routing chips, and the collapsed "filed" rows. All colors come from the
  * dark/glassy token system (no flat/light values).
  * ──────────────────────────────────────────────────────────────────────── */
+
+/* Proxy inbox column — was inheriting the generic .view 40px padding with no
+ * measure cap, so it sprawled edge-to-edge on a wide window (WP-GLOWUP). Give
+ * it the shared readable measure + top offset like every other single-column
+ * view. `:not([hidden])` keeps the hide rule winning over display:flex. */
+#view-proxy-queue:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: var(--measure-sm);
+  margin: 0 auto;
+  padding: var(--view-pad-top) 26px 40px;
+}
 
 .proxy-queue-header {
   display: grid;

@@ -22,15 +22,97 @@
   --glass-danger:        #f09595;  --glass-danger-strong:  #f87171;
   --glass-link:          #7fb3e8;                   /* evidence links, info */
   --glass-radius-sm: 8px; --glass-radius-md: 9px; --glass-radius-lg: 14px;
+
+  /* ── Composition scale (WP-GLOWUP) ──────────────────────────────────────
+   * One rhythm for the whole app. `--strata` = the gap between major bands
+   * of a view (header → body → sub-sections); it scales UP at large window
+   * sizes so a view breathes into the space instead of reading as a tight
+   * card marooned in a void. `--measure-*` are the readable content-column
+   * widths; they too grow modestly at large sizes (never to full width —
+   * long measure kills readability). Views opt in by referencing the vars;
+   * the ≥1200/≥1600 media queries below re-tune them once, centrally. */
+  --strata:        26px;   /* inter-band vertical rhythm */
+  --intra:         12px;   /* within a section */
+  --card-gap:      8px;    /* between sibling cards */
+  --measure-sm:    600px;  /* log / decisions / edges / entity column */
+  --measure-md:    680px;  /* wider record/receipt columns */
+  --measure-lg:    760px;  /* landing + queue/browse columns */
+  --view-pad-top:  clamp(28px, 4vh, 52px); /* deliberate top offset under the nav */
 }
 
-/* Window surface — the expanded window is dark glass, not flat black (delta #1).
- * Full-window vibrancy (NSVisualEffectView / acrylic) lands with the
- * WP-THRESHOLD-GLASS migration; this establishes the solid fallback value. */
+/* Window surface — the expanded window is dark glass over a deep vertical
+ * gradient (delta #1: dark glass, NOT flat black). The gradient is painted as
+ * background-image so it layers over the --glass-bg base colour, and it is
+ * fixed + covers the full window at any size so no view can read as a boxed
+ * island floating on dead black. (A plain `background:` shorthand here would
+ * clobber the image — hence explicit color + image + attachment.) */
 html,
 body {
-  background: var(--glass-bg);
+  background-color: var(--glass-bg);
+  background-image:
+    radial-gradient(120% 80% at 50% -10%, rgba(255, 255, 255, 0.045) 0%, rgba(255, 255, 255, 0) 55%),
+    linear-gradient(168deg, #23252f 0%, #1a1b23 46%, #141419 100%);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: cover;
+  min-height: 100vh;
 }
+
+/* ── Large-window composition (WP-GLOWUP) ──────────────────────────────────
+ * Re-tune the composition scale once, centrally, so every view that references
+ * the vars breathes together. Columns widen modestly (readable measure kept);
+ * inter-strata rhythm opens up so content anchored under the full-bleed nav
+ * fills the window with intent rather than hugging a narrow centre line. */
+@media (min-width: 1200px) {
+  :root {
+    --strata:     32px;
+    --intra:      14px;
+    --measure-sm: 660px;
+    --measure-md: 760px;
+    --measure-lg: 840px;
+  }
+}
+@media (min-width: 1600px) {
+  :root {
+    --strata:     38px;
+    --measure-sm: 720px;
+    --measure-md: 820px;
+    --measure-lg: 920px;
+  }
+}
+
+/* ── Motion discipline (WP-GLOWUP) ─────────────────────────────────────────
+ * The design language: hover lift + border brighten (120–160ms), press settle.
+ * prefers-reduced-motion kills ALL motion app-wide — state still changes
+ * instantly, nothing animates or transforms. This block was absent before;
+ * it is the single global guarantee. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Keyboard focus (WP-GLOWUP) ────────────────────────────────────────────
+ * A single consistent focus-visible ring for every interactive control across
+ * the expanded window: the app's soft neutral 2px ring (matching the widget's
+ * .action-btn:focus-visible). Only shows for keyboard focus — pointer clicks
+ * stay clean. Components that define their own accent focus (inputs, textareas)
+ * keep it; this is the baseline for the many chips/pills/links that had none. */
+.view button:focus-visible,
+.view a:focus-visible,
+.view [role="button"]:focus-visible,
+.view summary:focus-visible,
+.app-nav button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.20);
+  border-radius: var(--glass-radius-sm);
+}
+/* Never suppress focus for keyboard users (some legacy rules set outline:none
+ * with no visible replacement). */
+.view :focus-visible { outline-color: transparent; }
 
 /* ── Component layer — shared glassy primitives across the LOG-UX views
  *    (post-capture panel, Today, Receipts). Tinted ghosts, never filled. ── */
