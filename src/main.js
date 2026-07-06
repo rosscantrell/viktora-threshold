@@ -4216,9 +4216,18 @@ async function loadPersonLensSoP() {
   const panel = document.getElementById("log-sop-lens-panel");
   if (!panel) return;
   const viewerSlug = _todayCtx && _todayCtx.viewerSlug;
-  // The Person lens needs an identity; with none, fall back to the Forest lens
-  // and hide the Person toggle option (mirrors the Mine/Everyone identity gate).
-  const lens = _sopLens === "person" && !viewerSlug ? "forest" : _sopLens;
+  // The Person lens needs an identity. The old no-identity fallback rendered the
+  // unlensed Forest narrative here — DUPLICATING the State of Play panel below,
+  // which UI-2 re-pointed to that same forest altitude (two syntheses of one
+  // scope, stacked — and identity-less is the default on every fresh install).
+  // One corpus, one narrative: with no identity this surface goes calm-empty and
+  // the SoP panel below is the single source (mirrors the Mine/Everyone gate).
+  if (!viewerSlug) {
+    panel.innerHTML = "";
+    if (bar) bar.hidden = true;
+    return;
+  }
+  const lens = _sopLens;
   const selector = lens === "person" ? personLens(viewerSlug) : null;
   panel.innerHTML = '<div class="sop-status">Composing your state of play…</div>';
   const data = await loadSoP("forest", null, selector);
