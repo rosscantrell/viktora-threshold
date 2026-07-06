@@ -226,8 +226,8 @@ code {
 .wizard-step {
   font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--accent-hover);
   margin: 0 0 12px 0;
 }
@@ -389,10 +389,10 @@ code {
 /* Sub-section divider within a settings panel (e.g. OneNote / Plaud /
    Auto-import inside the Integrations group). */
 .settings-subhead {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--text-tertiary);
   margin: 26px 0 12px 0;
   padding-bottom: 7px;
@@ -994,7 +994,7 @@ code {
   font-size: 22px;
   font-weight: 600;
   line-height: 1.3;
-  color: var(--text-primary);
+  color: var(--glass-text);
   margin: 0;
 }
 
@@ -1002,7 +1002,7 @@ code {
   grid-area: meta;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   margin: 0;
 }
 
@@ -1021,11 +1021,10 @@ code {
 }
 
 .plaud-queue-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: 16px 18px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-card);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  padding: 12px 14px;
+  background: var(--glass-surface);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1040,7 +1039,7 @@ code {
 .plaud-queue-card-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--glass-text);
   line-height: 1.35;
   word-break: break-word;
 }
@@ -1048,7 +1047,7 @@ code {
 .plaud-queue-card-meta {
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   text-transform: none;
   letter-spacing: 0;
 }
@@ -1056,9 +1055,9 @@ code {
 .plaud-queue-card-summary {
   font-size: 13px;
   line-height: 1.5;
-  color: var(--text-secondary);
-  background: var(--surface-inset);
-  border-radius: var(--radius-sm);
+  color: var(--glass-text-dim);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--glass-radius-sm);
   padding: 10px 12px;
   word-break: break-word;
   max-height: 120px;
@@ -1111,7 +1110,7 @@ code {
   font-size: 22px;
   font-weight: 600;
   line-height: 1.3;
-  color: var(--text-primary);
+  color: var(--glass-text);
   margin: 0;
 }
 
@@ -1119,7 +1118,7 @@ code {
   grid-area: meta;
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   margin: 0;
 }
 
@@ -1138,10 +1137,9 @@ code {
 }
 
 .onenote-browse-notebook {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-card);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  background: var(--glass-surface);
   overflow: hidden;
 }
 
@@ -1150,12 +1148,12 @@ code {
   align-items: center;
   gap: 10px;
   padding: 13px 16px;
-  background: var(--surface-1);
+  background: var(--glass-surface);
   cursor: pointer;
   user-select: none;
   font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--glass-text);
   border: none;
   width: 100%;
   text-align: left;
@@ -1163,14 +1161,14 @@ code {
 }
 
 .onenote-browse-notebook-header:hover {
-  background: var(--surface-2);
+  background: var(--glass-surface-hover);
 }
 
 .onenote-browse-notebook-chevron {
   display: inline-block;
   width: 12px;
   font-size: 10px;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   transition: transform 0.14s var(--ease);
 }
 
@@ -1186,7 +1184,7 @@ code {
 .onenote-browse-notebook-count {
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
 }
 
 .onenote-browse-sections {
@@ -1205,7 +1203,7 @@ code {
   align-items: center;
   gap: 12px;
   padding: 10px 16px 10px 32px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--glass-border);
 }
 
 .onenote-browse-section:first-child {
@@ -1214,14 +1212,14 @@ code {
 
 .onenote-browse-section-name {
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--glass-text);
   word-break: break-word;
 }
 
 .onenote-browse-section-count {
   font-size: 12px;
   font-weight: 500;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   white-space: nowrap;
 }
 
@@ -1232,9 +1230,9 @@ code {
 }
 
 .onenote-browse-section-send:disabled {
-  background: var(--surface-1);
-  color: var(--text-tertiary);
-  border-color: var(--border-subtle);
+  background: var(--glass-surface);
+  color: var(--glass-text-faint);
+  border-color: var(--glass-border);
   cursor: not-allowed;
 }
 
@@ -1248,10 +1246,10 @@ code {
 }
 
 .onenote-browse-progress {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
   padding: 14px 16px;
-  background: var(--surface-1);
+  background: var(--glass-surface);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1272,28 +1270,28 @@ code {
 .onenote-browse-progress-status {
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--glass-text);
 }
 
 .onenote-browse-progress-bar {
   width: 100%;
   height: 6px;
-  background: var(--surface-inset);
-  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
   overflow: hidden;
 }
 
 .onenote-browse-progress-fill {
   height: 100%;
   width: 0%;
-  background: var(--accent);
-  border-radius: var(--radius-pill);
+  background: var(--glass-accent);
+  border-radius: 999px;
   transition: width 0.2s var(--ease);
 }
 
 .onenote-browse-progress-detail {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--glass-text-faint);
   margin: 0;
   word-break: break-word;
 }
@@ -1569,10 +1567,10 @@ code {
 }
 
 .auto-import-section-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--text-tertiary);
   margin: 8px 0 2px;
 }
@@ -1936,10 +1934,10 @@ code {
 }
 .watching-arrived-title {
   margin: 0 0 8px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
 }
 .arrived-card {
@@ -2211,10 +2209,10 @@ code {
 }
 
 .log-section-title {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   margin: 0;
 }
@@ -3458,10 +3456,10 @@ code {
 }
 
 .entity-card-eyebrow {
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   margin: 0;
 }
@@ -3774,7 +3772,7 @@ code {
   color: var(--glass-text-faint);
   margin: 14px 0 2px 14px;
 }
-.frame-ws-name { text-transform: uppercase; }
+.frame-ws-name { text-transform: none; }
 /* Collapse chevron on frame + workstream section headers. Sits first (before the
    badge/name); folds the whole project or a single sub-category. The whole header
    is the click target (.frame-section-collapsible), so this is just the cue. */
@@ -4415,9 +4413,9 @@ code {
   padding: 6px;
 }
 .frame-move-title {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   padding: 0 2px 6px;
 }
@@ -4437,9 +4435,9 @@ code {
 .frame-move-item:hover { background: var(--glass-surface-hover); }
 .frame-move-item.nested { padding-left: 18px; color: var(--glass-text-faint); }
 .frame-move-section {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   padding: 8px 2px 4px;
 }
@@ -5374,10 +5372,10 @@ button.rec-source {
   margin-bottom: 18px;
 }
 .proxy-pile-heading {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--text-secondary);
   margin: 0 0 10px;
 }
@@ -5634,10 +5632,10 @@ button.rec-source {
 }
 
 .project-home-eyebrow {
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   margin: 0 0 2px;
 }
@@ -5685,10 +5683,10 @@ button.rec-source {
   background: var(--glass-surface);
 }
 .project-home-rels-head {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   margin-bottom: 8px;
 }
