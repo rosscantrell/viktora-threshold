@@ -228,6 +228,148 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
 }
 
 
+/// UTF8 description of any ObjC object (autoreleased; copy out immediately).
+/// Dev-diagnostic helper for the probes below.
+unsafe fn objc_description(obj: *mut AnyObject) -> String {
+    if obj.is_null() {
+        return "nil".into();
+    }
+    let desc: *mut AnyObject = msg_send![obj, description];
+    if desc.is_null() {
+        return "nil-desc".into();
+    }
+    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+    if utf8.is_null() {
+        return "nil-utf8".into();
+    }
+    std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+}
+
+/// Deep chrome probe — the layers the NSWindow-level probe can't see.
+/// The grey-halo evidence pattern is "window values clean, halo anyway",
+/// which means the paint lives either in ANOTHER window or in the webview
+/// background stack. This prints both:
+///   1. every NSWindow in the app (class, frame, visible, alpha, opaque,
+///      hasShadow) — catches a second-window carcass;
+///   2. the WKWebView found under the probed window's contentView:
+///      drawsBackground (KVC), underPageBackgroundColor, view isOpaque, and
+///      the backing CALayer backgroundColor — catches a webview-layer paint
+///      behind the transparent page.
+/// Reads, never writes. Call on the main thread.
+pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
+    unsafe {
+        // ── 1. All windows ──
+        let app_class = objc2::class!(NSApplication);
+        let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+        if !app.is_null() {
+            let windows: *mut AnyObject = msg_send![app, windows];
+            let count: usize = if windows.is_null() { 0 } else { msg_send![windows, count] };
+            eprintln!("[chrome-deep:{tag}] app window count = {count}");
+            for i in 0..count {
+                let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+                if w.is_null() {
+                    continue;
+                }
+                let cls = (*w).class().name();
+                let frame: objc2_foundation::NSRect = msg_send![w, frame];
+                let visible: bool = msg_send![w, isVisible];
+                let alpha: f64 = msg_send![w, alphaValue];
+                let opaque: bool = msg_send![w, isOpaque];
+                let shadow: bool = msg_send![w, hasShadow];
+                let is_probed = std::ptr::eq(w as *const _, ns_window as *const _);
+                eprintln!(
+                    "[chrome-deep:{tag}]   win[{i}]{} class={cls:?} frame=({:.0},{:.0} {:.0}x{:.0}) visible={visible} alpha={alpha:.2} opaque={opaque} hasShadow={shadow}",
+                    if is_probed { "*" } else { "" },
+                    frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                );
+            }
+        }
+
+        // ── 2. The webview background stack under the probed window ──
+        if ns_window.is_null() {
+            eprintln!("[chrome-deep:{tag}] ns_window NULL — skipping webview walk");
+            return;
+        }
+        let win = ns_window as *mut AnyObject;
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            eprintln!("[chrome-deep:{tag}] contentView NULL");
+            return;
+        }
+        // contentView's own layer background first.
+        let c_layer: *mut AnyObject = msg_send![content, layer];
+        if !c_layer.is_null() {
+            let cg: *mut AnyObject = msg_send![c_layer, backgroundColor];
+            let desc = if cg.is_null() {
+                "nil".into()
+            } else {
+                let ns: *mut AnyObject =
+                    msg_send![objc2::class!(NSColor), colorWithCGColor: cg as *mut std::ffi::c_void];
+                objc_description(ns)
+            };
+            let c_opaque: bool = msg_send![c_layer, isOpaque];
+            eprintln!("[chrome-deep:{tag}] contentView.layer bg={desc} layerOpaque={c_opaque}");
+        } else {
+            eprintln!("[chrome-deep:{tag}] contentView has no layer");
+        }
+        // Breadth-first walk for the WKWebView.
+        let mut queue: Vec<*mut AnyObject> = vec![content];
+        let mut found = false;
+        while let Some(view) = queue.pop() {
+            let cls = (*view).class().name();
+            if cls.to_string_lossy().contains("WKWebView") {
+                found = true;
+                let v_opaque: bool = msg_send![view, isOpaque];
+                let v_frame: objc2_foundation::NSRect = msg_send![view, frame];
+                // drawsBackground is a private WKWebView property — read via KVC
+                // (this is exactly what wry sets for transparent windows).
+                let key = objc2_foundation::NSString::from_str("drawsBackground");
+                let draws_bg: *mut AnyObject = msg_send![view, valueForKey: &*key];
+                let draws_bg_val: bool = if draws_bg.is_null() {
+                    true
+                } else {
+                    msg_send![draws_bg, boolValue]
+                };
+                // underPageBackgroundColor (macOS 12+): grey in dark mode by
+                // default; a live suspect for the halo.
+                let upbc: *mut AnyObject = msg_send![view, underPageBackgroundColor];
+                let upbc_desc = objc_description(upbc);
+                let v_layer: *mut AnyObject = msg_send![view, layer];
+                let layer_desc = if v_layer.is_null() {
+                    "no-layer".into()
+                } else {
+                    let cg: *mut AnyObject = msg_send![v_layer, backgroundColor];
+                    if cg.is_null() {
+                        "nil".into()
+                    } else {
+                        let ns: *mut AnyObject = msg_send![
+                            objc2::class!(NSColor),
+                            colorWithCGColor: cg as *mut std::ffi::c_void
+                        ];
+                        objc_description(ns)
+                    }
+                };
+                eprintln!(
+                    "[chrome-deep:{tag}] WKWebView frame=({:.0},{:.0} {:.0}x{:.0}) viewOpaque={v_opaque} drawsBackground={draws_bg_val} underPageBackgroundColor={upbc_desc} layer.bg={layer_desc}",
+                    v_frame.origin.x, v_frame.origin.y, v_frame.size.width, v_frame.size.height,
+                );
+                break;
+            }
+            let subviews: *mut AnyObject = msg_send![view, subviews];
+            let n: usize = if subviews.is_null() { 0 } else { msg_send![subviews, count] };
+            for i in 0..n {
+                let sv: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                if !sv.is_null() {
+                    queue.push(sv);
+                }
+            }
+        }
+        if !found {
+            eprintln!("[chrome-deep:{tag}] no WKWebView found under contentView");
+        }
+    }
+}
+
 /// Print the live NSWindow chrome state — the grey-halo investigation probe.
 /// Reads, never writes. Call on the main thread.
 pub fn debug_window_chrome(ns_window: *mut std::ffi::c_void, tag: &str) {

@@ -6653,6 +6653,7 @@ fn widget_expand(
                         Err(e) => eprintln!("[persona] apply_workspace_window_style FAILED: {e}"),
                     }
                     widget_platform_mac::debug_window_chrome(ns_window, "post-expand");
+                    widget_platform_mac::debug_window_deep(ns_window, "post-expand");
                 }
                 Err(e) => eprintln!("[persona] ns_window() unavailable on expand: {e}"),
             }
@@ -6709,6 +6710,7 @@ fn widget_collapse(
                         log::warn!("restore_widget_window_style failed: {e}");
                     }
                     widget_platform_mac::debug_window_chrome(ns_window, "post-collapse");
+                    widget_platform_mac::debug_window_deep(ns_window, "post-collapse");
                 }
                 Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
             }
@@ -6761,6 +6763,27 @@ fn widget_collapse(
     window
         .eval("window.location.replace('widget.html');")
         .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+
+    // Delayed re-probe: the post-collapse probe above fires while the webview
+    // is still showing the OPAQUE index.html (navigation to widget.html is the
+    // last step and async). This one captures the stack in the state the user
+    // actually sees the halo in — transparent widget.html loaded, pill on
+    // screen. The field-level diff between post-collapse and this trace is
+    // the bug-1 culprit signature.
+    #[cfg(target_os = "macos")]
+    {
+        let probe_window = window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            let inner = probe_window.clone();
+            let _ = probe_window.run_on_main_thread(move || {
+                if let Ok(ns_window) = inner.ns_window() {
+                    widget_platform_mac::debug_window_chrome(ns_window, "post-collapse+900ms");
+                    widget_platform_mac::debug_window_deep(ns_window, "post-collapse+900ms");
+                }
+            });
+        });
+    }
 
     log::info!("widget collapsed");
     Ok(())
@@ -7220,11 +7243,26 @@ pub fn run() {
                                 log::info!("widget_platform_mac: non-activating shim applied");
                             }
                             widget_platform_mac::debug_window_chrome(ns_window, "boot");
+                            widget_platform_mac::debug_window_deep(ns_window, "boot");
                         }
                         Err(e) => {
                             log::warn!("could not obtain NSWindow handle: {e}");
                         }
                     }
+                    // Delayed re-probe: the boot probe fires before widget.html
+                    // has painted. If a fresh boot is ALREADY grey, this is the
+                    // state that matters — the webview stack after first paint.
+                    let probe_window = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        let inner = probe_window.clone();
+                        let _ = probe_window.run_on_main_thread(move || {
+                            if let Ok(ns_window) = inner.ns_window() {
+                                widget_platform_mac::debug_window_chrome(ns_window, "boot+1500ms");
+                                widget_platform_mac::debug_window_deep(ns_window, "boot+1500ms");
+                            }
+                        });
+                    });
                 } else {
                     log::warn!("could not find 'main' window during setup");
                 }
@@ -7304,6 +7342,45 @@ pub fn run() {
                     } else {
                         // No pending work — exit immediately
                         window.app_handle().exit(0);
+                    }
+                }
+                // Bug-2 probe (black surround at maximize/fullscreen): on any
+                // significant resize, print the window frame beside the
+                // monitor frame + fullscreen/maximized flags — measures the
+                // wanted-vs-got gap directly instead of theorizing about it.
+                // Throttled to >48px jumps so drag-resizes don't spam.
+                tauri::WindowEvent::Resized(size) => {
+                    static LAST_W: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
+                    static LAST_H: std::sync::atomic::AtomicU32 =
+                        std::sync::atomic::AtomicU32::new(0);
+                    let (w, h) = (size.width, size.height);
+                    if LAST_W.load(Ordering::Relaxed).abs_diff(w) > 48
+                        || LAST_H.load(Ordering::Relaxed).abs_diff(h) > 48
+                    {
+                        LAST_W.store(w, Ordering::Relaxed);
+                        LAST_H.store(h, Ordering::Relaxed);
+                        let pos = window
+                            .outer_position()
+                            .map(|p| format!("({},{})", p.x, p.y))
+                            .unwrap_or_else(|e| format!("err:{e}"));
+                        let fs = window.is_fullscreen().unwrap_or(false);
+                        let max = window.is_maximized().unwrap_or(false);
+                        let mon = match window.current_monitor() {
+                            Ok(Some(m)) => format!(
+                                "pos=({},{}) size={}x{} scale={}",
+                                m.position().x,
+                                m.position().y,
+                                m.size().width,
+                                m.size().height,
+                                m.scale_factor()
+                            ),
+                            Ok(None) => "none".into(),
+                            Err(e) => format!("err:{e}"),
+                        };
+                        eprintln!(
+                            "[frames] window {w}x{h} at {pos} fullscreen={fs} maximized={max} | monitor {mon}"
+                        );
                     }
                 }
                 // Capture drag-drop events at the window level (D-12-13: paths
