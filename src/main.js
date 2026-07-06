@@ -3227,8 +3227,13 @@ async function enterLogView() {
       panel.hidden = false;
       if (btn) btn.setAttribute("aria-expanded", "true");
     }
-    // Already composed this session (or mid-compose) — don't re-pay the LLM call.
-    if ((panel.textContent || "").trim().length > 40) return;
+    // Already composed this session — don't re-pay the LLM call. Only REAL
+    // prose counts: a status/error line (".sop-status" — "Composing…" /
+    // "Overview isn't available…") must NOT satisfy the guard, else a failed
+    // compose (engine briefly down) sticks as a permanent error box that
+    // auto-load refuses to retry past.
+    const hasProse = panel.textContent.trim().length > 40 && !panel.querySelector(".sop-status");
+    if (hasProse) return;
     loadCorpusStateOfPlay(panel);
   }
 
