@@ -227,6 +227,25 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
     Ok(())
 }
 
+
+/// Print the live NSWindow chrome state — the grey-halo investigation probe.
+/// Reads, never writes. Call on the main thread.
+pub fn debug_window_chrome(ns_window: *mut std::ffi::c_void, tag: &str) {
+    if ns_window.is_null() {
+        eprintln!("[chrome:{tag}] ns_window NULL");
+        return;
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        let has_shadow: bool = msg_send![win, hasShadow];
+        let is_opaque: bool = msg_send![win, isOpaque];
+        let style_mask: u64 = msg_send![win, styleMask];
+        let bg: *mut AnyObject = msg_send![win, backgroundColor];
+        let bg_alpha: f64 = if bg.is_null() { -1.0 } else { msg_send![bg, alphaComponent] };
+        eprintln!("[chrome:{tag}] hasShadow={has_shadow} isOpaque={is_opaque} styleMask={style_mask:#x} bgAlpha={bg_alpha}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

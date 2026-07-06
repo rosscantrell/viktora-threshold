@@ -6652,6 +6652,7 @@ fn widget_expand(
                         Ok(()) => eprintln!("[persona] workspace style APPLIED"),
                         Err(e) => eprintln!("[persona] apply_workspace_window_style FAILED: {e}"),
                     }
+                    widget_platform_mac::debug_window_chrome(ns_window, "post-expand");
                 }
                 Err(e) => eprintln!("[persona] ns_window() unavailable on expand: {e}"),
             }
@@ -6707,6 +6708,7 @@ fn widget_collapse(
                     if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
                         log::warn!("restore_widget_window_style failed: {e}");
                     }
+                    widget_platform_mac::debug_window_chrome(ns_window, "post-collapse");
                 }
                 Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
             }
@@ -7217,6 +7219,7 @@ pub fn run() {
                             } else {
                                 log::info!("widget_platform_mac: non-activating shim applied");
                             }
+                            widget_platform_mac::debug_window_chrome(ns_window, "boot");
                         }
                         Err(e) => {
                             log::warn!("could not obtain NSWindow handle: {e}");
