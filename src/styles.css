@@ -2125,11 +2125,70 @@ code {
   background: var(--glass-surface-hover);
 }
 
+/* Today composition pass — the "Needs attention" collapse header row: the
+   toggle button on the left, the states strip riding right-aligned + small.
+   The strip no longer renders as its own floating stratum. */
+.log-collapse-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.log-collapse-head-row .log-collapse-head {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.log-collapse-head-row .log-states-strip {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
 /* State strip — ghost-tint pills, colored text only. */
 .log-states-strip {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+/* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
+.log-states-strip[hidden] {
+  display: none;
+}
+/* Right-aligned in the collapse header: smaller pills, quieter. */
+.log-collapse-head-row .log-state-pill {
+  font-size: 9.5px;
+  padding: 2px 7px;
+}
+
+/* Needs-attention project groups — a quiet sub-heading per project, then its
+   rows. Visual grouping only (no nested collapsible / second voice). */
+.log-attention-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.log-attention-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.log-attention-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--glass-text-dim);
+  margin: 0;
+}
+.log-attention-group-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 0 7px;
 }
 
 .log-state-pill {
@@ -2160,6 +2219,12 @@ code {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+/* Empty ⇒ absent (Today composition pass): the flex display would otherwise
+   outrank [hidden], leaving an empty Conflicts/Workload sub-section painting a
+   bare title. Restore the hide. */
+.log-section[hidden] {
+  display: none;
 }
 
 .log-section-title {
@@ -2241,12 +2306,53 @@ code {
    ══════════════════════════════════════════════════════════════════════════ */
 .today-sop,
 .today-queue,
-.today-filed,
+.today-comingup,
 .today-outbox-tray {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
+}
+/* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
+.today-comingup[hidden] {
+  display: none;
+}
+
+/* Coming up — the forward-looking window. Rows reuse .log-attention-row; the due
+   date is the prominent signal in the head, urgent (≤48h) borrows the amber
+   accent, and a quiet badge flags due-soon-but-silent items. */
+.today-comingup-row .log-row-head {
+  row-gap: 4px;
+}
+.today-comingup-due {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-dim);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.today-comingup-due-urgent {
+  color: var(--glass-accent);
+  border-color: var(--glass-accent);
+  background: rgba(255, 196, 64, 0.12); /* --glass-accent #ffc440 at low alpha */
+}
+/* Rows due within 48h take the amber left border, matching the overdue rows. */
+.today-comingup-urgent {
+  border-left-color: var(--glass-accent);
+}
+.today-comingup-quiet {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-faint);
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
 }
 /* WP-R2 amendment item 5 — the tray's `display: flex` (a class rule) outranks the
    UA `[hidden]{display:none}`, so an empty, `hidden` tray (label included) still
@@ -2263,12 +2369,16 @@ code {
   width: 100%;
 }
 
+/* Today composition pass — sentence case for the Today section titles
+   ("Waiting on you", "Filed automatically", "Awaiting send"). The ALL-CAPS
+   register is dropped here only; other views keep their .log-section-title
+   uppercase. Bumped to a readable title size to match the one-voice header. */
 .today-section-title {
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--glass-text-faint);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--glass-text);
   margin: 0;
 }
 
@@ -2310,17 +2420,37 @@ code {
   border-radius: var(--glass-radius-md);
 }
 
-/* ③ Filed confidently — collapsed pile header; reuses the proxy-pile chrome. */
-.today-filed .today-section-head {
+/* Filed automatically — the demoted quiet line inside "Waiting on you". ONE
+   collapsed line that expands the filed rows in place; no section chrome, no
+   floating header. Renders NOTHING when [hidden] (zero filed items). */
+.today-filed-demoted {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+.today-filed-demoted[hidden] {
+  display: none;
+}
+.today-filed-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
   cursor: pointer;
   background: none;
   border: none;
-  padding: 0;
+  padding: 4px 2px;
   text-align: left;
   font: inherit;
-}
-.today-filed .proxy-pile-chevron {
+  font-size: 11.5px;
   color: var(--glass-text-dim);
+}
+.today-filed-line:hover {
+  color: var(--glass-text);
+}
+.today-filed-line .proxy-pile-chevron {
+  color: var(--glass-text-faint);
   font-size: 10px;
 }
 
