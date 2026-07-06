@@ -137,6 +137,17 @@ pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<
         let new_behavior =
             (current_behavior & !PANEL_BEHAVIOR_BITS) | NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY;
         let _: () = msg_send![win, setCollectionBehavior: new_behavior];
+
+        // A policy change on a RUNNING app does not activate it by itself —
+        // without an explicit activate, the app stays behind and window clicks
+        // de-focus it (the exact .accessory symptom). Kick activation + key.
+        let app = NSApplication::sharedApplication(objc2::MainThreadMarker::new().ok_or("not on main thread")?);
+        let applied: i64 = msg_send![&*app, activationPolicy];
+        eprintln!("[persona] activationPolicy now = {applied} (0=regular, 1=accessory)");
+        let _: () = msg_send![&*app, activateIgnoringOtherApps: true];
+        let _: () = msg_send![win, makeKeyAndOrderFront: std::ptr::null::<AnyObject>()];
+        let key: bool = msg_send![win, isKeyWindow];
+        eprintln!("[persona] window isKeyWindow = {key}");
     }
     Ok(())
 }

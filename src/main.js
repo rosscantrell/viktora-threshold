@@ -276,9 +276,8 @@ async function bootstrap() {
   // top-left padding and its content clears the traffic-light cluster (see
   // .titlebar-overlay .app-nav in styles.css). WKWebView's UA reliably carries
   // "Macintosh"; other platforms keep standard decorations and no offset.
-  if (/Macintosh|Mac OS X/.test(navigator.userAgent || "")) {
-    document.body.classList.add("titlebar-overlay");
-  }
+  // (Overlay titlebar reverted 2026-07-06 — standard decorations carry the
+  // traffic lights, so no nav offset is needed.)
 
   // Subscribe to backend events early so we don't miss any
   await wireBackendEvents();

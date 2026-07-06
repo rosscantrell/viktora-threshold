@@ -6636,24 +6636,27 @@ fn widget_expand(
         // SIGTRAP "Must only be used from the main thread", seen live on the
         // first expand after #73. Dispatch the whole persona flip.
         let mt_window = window.clone();
+        eprintln!("[persona] expand: dispatching main-thread persona flip");
         if let Err(e) = window.run_on_main_thread(move || {
-            let _ = mt_window.set_title("");
-            if let Err(e) = mt_window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
-                log::warn!("set_title_bar_style(Overlay) failed: {e} — standard decorations retained");
-            }
+            eprintln!("[persona] expand closure ENTERED on main thread");
+            // Standard decorations (reverted from Overlay 2026-07-06: overlay
+            // removed the draggable titlebar and confused the chrome; a normal
+            // titled window is the deterministic win).
+            let _ = mt_window.set_title("Threshold");
             // Flip NSApp → .regular + window collectionBehavior → managed |
             // fullScreenPrimary so the workspace window is Mission-Control /
             // Cmd-Tab visible and owns native full-screen.
             match mt_window.ns_window() {
                 Ok(ns_window) => {
-                    if let Err(e) = widget_platform_mac::apply_workspace_window_style(ns_window) {
-                        log::warn!("apply_workspace_window_style failed: {e}");
+                    match widget_platform_mac::apply_workspace_window_style(ns_window) {
+                        Ok(()) => eprintln!("[persona] workspace style APPLIED"),
+                        Err(e) => eprintln!("[persona] apply_workspace_window_style FAILED: {e}"),
                     }
                 }
-                Err(e) => log::warn!("ns_window() unavailable on expand: {e}"),
+                Err(e) => eprintln!("[persona] ns_window() unavailable on expand: {e}"),
             }
         }) {
-            log::warn!("main-thread dispatch failed on expand: {e}");
+            eprintln!("[persona] main-thread dispatch FAILED on expand: {e}");
         }
     }
 
@@ -6696,8 +6699,9 @@ fn widget_collapse(
         // decorations, so the transparent-titlebar mask doesn't linger.
         // Same main-thread law as expand — AppKit traps off-main use.
         let mt_window = window.clone();
+        eprintln!("[persona] collapse: dispatching main-thread persona restore");
         if let Err(e) = window.run_on_main_thread(move || {
-            let _ = mt_window.set_title_bar_style(tauri::TitleBarStyle::Visible);
+            eprintln!("[persona] collapse closure ENTERED on main thread");
             match mt_window.ns_window() {
                 Ok(ns_window) => {
                     if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
