@@ -699,6 +699,8 @@ function switchSettingsPanel(name) {
   }
   // Privacy panel is lazy — fetch the live posture from the engine on open.
   if (name === "privacy") renderSovereignty();
+  // Email-capture panel is lazy too — GET /api/email/capture on open (WP-EM1b).
+  if (name === "email-capture") renderEmailCapture();
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
@@ -781,6 +783,281 @@ async function renderSovereignty() {
   }
 
   body.innerHTML = html;
+}
+
+// ───────── Email capture (WP-EM1b) ─────────
+// Self-service configuration for the email on-ramp. Renders into
+// #email-capture-body, lazily on panel open. Three calm states, never blank:
+//   • not enabled (404 / older engine)   → explainer only
+//   • enabled, no address                → "Create my capture address"
+//   • enabled + address                  → the main card (copy / rotate / senders)
+// Every mutation refreshes via a re-GET (no optimistic state). Product copy is
+// plain: no "bearer", "local-part", or "webhook" on the card face.
+
+const CAPTURE_DOMAIN_FALLBACK = "in.viktora.ai";
+
+async function renderEmailCapture() {
+  const body = document.getElementById("email-capture-body");
+  if (!body) return;
+  body.innerHTML = '<p class="field-help">Loading…</p>';
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_email_capture");
+  } catch (err) {
+    // A hard transport/auth failure — still calm, still actionable (retry).
+    body.innerHTML =
+      '<p class="field-help ec-error">Couldn\'t reach your workspace: ' +
+      escapeHtml(String(err)) +
+      '</p><div class="ec-actions"><button type="button" class="btn btn-secondary" id="ec-retry">Try again</button></div>';
+    const retry = document.getElementById("ec-retry");
+    if (retry) retry.addEventListener("click", () => renderEmailCapture());
+    return;
+  }
+
+  // Not enabled on this workspace (flag off / older engine): calm explainer.
+  if (!data || data.available === false || data.enabled !== true) {
+    body.innerHTML =
+      '<p class="field-help">Email capture isn\'t enabled for this workspace yet.</p>';
+    return;
+  }
+
+  const domain = data.domain || CAPTURE_DOMAIN_FALLBACK;
+  const addresses = Array.isArray(data.addresses) ? data.addresses : [];
+  const active = addresses.find((a) => a && a.active);
+  const senders = Array.isArray(data.senders) ? data.senders : [];
+
+  // Enabled, but no address minted yet: explainer + create button.
+  if (!active) {
+    body.innerHTML =
+      '<p class="field-help">Create a private capture address for this workspace. ' +
+      "BCC or forward any email to it and Threshold files what it finds, then replies " +
+      "with a receipt.</p>" +
+      '<div class="ec-actions"><button type="button" class="btn btn-primary" id="ec-create">' +
+      "Create my capture address</button></div>";
+    const create = document.getElementById("ec-create");
+    if (create) {
+      create.addEventListener("click", async () => {
+        create.disabled = true;
+        create.textContent = "Creating…";
+        try {
+          // Owner resolves from the signed-in identity server-side when present;
+          // pass the whoami email as a fallback for the identity-less bearer lane.
+          let ownerEmail = null;
+          try { ownerEmail = await getViewerEmail(); } catch (_e) { /* optional */ }
+          await tauri.core.invoke("email_capture_mint_address", { ownerEmail: ownerEmail || null });
+          await renderEmailCapture(); // re-GET, no optimistic state
+        } catch (err) {
+          create.disabled = false;
+          create.textContent = "Create my capture address";
+          showToast({ kind: "failure", title: "Couldn't create address", body: String(err) });
+        }
+      });
+    }
+    return;
+  }
+
+  // Main card: the active address + copy/rotate + approved senders.
+  const activeAddr = active.address || "";
+  const retired = addresses.filter((a) => a && !a.active);
+
+  let html = "";
+  html +=
+    '<div class="ec-address-row">' +
+    '<code class="ec-address" id="ec-address">' + escapeHtml(activeAddr) + "</code>" +
+    '<button type="button" class="btn btn-secondary ec-copy" id="ec-copy">Copy</button>' +
+    "</div>";
+  html +=
+    '<p class="field-help">BCC or forward any email to this address — Threshold files ' +
+    "what it finds and replies with a receipt. Only senders you approve below are accepted.</p>";
+
+  // Rotate (behind a confirm).
+  html +=
+    '<div class="ec-actions"><button type="button" class="btn btn-secondary" id="ec-rotate">' +
+    "Rotate address</button></div>";
+
+  if (retired.length) {
+    html +=
+      '<p class="field-help ec-history">Retired: ' +
+      retired.map((a) => "<code>" + escapeHtml(a.address || "") + "</code>").join(", ") +
+      "</p>";
+  }
+
+  // Approved senders.
+  html += '<h3 class="settings-subhead ec-senders-head">Approved senders</h3>';
+  if (senders.length) {
+    html += '<ul class="ec-senders">';
+    for (const s of senders) {
+      html +=
+        '<li class="ec-sender-row"><code class="ec-sender">' + escapeHtml(s) +
+        '</code><button type="button" class="ec-sender-remove" data-sender="' + escapeHtml(s) +
+        '" aria-label="Remove ' + escapeHtml(s) + '">Remove</button></li>';
+    }
+    html += "</ul>";
+  } else {
+    html +=
+      '<p class="field-help">No approved senders yet. Add one below — email from anyone ' +
+      "else is ignored.</p>";
+  }
+  html +=
+    '<div class="ec-add-sender">' +
+    '<input type="text" class="ec-sender-input" id="ec-sender-input" ' +
+    'placeholder="name@company.com or @company.com" autocomplete="off" spellcheck="false" />' +
+    '<button type="button" class="btn btn-secondary" id="ec-sender-add">Add</button>' +
+    "</div>";
+  html += '<p class="field-help ec-sender-error" id="ec-sender-error" hidden></p>';
+
+  body.innerHTML = html;
+
+  // ── Wire the main card ──
+  const copyBtn = document.getElementById("ec-copy");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("copy_text", { text: activeAddr });
+        copyBtn.textContent = "Copied";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+      } catch (err) {
+        showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
+      }
+    });
+  }
+
+  const rotateBtn = document.getElementById("ec-rotate");
+  if (rotateBtn) {
+    rotateBtn.addEventListener("click", () => confirmRotateCapture(activeAddr));
+  }
+
+  for (const rm of document.querySelectorAll(".ec-sender-remove")) {
+    rm.addEventListener("click", () => confirmRemoveSender(rm.dataset.sender));
+  }
+
+  const addInput = document.getElementById("ec-sender-input");
+  const addBtn = document.getElementById("ec-sender-add");
+  if (addBtn && addInput) {
+    const doAdd = () => addCaptureSender(addInput.value);
+    addBtn.addEventListener("click", doAdd);
+    addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doAdd(); } });
+  }
+}
+
+// Client-side sender validation — mirrors the engine's §1.4 rule (bare email OR
+// @domain wildcard, trimmed + lowercased). Returns the canonical form or null.
+function normalizeCaptureSender(raw) {
+  const s = (raw || "").trim().toLowerCase();
+  if (!s) return null;
+  if (s.startsWith("@")) {
+    const domain = s.slice(1);
+    return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(domain) ? s : null;
+  }
+  return /^[^\s@]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(s) ? s : null;
+}
+
+async function addCaptureSender(raw) {
+  const errEl = document.getElementById("ec-sender-error");
+  const value = normalizeCaptureSender(raw);
+  if (!value) {
+    if (errEl) {
+      errEl.textContent = "Enter an email (name@company.com) or a domain (@company.com).";
+      errEl.removeAttribute("hidden");
+    }
+    return;
+  }
+  if (errEl) errEl.setAttribute("hidden", "");
+  try {
+    await tauri.core.invoke("email_capture_add_sender", { sender: value });
+    await renderEmailCapture(); // re-GET
+  } catch (err) {
+    // Server-side validation / duplicate — surface in the existing toast pattern.
+    showToast({ kind: "failure", title: "Couldn't add sender", body: String(err) });
+  }
+}
+
+function confirmRemoveSender(sender) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Remove this sender?";
+  pane.appendChild(title);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "pg-confirm-body";
+  bodyEl.textContent = `Email from “${sender}” will no longer be captured.`;
+  pane.appendChild(bodyEl);
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Remove";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Removing…";
+    try {
+      await tauri.core.invoke("email_capture_remove_sender", { sender });
+      pgClose(overlay);
+      await renderEmailCapture(); // re-GET
+    } catch (err) {
+      pgClose(overlay);
+      showToast({ kind: "failure", title: "Couldn't remove sender", body: String(err) });
+    }
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+function confirmRotateCapture(currentAddr) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Rotate your capture address?";
+  pane.appendChild(title);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "pg-confirm-body";
+  bodyEl.textContent =
+    "Rotating retires the old address immediately — update anything that BCCs it. " +
+    "You'll get a fresh address to use instead.";
+  pane.appendChild(bodyEl);
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Rotate";
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    go.textContent = "Rotating…";
+    try {
+      await tauri.core.invoke("email_capture_rotate_address", { address: currentAddr });
+      pgClose(overlay);
+      await renderEmailCapture(); // re-GET
+      showToast({ kind: "success", title: "Address rotated", body: "The old address no longer accepts mail." });
+    } catch (err) {
+      pgClose(overlay);
+      showToast({ kind: "failure", title: "Couldn't rotate", body: String(err) });
+    }
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
 }
 
 function enterWizardDone(cfg) {

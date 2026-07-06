@@ -233,6 +233,9 @@
             <button type="button" class="settings-nav-item" data-panel="integrations">
               Integrations
             </button>
+            <button type="button" class="settings-nav-item" data-panel="email-capture">
+              Email capture
+            </button>
             <button type="button" class="settings-nav-item" data-panel="privacy">
               Privacy
             </button>
@@ -432,6 +435,24 @@
                  panel makes it visible. renderSovereignty() in main.js fills
                  #privacy-body on panel open (lazy). The .privacy-future block is
                  the home for a future per-user model/sovereignty selector. -->
+            <!-- ── Email capture panel (WP-EM1b) ──
+                 Self-service config for the email on-ramp: your capture
+                 address (mint / copy / rotate) + the approved-senders
+                 allowlist. Body rendered lazily by renderEmailCapture() in
+                 main.js on panel open (GET /api/email/capture via the
+                 fetch_email_capture IPC). Three calm states: not-enabled,
+                 enabled-no-address, enabled-with-address. -->
+            <section class="settings-panel" data-panel="email-capture">
+              <h2 class="settings-panel-title">Email capture</h2>
+              <div id="email-capture-body" class="email-capture-body">
+                <p class="field-help">Loading…</p>
+              </div>
+              <span class="field-help">
+                BCC or forward email to your capture address and Threshold files
+                what it finds. Only senders you approve are accepted.
+              </span>
+            </section>
+
             <section class="settings-panel" data-panel="privacy">
               <h2 class="settings-panel-title">Privacy</h2>
               <div id="privacy-body" class="privacy-body">

@@ -5692,3 +5692,94 @@ button.rec-source {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* ───────── Email capture settings card (WP-EM1b) ───────── */
+.email-capture-body { display: flex; flex-direction: column; gap: 14px; }
+
+.ec-error { color: var(--danger, #e5646a); }
+
+.ec-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.ec-address-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ec-address {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  word-break: break-all;
+}
+.ec-copy { flex: 0 0 auto; }
+
+.ec-history { margin-top: -4px; }
+.ec-history code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--text-tertiary);
+}
+
+.ec-senders-head { margin-top: 6px; }
+
+.ec-senders {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ec-sender-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.ec-sender {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.ec-sender-remove {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.ec-sender-remove:hover { color: var(--danger, #e5646a); }
+
+.ec-add-sender { display: flex; gap: 10px; }
+.ec-sender-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+}
+.ec-sender-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.ec-sender-input::placeholder { color: var(--text-tertiary); }
+
+.ec-sender-error { color: var(--danger, #e5646a); }

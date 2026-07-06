@@ -2760,6 +2760,153 @@ async fn fetch_inform_edges(
         .map_err(|e| format!("fetch_inform_edges: parse response failed: {e}"))
 }
 
+// ── WP-EM1b — email-capture self-service admin client ──
+// Proxies the schema-browser /api/email/capture[...] admin routes (bearer auth,
+// base_url from current_config). Mirrors fetch_inform_edges: 404/503 (flag off ⇒
+// routes not registered on an older/disabled engine) → {available:false} so the
+// Settings card lands in its calm "not enabled" state rather than erroring. The
+// mutation commands surface the engine's structured {error} message so the card
+// can toast a clean validation reason (e.g. bad sender shape → 400).
+
+/// Extract a clean error string from a non-2xx capture-admin response: prefer the
+/// engine's `{error:"…"}` field, fall back to the raw body / status line.
+fn capture_admin_error(status: reqwest::StatusCode, body: &str) -> String {
+    if status.as_u16() == 401 {
+        return "Server rejected the bearer token. Check your Apolla token in Settings.".into();
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(msg) = v.get("error").and_then(|e| e.as_str()) {
+            return msg.to_string();
+        }
+    }
+    format!("HTTP {}: {}", status.as_u16(), body)
+}
+
+/// GET /api/email/capture → the full capture view (addresses incl. retired,
+/// senders). 404/503 (flag off / older engine) → {available:false}.
+#[tauri::command]
+async fn fetch_email_capture(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/email/capture", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(capture_admin_error(http_status, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_email_capture: parse response failed: {e}"))
+}
+
+/// POST /api/email/capture/address — mint a new capture address. The server
+/// resolves the owner from the signed-in identity (T2b) when present, else the
+/// `ownerEmail` we pass. Returns the new address object.
+#[tauri::command]
+async fn email_capture_mint_address(
+    state: tauri::State<'_, AppState>,
+    owner_email: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/email/capture/address",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::Map::new();
+    if let Some(o) = owner_email.filter(|s| !s.trim().is_empty()) {
+        body.insert("ownerEmail".into(), serde_json::Value::String(o));
+    }
+    email_capture_post(&cfg, &url, serde_json::Value::Object(body)).await
+}
+
+/// POST /api/email/capture/address/rotate — retire the current address, mint a
+/// replacement. 404 if the address is unknown/already inactive.
+#[tauri::command]
+async fn email_capture_rotate_address(
+    state: tauri::State<'_, AppState>,
+    address: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/email/capture/address/rotate",
+        cfg.base_url.trim_end_matches('/')
+    );
+    email_capture_post(&cfg, &url, serde_json::json!({ "address": address })).await
+}
+
+/// POST /api/email/capture/senders/add — allowlist a sender (bare email or
+/// @domain). 400 with a reason on a bad shape.
+#[tauri::command]
+async fn email_capture_add_sender(
+    state: tauri::State<'_, AppState>,
+    sender: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/email/capture/senders/add",
+        cfg.base_url.trim_end_matches('/')
+    );
+    email_capture_post(&cfg, &url, serde_json::json!({ "sender": sender })).await
+}
+
+/// POST /api/email/capture/senders/remove — drop a sender. 404 if absent.
+#[tauri::command]
+async fn email_capture_remove_sender(
+    state: tauri::State<'_, AppState>,
+    sender: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/email/capture/senders/remove",
+        cfg.base_url.trim_end_matches('/')
+    );
+    email_capture_post(&cfg, &url, serde_json::json!({ "sender": sender })).await
+}
+
+/// Shared POST helper for the capture-admin mutations: bearer auth, JSON body,
+/// engine `{error}` surfaced on non-2xx.
+async fn email_capture_post(
+    cfg: &AppConfig,
+    url: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(capture_admin_error(http_status, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("email_capture_post: parse response failed: {e}"))
+}
+
 // ── WP-Threshold-Grouping-Canonicalization — project-grouping canon client ──
 // Combine / Split / Rename of project groupings as SHARED identity resolution
 // (propose → deterministic dispose). Proxies the schema-browser
@@ -7137,6 +7284,12 @@ pub fn run() {
             fetch_project_state_of_play,
             // WP-Cohesion-Operators — INFORM ("worth looping in")
             fetch_inform_edges,
+            // WP-EM1b — email-capture self-service settings card
+            fetch_email_capture,
+            email_capture_mint_address,
+            email_capture_rotate_address,
+            email_capture_add_sender,
+            email_capture_remove_sender,
             // WP-Threshold-Grouping-Canonicalization — project-grouping canon (Combine/Split/Rename)
             fetch_project_canon,
             project_canon_merge,
