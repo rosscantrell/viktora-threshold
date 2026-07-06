@@ -6628,20 +6628,30 @@ fn widget_expand(
     // style; they keep standard decorations.
     #[cfg(target_os = "macos")]
     {
-        let _ = window.set_title("");
-        if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
-            log::warn!("set_title_bar_style(Overlay) failed: {e} — standard decorations retained");
-        }
-        // Flip NSApp → .regular + window collectionBehavior → managed |
-        // fullScreenPrimary so the workspace window is Mission-Control /
-        // Cmd-Tab visible and owns native full-screen.
-        match window.ns_window() {
-            Ok(ns_window) => {
-                if let Err(e) = widget_platform_mac::apply_workspace_window_style(ns_window) {
-                    log::warn!("apply_workspace_window_style failed: {e}");
-                }
+        // AppKit work (titlebar restyle, NSApp activationPolicy, window
+        // collectionBehavior) MUST run on the main thread. Tauri commands
+        // execute on a tokio worker thread, and AppKit traps off-main use —
+        // SIGTRAP "Must only be used from the main thread", seen live on the
+        // first expand after #73. Dispatch the whole persona flip.
+        let mt_window = window.clone();
+        if let Err(e) = window.run_on_main_thread(move || {
+            let _ = mt_window.set_title("");
+            if let Err(e) = mt_window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
+                log::warn!("set_title_bar_style(Overlay) failed: {e} — standard decorations retained");
             }
-            Err(e) => log::warn!("ns_window() unavailable on expand: {e}"),
+            // Flip NSApp → .regular + window collectionBehavior → managed |
+            // fullScreenPrimary so the workspace window is Mission-Control /
+            // Cmd-Tab visible and owns native full-screen.
+            match mt_window.ns_window() {
+                Ok(ns_window) => {
+                    if let Err(e) = widget_platform_mac::apply_workspace_window_style(ns_window) {
+                        log::warn!("apply_workspace_window_style failed: {e}");
+                    }
+                }
+                Err(e) => log::warn!("ns_window() unavailable on expand: {e}"),
+            }
+        }) {
+            log::warn!("main-thread dispatch failed on expand: {e}");
         }
     }
 
@@ -6682,14 +6692,20 @@ fn widget_collapse(
     {
         // Restore the Overlay-titlebar-free standard style before dropping
         // decorations, so the transparent-titlebar mask doesn't linger.
-        let _ = window.set_title_bar_style(tauri::TitleBarStyle::Visible);
-        match window.ns_window() {
-            Ok(ns_window) => {
-                if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
-                    log::warn!("restore_widget_window_style failed: {e}");
+        // Same main-thread law as expand — AppKit traps off-main use.
+        let mt_window = window.clone();
+        if let Err(e) = window.run_on_main_thread(move || {
+            let _ = mt_window.set_title_bar_style(tauri::TitleBarStyle::Visible);
+            match mt_window.ns_window() {
+                Ok(ns_window) => {
+                    if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
+                        log::warn!("restore_widget_window_style failed: {e}");
+                    }
                 }
+                Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
             }
-            Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
+        }) {
+            log::warn!("main-thread dispatch failed on collapse: {e}");
         }
     }
     window
