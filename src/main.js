@@ -270,6 +270,16 @@ async function bootstrap() {
     return;
   }
 
+  // WP-WINDOW — overlay-titlebar affordance. On macOS the expanded window
+  // uses the Overlay titlebar style (transparent titlebar, inline traffic
+  // lights over our own glass). Tag <body> so the sticky #app-nav gains extra
+  // top-left padding and its content clears the traffic-light cluster (see
+  // .titlebar-overlay .app-nav in styles.css). WKWebView's UA reliably carries
+  // "Macintosh"; other platforms keep standard decorations and no offset.
+  if (/Macintosh|Mac OS X/.test(navigator.userAgent || "")) {
+    document.body.classList.add("titlebar-overlay");
+  }
+
   // Subscribe to backend events early so we don't miss any
   await wireBackendEvents();
 
@@ -3787,6 +3797,42 @@ const ATTENTION_GROUP_COLLAPSE_VISIBLE = 5;
 // Group keys the user expanded this session (survives re-render; cleared on view enter).
 const _attentionExpandedGroups = new Set();
 
+/**
+ * WP-WIDE-TODAY (coordinator amendment 2) — display-side fail-safe for
+ * slug-shaped group titles. Job keys occasionally surface as raw slugs
+ * title-cased ("Us Non 22189") when the engine hasn't named the workstream.
+ * The wide two-column layout puts these titles front-and-center, so guard the
+ * DISPLAY here. Engine-side naming is fixed separately; this only rewrites the
+ * label shown, never the underlying key.
+ *
+ * Conservative detection (must not eat legitimate names):
+ *   · the specific "<2-3 letters> non <4+ digits>" pattern from the corpus, and
+ *   · a whole label that is only opaque tokens — a vowel-free consonant run of
+ *     ≥4 chars, or a token ending in a 4+ digit id — with no ordinary word.
+ * Anything with a normal word (has vowels, ≤3 consecutive consonants) passes
+ * through untouched.
+ */
+function displayGroupLabel(label) {
+  const s = (label == null ? "" : String(label)).trim();
+  if (!s) return s;
+  // Specific corpus pattern: "Us Non 22189", "abc-non-4021", etc.
+  if (/^[a-z]{2,3}[-\s]?non[-\s]?\d{4,}$/i.test(s)) return "Unnamed workstream";
+  // Token-shape heuristic: a label is slug-shaped when EVERY token is opaque
+  // (vowel-free ≥4-char run, or a bare 4+ digit id) and none is a real word.
+  const tokens = s.split(/[\s\-_]+/).filter(Boolean);
+  const looksOpaque = (t) => {
+    const lower = t.toLowerCase();
+    if (/^\d{4,}$/.test(lower)) return true; // bare long id
+    if (/[aeiou]/.test(lower)) {
+      // has a vowel — opaque only if it also carries a 4+ consonant run
+      return /[bcdfghjklmnpqrstvwxyz]{4,}/.test(lower);
+    }
+    return lower.length >= 4; // vowel-free run of 4+ letters/digits
+  };
+  if (tokens.length && tokens.every(looksOpaque)) return "Unnamed workstream";
+  return s;
+}
+
 /** Render the needs-attention list under the current filter, GROUPED BY PROJECT.
  *  "Mine" keeps only rows whose owner slug matches the viewer's (email local-part
  *  → slug). Grouping reuses the Decisions By-project derivation (groupRecords over
@@ -3847,7 +3893,7 @@ function renderTodayAttention() {
       wrap.className = "log-attention-group";
       const head = document.createElement("h3");
       head.className = "log-attention-group-title";
-      head.textContent = grp.label;
+      head.textContent = displayGroupLabel(grp.label);
       const count = document.createElement("span");
       count.className = "log-attention-group-count";
       count.textContent = String(grp.items.length);
@@ -4097,7 +4143,7 @@ async function loadTodayComingUp() {
       wrap.className = "log-attention-group";
       const head = document.createElement("h3");
       head.className = "log-attention-group-title";
-      head.textContent = grp.label;
+      head.textContent = displayGroupLabel(grp.label);
       const count = document.createElement("span");
       count.className = "log-attention-group-count";
       count.textContent = String(grp.items.length);

@@ -6575,28 +6575,75 @@ fn widget_expand(
         *cfg_guard = Some(cfg);
     }
 
-    // Step 2: resize. Sized to hug the main-view content (golden-ratio tile
-    // pair + header + drop hint) rather than leave it swimming in an 800×600
-    // frame. The webview layout is responsive, so the other expanded views
-    // (Configure, Connections, Auto-import — all max-width 720 and scrollable)
-    // adapt cleanly to the smaller frame.
+    // Step 2: resize. INITIAL size only — sized to hug the main-view content
+    // (golden-ratio tile pair + header + drop hint) rather than leave it
+    // swimming in an 800×600 frame. The webview layout is responsive, so the
+    // other expanded views (Configure, Connections, Auto-import — all
+    // max-width 720 and scrollable) adapt cleanly, and Today reflows into a
+    // two-column layout at ≥1200px when the user drags wider. This set_size
+    // runs once per expand transition, NOT on focus/refresh, so a user resize
+    // is never clobbered (the collapse→expand cycle is the only re-apply).
     window
         .set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 720.0,
             height: 560.0,
         }))
         .map_err(|e| format!("set_size failed: {e}"))?;
+    // A sane floor so the two-column / scrollable layouts never collapse into
+    // an unusable sliver. Cleared on collapse (widget has no min size).
+    window
+        .set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize {
+            width: 720.0,
+            height: 560.0,
+        })))
+        .map_err(|e| format!("set_min_size failed: {e}"))?;
 
-    // Step 3: window chrome.
+    // Step 3: window chrome — WORKSPACE persona. Beyond decorations/resizable,
+    // this transition un-does the floating-panel identity (WP-WINDOW): the
+    // window rejoins the taskbar/Dock, becomes user-resizable, and (macOS) the
+    // NSApp activation policy flips to .regular so the app is visible to
+    // Mission Control / Cmd-Tab and can enter native full-screen. Without the
+    // macOS half, decorations alone still leave an .accessory panel that the
+    // window manager treats as a floating overlay.
     window
         .set_decorations(true)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
+    window
+        .set_skip_taskbar(false)
+        .map_err(|e| format!("set_skip_taskbar failed: {e}"))?;
     window
         .set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top failed: {e}"))?;
     window
         .set_resizable(true)
         .map_err(|e| format!("set_resizable failed: {e}"))?;
+
+    // Overlay titlebar (macOS): hidden title + inline traffic lights floating
+    // over the glass. `set_title("")` drops the title text; Overlay makes the
+    // titlebar transparent with a full-size content view so the traffic lights
+    // sit over our own header. The frontend adds a body class (below) so the
+    // #app-nav clears the top-left lights. If this proves fragile the window
+    // still has standard decorations (set_decorations(true) above) — a full
+    // fallback, not a regression. Non-macOS platforms ignore the titlebar
+    // style; they keep standard decorations.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_title("");
+        if let Err(e) = window.set_title_bar_style(tauri::TitleBarStyle::Overlay) {
+            log::warn!("set_title_bar_style(Overlay) failed: {e} — standard decorations retained");
+        }
+        // Flip NSApp → .regular + window collectionBehavior → managed |
+        // fullScreenPrimary so the workspace window is Mission-Control /
+        // Cmd-Tab visible and owns native full-screen.
+        match window.ns_window() {
+            Ok(ns_window) => {
+                if let Err(e) = widget_platform_mac::apply_workspace_window_style(ns_window) {
+                    log::warn!("apply_workspace_window_style failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("ns_window() unavailable on expand: {e}"),
+        }
+    }
 
     // Step 4: navigate to expanded UI. The URL fragment tells main.js
     // which view to land in. window.eval is the cleanest cross-platform
@@ -6626,16 +6673,42 @@ fn widget_collapse(
     webview_window: tauri::WebviewWindow,
 ) -> Result<(), String> {
     let window = &webview_window;
-    // Reverse the expand operations.
+    // Reverse the expand operations — restore the WIDGET (floating-panel)
+    // persona exactly (skipTaskbar true, resizable false, alwaysOnTop true;
+    // macOS: NSApp → .accessory, collectionBehavior → panel bits). Order
+    // matters: the min-size floor from expand must be cleared BEFORE the
+    // 180×80 shrink, else set_size is rejected against the 720×560 minimum.
+    #[cfg(target_os = "macos")]
+    {
+        // Restore the Overlay-titlebar-free standard style before dropping
+        // decorations, so the transparent-titlebar mask doesn't linger.
+        let _ = window.set_title_bar_style(tauri::TitleBarStyle::Visible);
+        match window.ns_window() {
+            Ok(ns_window) => {
+                if let Err(e) = widget_platform_mac::restore_widget_window_style(ns_window) {
+                    log::warn!("restore_widget_window_style failed: {e}");
+                }
+            }
+            Err(e) => log::warn!("ns_window() unavailable on collapse: {e}"),
+        }
+    }
     window
         .set_always_on_top(true)
         .map_err(|e| format!("set_always_on_top failed: {e}"))?;
+    window
+        .set_skip_taskbar(true)
+        .map_err(|e| format!("set_skip_taskbar failed: {e}"))?;
     window
         .set_decorations(false)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
     window
         .set_resizable(false)
         .map_err(|e| format!("set_resizable failed: {e}"))?;
+    // Clear the workspace min-size floor first (widget has no minimum), then
+    // shrink to the widget pill.
+    window
+        .set_min_size::<tauri::Size>(None)
+        .map_err(|e| format!("set_min_size(None) failed: {e}"))?;
     // Widget shape — keep in lockstep with tauri.conf.json's window config
     // (180x80 horizontal pill).
     window
