@@ -68,6 +68,104 @@ const NS_COLLECTION_FULL_SCREEN_AUXILIARY: u64 = 1 << 8;
 /// which is exactly the `sourceApp = ""` leak we're trying to close.
 const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
 
+/// NSApplicationActivationPolicy::Regular = 0. The normal app posture:
+/// appears in the Dock, owns a menu bar, participates in Cmd-Tab and
+/// Mission Control. This is the WORKSPACE persona — the opposite of the
+/// widget's `.accessory` panel posture.
+const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
+
+/// NSWindowCollectionBehavior::Managed = 1 << 1. The window participates
+/// in Spaces + Exposé/Mission Control as a first-class window, as opposed
+/// to the `canJoinAllSpaces | stationary` overlay-panel posture.
+const NS_COLLECTION_MANAGED: u64 = 1 << 1;
+
+/// NSWindowCollectionBehavior::FullScreenPrimary = 1 << 7. The window can
+/// enter its OWN native full-screen Space (green-button / ⌃⌘F path).
+/// Mutually exclusive with `fullScreenAuxiliary` (1 << 8), which only lets
+/// a window ride along on another window's full-screen Space — the
+/// widget-panel posture. Toggling primary↔auxiliary is the full-screen
+/// half of the persona switch.
+const NS_COLLECTION_FULL_SCREEN_PRIMARY: u64 = 1 << 7;
+
+/// The panel-persona collectionBehavior bits (widget mode): joins all
+/// Spaces, stays stationary, rides other windows' full-screen. Cleared
+/// when switching to the workspace persona.
+const PANEL_BEHAVIOR_BITS: u64 =
+    NS_COLLECTION_CAN_JOIN_ALL_SPACES | NS_COLLECTION_STATIONARY | NS_COLLECTION_FULL_SCREEN_AUXILIARY;
+
+/// Set the process-wide NSApp activation policy. `.setup()` and the
+/// expand/collapse commands all run on the main thread (Tauri contract),
+/// so the selector is safe to send without a MainThreadMarker.
+///
+/// # Safety
+/// Must be called on the main thread.
+unsafe fn set_activation_policy(policy: i64) {
+    let app_class = objc2::class!(NSApplication);
+    let app: *mut AnyObject = msg_send![app_class, sharedApplication];
+    if !app.is_null() {
+        let _: () = msg_send![app, setActivationPolicy: policy];
+    }
+}
+
+/// Switch the app + its window to the WORKSPACE persona: a first-class,
+/// Dock-visible, Cmd-Tab-able, natively-full-screenable window. Called on
+/// EXPAND. Inverse of [`apply_non_activating_widget_style`].
+///
+/// Two operations:
+///   1. NSApp.activationPolicy = .regular — restores the Dock icon, menu
+///      bar, Cmd-Tab and Mission Control participation the `.accessory`
+///      widget posture suppressed.
+///   2. window.collectionBehavior — clear the panel bits (canJoinAllSpaces
+///      / stationary / fullScreenAuxiliary), set `managed | fullScreenPrimary`
+///      so the window lives on one Space and owns the green-button / ⌃⌘F
+///      native full-screen. Native drag stays disabled (the workspace uses
+///      the standard titlebar for moves, and the JS click-vs-drag heuristic
+///      is a widget-only concern — but re-enabling background drag here is a
+///      no-op for the titlebar path, so we leave it off for symmetry).
+///
+/// # Safety
+/// `ns_window` must be a valid NSWindow pointer; call on the main thread.
+pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<(), String> {
+    if ns_window.is_null() {
+        return Err("ns_window pointer is null".into());
+    }
+    unsafe {
+        set_activation_policy(NS_APPLICATION_ACTIVATION_POLICY_REGULAR);
+
+        let win = ns_window as *mut AnyObject;
+        let current_behavior: u64 = msg_send![win, collectionBehavior];
+        let new_behavior =
+            (current_behavior & !PANEL_BEHAVIOR_BITS) | NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY;
+        let _: () = msg_send![win, setCollectionBehavior: new_behavior];
+    }
+    Ok(())
+}
+
+/// Restore the WIDGET (panel) persona: `.accessory` app + across-Spaces
+/// overlay window that cannot own native full-screen. Called on COLLAPSE.
+/// Symmetric to [`apply_workspace_window_style`]; delegates to
+/// [`apply_non_activating_widget_style`] so the panel posture is defined in
+/// exactly one place (also re-disables native background drag).
+///
+/// # Safety
+/// `ns_window` must be a valid NSWindow pointer; call on the main thread.
+pub fn restore_widget_window_style(ns_window: *mut std::ffi::c_void) -> Result<(), String> {
+    if ns_window.is_null() {
+        return Err("ns_window pointer is null".into());
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        // Clear the workspace bits first so the OR in the widget-style path
+        // lands on a clean base (managed/fullScreenPrimary must not linger).
+        let current_behavior: u64 = msg_send![win, collectionBehavior];
+        let cleared = current_behavior & !(NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY);
+        let _: () = msg_send![win, setCollectionBehavior: cleared];
+    }
+    // Re-apply the full panel posture (activation policy → accessory,
+    // collectionBehavior → panel bits, native drag off).
+    apply_non_activating_widget_style(ns_window)
+}
+
 /// Apply the non-activating + always-on-top-across-spaces posture.
 /// Returns Ok(()) on success; Err on null pointer.
 ///
@@ -89,20 +187,10 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
     // Step 1: NSApp activation policy → Accessory.
     // SAFETY: NSApplication.sharedApplication is process-global; setting
     // activationPolicy is a well-defined Cocoa operation that mirrors
-    // Info.plist LSUIElement=YES behavior.
+    // Info.plist LSUIElement=YES behavior. We're on the main thread (Tauri
+    // .setup() / IPC-command contract) so the selector is marker-free.
     unsafe {
-        // Use raw msg_send rather than the high-level objc2-app-kit
-        // method binding to avoid MainThreadMarker complexity — we're
-        // already on the main thread (Tauri .setup() contract) and the
-        // setActivationPolicy: selector itself doesn't require the marker.
-        let app_class = objc2::class!(NSApplication);
-        let app: *mut AnyObject = msg_send![app_class, sharedApplication];
-        if !app.is_null() {
-            let _: () = msg_send![
-                app,
-                setActivationPolicy: NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY
-            ];
-        }
+        set_activation_policy(NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY);
     }
 
     // Step 2: widget window collectionBehavior + disable native drag.
@@ -141,6 +229,17 @@ mod tests {
         assert!(result.unwrap_err().contains("null"));
     }
 
+    /// Both persona-switch entry points reject a null NSWindow the same way.
+    #[test]
+    fn persona_switch_rejects_null() {
+        assert!(apply_workspace_window_style(std::ptr::null_mut())
+            .unwrap_err()
+            .contains("null"));
+        assert!(restore_widget_window_style(std::ptr::null_mut())
+            .unwrap_err()
+            .contains("null"));
+    }
+
     /// Sanity-check the magic-number constants pinned against AppKit
     /// headers. Drift gate for accidental edits.
     #[test]
@@ -149,5 +248,11 @@ mod tests {
         assert_eq!(NS_COLLECTION_STATIONARY, 16);
         assert_eq!(NS_COLLECTION_FULL_SCREEN_AUXILIARY, 256);
         assert_eq!(NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY, 1);
+        // Workspace-persona additions (WP-WINDOW).
+        assert_eq!(NS_APPLICATION_ACTIVATION_POLICY_REGULAR, 0);
+        assert_eq!(NS_COLLECTION_MANAGED, 2);
+        assert_eq!(NS_COLLECTION_FULL_SCREEN_PRIMARY, 128);
+        // Panel bits = the three overlay flags OR'd together.
+        assert_eq!(PANEL_BEHAVIOR_BITS, 1 | 16 | 256);
     }
 }

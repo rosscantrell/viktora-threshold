@@ -5753,3 +5753,142 @@ button.rec-source {
 .ec-sender-input::placeholder { color: var(--text-tertiary); }
 
 .ec-sender-error { color: var(--danger, #e5646a); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-WINDOW — overlay-titlebar nav offset (macOS).
+   When the expanded window uses the Overlay titlebar style, the traffic-light
+   cluster floats over the top-left of our own glass. main.js tags <body> with
+   .titlebar-overlay on macOS; here we push the sticky #app-nav's left content
+   past the lights so the Back button / breadcrumbs never sit under them.
+   ~78px clears the three-button cluster + its inset at the standard scale.
+   No-op on other platforms (class never added) and when the nav is hidden.
+   ══════════════════════════════════════════════════════════════════════════ */
+.titlebar-overlay .app-nav {
+  padding-left: 78px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-WIDE-TODAY — measure cap on the State-of-Play prose (ALL widths).
+   The SoP narrative is the one long-form prose surface on Today; without a cap
+   a full-screen window stretches it to 200–300ch lines that are unreadable.
+   Hold it to a comfortable ~72ch measure everywhere. Applies to the streamed
+   lead prose and every labelled sub-section body (renderSoPProse output).
+   ══════════════════════════════════════════════════════════════════════════ */
+.sop-prose,
+.sop-section-body {
+  max-width: 72ch;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-WIDE-TODAY — two-column Today at ≥1100px.
+   Below the breakpoint #view-log stays plain block flow (the existing single
+   column, byte-for-byte — this media query is the ONLY change and it doesn't
+   fire below the breakpoint). The two subdivisions are GATED ON CARD WIDTH,
+   not raw viewport, so neither ever produces sub-380px card slivers
+   (coordinator amendment 1):
+
+     · Page-level 2-col split — ONLY at ≥1200px. At that width the left column
+       (60% of the ~1148px content box) is ≈689px ≥ 640px, so its cards keep a
+       comfortable measure. (Below 1200px: single column, byte-for-byte the
+       current layout.) NOTE: this is >1100px on purpose — 1100px would leave
+       the left column ≈612px, under the 640px floor the amendment requires.
+
+     · Needs-attention group 2-col flow — ONLY at ≥1500px, a SEPARATE query.
+       Two group sub-columns with a 20px gutter each need ≥400px; that requires
+       the left column ≥820px, which the ~1447px viewport threshold guarantees.
+       Between 1200–1499px the page splits but groups stay ONE column (no
+       slivers). The State-of-Play prose keeps its ~72ch measure at every width.
+
+     LEFT  (col 1, ≈60%): State-of-Play → (Awaiting send · Focus/Watch ·
+                          Stalled) → Needs attention.
+     RIGHT (col 2, ≈40%): Waiting on you (sticky) → Coming up.
+
+   Full-width band items (header, on-demand SoP button-panel, status) span both
+   columns. Row numbers are explicit so the two columns stack independently
+   (grid auto-flow would otherwise interleave them by source order). No markup
+   wrappers — single-column source order is preserved for the narrow fallback.
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (min-width: 1200px) {
+  #view-log:not([hidden]) {
+    /* Lift the 560px single-column cap (set on .view-log) so the two-column
+       layout can actually use the width. Held to 1480px + centered so an
+       ultra-wide monitor doesn't sprawl edge-to-edge. The cap is chosen so the
+       left column at full width (≈0.6×(1480−80) ≈ 840px) leaves each of the two
+       needs-attention group sub-columns ≈410px — clear of the 400px floor
+       (amendment 1b). The SoP prose keeps its own ~72ch measure inside. */
+    max-width: 1480px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    column-gap: 28px;
+    row-gap: 0;
+    align-items: start;
+  }
+
+  /* Full-width bands: header + on-demand SoP button-panel on top, status at the
+     bottom (row 8, below the taller of the two columns). */
+  #view-log:not([hidden]) > .log-header,
+  #view-log:not([hidden]) > #log-sop-panel,
+  #view-log:not([hidden]) > #log-status {
+    grid-column: 1 / -1;
+  }
+  #view-log:not([hidden]) > .log-header { grid-row: 1; }
+  #view-log:not([hidden]) > #log-sop-panel { grid-row: 2; }
+  #view-log:not([hidden]) > #log-status { grid-row: 8; }
+
+  /* LEFT column (col 1) — the State-of-Play panel is FIRST (row 3, top of the
+     left column per amendment 3), then the demoted sections, then Needs
+     attention. Explicit rows 3→7 so the column stacks independently of the
+     right rail (auto-flow would otherwise interleave the two by source order).
+     Each item is already a flex/block column, so its children stack normally
+     within the cell. min-height on the SoP section keeps its composing/skeleton
+     state visible (never a zero-height slot that reads as broken). */
+  #view-log:not([hidden]) > #today-sop-section {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 2.5em;
+  }
+  #view-log:not([hidden]) > #today-outbox-tray { grid-column: 1; grid-row: 4; }
+  #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 5; }
+  #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 6; }
+  #view-log:not([hidden]) > #log-everything-section { grid-column: 1; grid-row: 7; }
+
+  /* RIGHT rail (col 2) — Waiting on you (row 3, sticky) then Coming up (row 4). */
+  #view-log:not([hidden]) > #today-queue-section { grid-column: 2; grid-row: 3; }
+  #view-log:not([hidden]) > #today-comingup-section { grid-column: 2; grid-row: 4; }
+
+  /* Right rail: the ratification queue stays pinned as you scroll the long
+     left column. `top` clears the sticky #app-nav (~48px) with breathing room;
+     max-height + overflow so an unusually tall queue scrolls within itself
+     rather than pushing Coming up off-screen. Coming up flows beneath it. */
+  #view-log:not([hidden]) > #today-queue-section {
+    position: sticky;
+    top: 60px;
+    align-self: start;
+    max-height: calc(100vh - 76px);
+    overflow-y: auto;
+  }
+
+  /* Needs-attention header row: keep the "Needs attention" title on one line
+     and let the state-count chips wrap below it as a unit when the left column
+     is tight (amendment 1) — never squeeze the title into vertical text. */
+  #view-log:not([hidden]) .log-collapse-head-row {
+    flex-wrap: wrap;
+  }
+}
+
+/* Needs-attention group 2-col flow — SEPARATE, wider gate (≥1500px) so each
+   sub-column clears the ≥400px floor. CSS multi-column keeps each group intact
+   (break-inside:avoid → a group never splits across the gutter). Below 1500px
+   the groups stay a single column even though the page is already split. */
+@media (min-width: 1500px) {
+  #view-log:not([hidden]) #log-attention-groups {
+    display: block; /* multi-column context (overrides the flex column) */
+    column-count: 2;
+    column-gap: 20px;
+  }
+  #view-log:not([hidden]) #log-attention-groups > .log-attention-group {
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+    margin-bottom: 14px;
+  }
+}
