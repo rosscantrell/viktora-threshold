@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Threshold — approved UI mockups (2026-07-06)</title>
+<style>
+  body { background:#0e0f13; color:#c9ccd1; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:32px; }
+  .note { max-width:900px; margin:0 auto 28px; font-size:14px; line-height:1.6; color:#9aa0a6; }
+  .mock { max-width:900px; margin:0 auto 40px; background:#171921; border-radius:12px; padding:16px; }
+  .mock > p { font-size:13px; color:#9aa0a6; margin:0 0 10px; }
+</style>
+</head>
+<body>
+<div class="note"><strong style="color:#e8eaed">Ross-approved mockups (2026-07-06)</strong> — the binding acceptance bar for the Threshold UI work. 1 and 2 were greenlit for the current cycle ("go ahead"); 3 is parked as the next cycle's flagship (its "Blocked by" join ships in receipts-v2 / PR #72 on Today's claim chips). See HANDOFF-THRESHOLD-UI-2026-07-06.md §acceptance bar. The design language: deep glass, 0.5px hairlines, ghost chips, amber spent only on urgency/primary action, quiet metadata, sentence case.</div>
+
+<div class="mock">
+<p>1 · First-class window — chrome disappears, content is the frame (traffic lights inline over glass; ⌘⇥ / Mission Control / drag any edge / native fullscreen)</p>
+<div style="background:#16181f; border-radius:10px; overflow:hidden; border:0.5px solid #33363f;">
+  <div style="display:flex; align-items:center; padding:10px 12px 0;">
+    <span style="width:11px;height:11px;border-radius:50%;background:#ff5f57;margin-right:7px"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#febc2e;margin-right:7px"></span>
+    <span style="width:11px;height:11px;border-radius:50%;background:#28c840"></span>
+    <span style="margin-left:auto; font-size:11px; color:#6b7178">⌘⇥ · Mission Control · drag any edge</span>
+  </div>
+  <div style="padding:14px 22px 18px;">
+    <div style="display:flex; align-items:baseline; gap:10px;">
+      <span style="color:#e8eaed; font-size:15px; font-weight:500;">Today</span>
+      <span style="color:#9aa0a6; font-size:11px;">25 need attention · 279 tracked</span>
+      <span style="margin-left:auto; color:#9aa0a6; font-size:11px; border:0.5px solid #3a3d46; border-radius:7px; padding:2px 9px;">State of play</span>
+      <span style="color:#9aa0a6; font-size:11px; border:0.5px solid #3a3d46; border-radius:7px; padding:2px 9px;">Refresh</span>
+    </div>
+    <div style="margin-top:12px; background:rgba(255,255,255,0.03); border:0.5px solid #2e313a; border-radius:9px; padding:12px 14px; color:#c6c9ce; font-size:12px; line-height:1.55;">Across all work, 6 commitments are blocked and 35 are overdue, the oldest back to May 27. The heaviest load sits on the above-brand leader deck…</div>
+  </div>
+</div>
+</div>
+
+<div class="mock">
+<p>2 · Wide Today (≥1200px) — narrative and action share the screen; sticky right rail (Waiting on you + Coming up); needs-attention grouped in compact accent-bar cards</p>
+<div style="background:#16181f; border-radius:10px; border:0.5px solid #33363f; padding:14px; display:grid; grid-template-columns: 1.5fr 1fr; gap:12px;">
+  <div>
+    <div style="background:rgba(255,255,255,0.03); border:0.5px solid #2e313a; border-radius:9px; padding:12px; color:#c6c9ce; font-size:11.5px; line-height:1.5; min-height:104px;">
+      <span style="color:#e8eaed; font-weight:500; font-size:12px;">State of play</span><br>6 blocked · 35 overdue · oldest May 27. Merck above-brand carries the bulk…
+      <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap;">
+        <span style="border:0.5px solid #3a3d46; border-radius:999px; padding:1px 8px; font-size:11px; color:#9aa0a6;">35 overdue</span>
+        <span style="border:0.5px solid #3a3d46; border-radius:999px; padding:1px 8px; font-size:11px; color:#9aa0a6;">6 blocked</span>
+      </div>
+    </div>
+    <div style="margin-top:10px; color:#e8eaed; font-size:12px; font-weight:500;">Needs attention <span style="color:#6b7178; font-weight:400;">25</span></div>
+    <div style="margin-top:6px; display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+      <div style="background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-left:2px solid #ffc440; border-radius:0 8px 8px 0; padding:8px 10px;">
+        <div style="color:#9aa0a6; font-size:11px;">Vaccines story refresh · 12</div>
+        <div style="color:#c6c9ce; font-size:11.5px; margin-top:3px;">Brittany · due May 31 · <span style="color:#ffc440">40d silent</span></div>
+      </div>
+      <div style="background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-left:2px solid #ffc440; border-radius:0 8px 8px 0; padding:8px 10px;">
+        <div style="color:#9aa0a6; font-size:11px;">Leader deck · 8</div>
+        <div style="color:#c6c9ce; font-size:11.5px; margin-top:3px;">OPR · due Jun 7 · <span style="color:#f09595">blocked</span></div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <div style="color:#e8eaed; font-size:12px; font-weight:500;">Waiting on you <span style="color:#6b7178; font-weight:400;">2</span></div>
+    <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">A commitment looks done — close it?</div>
+    <div style="margin-top:12px; color:#e8eaed; font-size:12px; font-weight:500;">Coming up <span style="color:#6b7178; font-weight:400;">3</span></div>
+    <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+      <div style="color:#c6c9ce; font-size:11.5px;">Narrative refresh v2 to client</div>
+      <div style="color:#ffc440; font-size:11px; margin-top:2px;">due in 2 days · Jul 8 · quiet 9d</div>
+    </div>
+    <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+      <div style="color:#c6c9ce; font-size:11.5px;">CRT submission window opens</div>
+      <div style="color:#9aa0a6; font-size:11px; margin-top:2px;">due Jul 11 · on track</div>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="mock">
+<p>3 · Full screen — master-detail, context opens beside not over (NEXT CYCLE; the "Blocked by" join ships now via receipts-v2)</p>
+<div style="background:#16181f; border-radius:10px; border:0.5px solid #33363f; padding:14px; display:grid; grid-template-columns: 1fr 1.3fr; gap:0;">
+  <div style="border-right:0.5px solid #2e313a; padding-right:12px;">
+    <div style="color:#e8eaed; font-size:12px; font-weight:500;">Needs attention</div>
+    <div style="margin-top:6px; background:rgba(255,196,64,0.07); border:0.5px solid #4a4436; border-radius:8px; padding:8px 10px;">
+      <div style="color:#e8eaed; font-size:11.5px;">PV training numbers to client ›</div>
+      <div style="color:#ffc440; font-size:11px; margin-top:2px;">blocked · due Jun 12</div>
+    </div>
+    <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">Measurement deck feedback</div>
+    <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">Message validation options</div>
+  </div>
+  <div style="padding-left:14px;">
+    <div style="color:#e8eaed; font-size:12.5px; font-weight:500;">PV training numbers to client</div>
+    <div style="color:#9aa0a6; font-size:11px; margin-top:3px;">OPR team · due Jun 12 · 39d silent</div>
+    <div style="margin-top:8px; background:rgba(240,149,149,0.06); border:0.5px solid #4a3636; border-radius:8px; padding:8px 10px;">
+      <div style="color:#f09595; font-size:11px;">Blocked by</div>
+      <div style="color:#c6c9ce; font-size:11.5px; margin-top:2px;">Brian's research data delivery — promised Jun 30, no draft observed</div>
+    </div>
+    <div style="margin-top:8px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#8f939a; font-size:11px; font-style:italic;">"We'll have the PV training numbers by end of week — same as last two syncs."</div>
+    <div style="margin-top:10px; display:flex; gap:6px;">
+      <span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:7px; padding:3px 10px; font-size:11px;">Draft heads-up to client</span>
+      <span style="border:0.5px solid #3a3d46; color:#9aa0a6; border-radius:7px; padding:3px 10px; font-size:11px;">Resolve</span>
+      <span style="border:0.5px solid #3a3d46; color:#9aa0a6; border-radius:7px; padding:3px 10px; font-size:11px;">Snooze</span>
+    </div>
+  </div>
+</div>
+</div>
+</body>
+</html>
