@@ -2551,7 +2551,7 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
     const statePill = document.createElement("span");
     statePill.className = "record-state-pill";
     statePill.dataset.state = recState;
-    statePill.textContent = recState === "superseded" ? "Superseded" : "Resolved";
+    statePill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
     header.appendChild(statePill);
   }
   card.appendChild(header);
@@ -2659,8 +2659,8 @@ function edgePhrasing(edge, recId) {
       return { icon: "⚠️", label: "Conflicts with: " + otherSummary };
     case "supersedes":
       return isA
-        ? { icon: "⤳", label: "Supersedes: " + otherSummary }
-        : { icon: "⤳", label: "Superseded by: " + otherSummary };
+        ? { icon: "⤳", label: "Replaces: " + otherSummary }
+        : { icon: "⤳", label: "Replaced by: " + otherSummary };
     case "resolves":
       return isA
         ? { icon: "✓", label: "Resolves: " + otherSummary }
@@ -2964,7 +2964,8 @@ function renderVoidCard(v, opts) {
   reasons.className = "watching-reasons";
   reasons.hidden = true;
 
-  const snooze = vvActionBtn("Snooze 7d", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
+  const snooze = vvActionBtn("Snooze", () => vvVoidAction("snooze_void", { voidId: v.voidId, days: 7 }));
+  snooze.title = "Snooze — hide for 7 days";
   const dismiss = vvActionBtn("Dismiss", () => { actions.hidden = true; reasons.hidden = false; });
   actions.append(snooze, dismiss);
 
@@ -3032,7 +3033,7 @@ function renderArrivedCard(v) {
   // a cleared receipt stays cleared for this viewer.
   const actions = document.createElement("div");
   actions.className = "watching-actions";
-  actions.appendChild(vvActionBtn("Clear", () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason: "acknowledged" })));
+  actions.appendChild(vvActionBtn("Dismiss", () => vvVoidAction("dismiss_void", { voidId: v.voidId, reason: "acknowledged" })));
   card.appendChild(actions);
 
   return card;
@@ -4377,6 +4378,9 @@ async function loadSoP(level, id, lens) {
   if (!res || res.available === false) return null; // flag off / server too old / no altitude
   const prose = typeof res.prose === "string" ? res.prose.trim() : "";
   if (!prose) return null;
+  // WP-RECEIPTS-V2 — warm the claim-expansion join context so a claim opens to
+  // joined rows immediately (fire-and-forget; renders fall back to quotes until ready).
+  if (sopClaimsShaped(res.receipts)) ensureSopJoinCtx().catch(() => {});
   return res;
 }
 
@@ -4425,14 +4429,109 @@ function sopClaimsShaped(raw) {
   return !!(raw && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.claims));
 }
 
-// Render the claims block: each claim becomes a disclosure pill (the
-// .sop-frame-toggle idiom — chevron, aria-expanded) that expands to its
-// supporting records, each through the ONE receipt component (§2.4): verbatim
-// quote + jump-to-source. Defensive: returns null unless the payload is
-// claims-shaped AND at least one claim has a renderable ref, so an absent or
-// empty field leaves the surface exactly as before. A claim with no citeable
-// refs renders no pill (fail-closed, matching the engine's framing); claims the
-// engine itself couldn't ground surface as the dim receiptlessClaims note.
+// ══════════════════════════════════════════════════════════════════════════
+// WP-RECEIPTS-V2 — the claim-expansion join context. The SoP claim refs carry
+// only {recordId, verbatim, documentId}; to render each ref as a state · owner ·
+// due · summary ROW (not a raw quote box) we join recordId → the full record,
+// its lifecycle state, its project, and the edges it participates in — all from
+// the decision-log the app already fetches (fetch_decision_log_full), mirroring
+// the lazy fetch loadTodayComingUp uses. Built once, cached, shared by a single
+// in-flight promise; documents give recordId→project via documentId.
+// ══════════════════════════════════════════════════════════════════════════
+let _sopJoinCtx = null;      // { byId, stateById, edges, docProjects } once loaded
+let _sopJoinPromise = null;  // in-flight de-dupe
+
+async function ensureSopJoinCtx() {
+  if (_sopJoinCtx) return _sopJoinCtx;
+  if (_sopJoinPromise) return _sopJoinPromise;
+  _sopJoinPromise = (async () => {
+    let data;
+    try {
+      data = await tauri.core.invoke("fetch_decision_log_full");
+    } catch (err) {
+      console.warn("[main] fetch_decision_log_full failed (SoP join):", err);
+      _sopJoinPromise = null;
+      return null; // rows fall back to the verbatim-quote render
+    }
+    const items = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+    const byId = new Map();
+    const stateById = new Map();
+    for (const it of items) {
+      const rec = it && it.record ? it.record : it;
+      if (rec && rec.recordId) {
+        byId.set(rec.recordId, rec);
+        stateById.set(rec.recordId, (it && it.state) || "open");
+      }
+    }
+    const edges = Array.isArray(data && data.edges) ? data.edges : [];
+    // documentId → projects[] for project grouping (best-effort; absent ⇒ ungrouped).
+    const docProjects = new Map();
+    try {
+      const docsResp = await tauri.core.invoke("fetch_documents");
+      const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
+      for (const d of docs) {
+        if (d && d.id) docProjects.set(d.id, Array.isArray(d.projects) ? d.projects : []);
+      }
+    } catch (err) {
+      console.warn("[main] fetch_documents failed (SoP join projects omitted):", err);
+    }
+    _sopJoinCtx = { byId, stateById, edges, docProjects };
+    _sopJoinPromise = null;
+    return _sopJoinCtx;
+  })();
+  return _sopJoinPromise;
+}
+
+// Relative-due phrasing ("overdue 3d" / "due today" / "in 5d") — compact, paired
+// with the absolute date. Mirrors the loadTodayComingUp due-line idiom.
+function formatDueRelative(iso) {
+  const d = parseDueDate(iso);
+  if (!d) return "";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Math.round((d.getTime() - today.getTime()) / 86400000);
+  if (days < 0) return `overdue ${Math.abs(days)}d`;
+  if (days === 0) return "due today";
+  if (days === 1) return "due tomorrow";
+  return `in ${days}d`;
+}
+
+// The blocking (this ← blockedBy) edge for a record: recordA depends_on recordB
+// means A is blocked BY B. Returns the blocker record or null.
+function sopBlockerFor(ctx, recordId) {
+  if (!ctx || !recordId) return null;
+  for (const e of ctx.edges) {
+    if (e.kind === "depends_on" && e.status !== "dismissed" && e.recordA === recordId) {
+      return ctx.byId.get(e.recordB) || null;
+    }
+  }
+  return null;
+}
+
+// The records waiting ON this one (recordB is the unblocker; each recordA waits).
+function sopWaitersFor(ctx, recordId) {
+  if (!ctx || !recordId) return [];
+  const out = [];
+  for (const e of ctx.edges) {
+    if (e.kind === "depends_on" && e.status !== "dismissed" && e.recordB === recordId) {
+      const r = ctx.byId.get(e.recordA);
+      if (r) out.push(r);
+    }
+  }
+  return out;
+}
+
+// Render the claims block (WP-RECEIPTS-V2). Each quantitative claim is a
+// disclosure pill (the .sop-frame-toggle idiom) whose panel now lists its
+// supporting records as JOINED ROWS — state accent · owner · due (relative +
+// absolute) · one-line summary — grouped by project, oldest-due first, top-6 +
+// "Show all N". BLOCKED/WAITING rows carry the blocking/waiting record inline and
+// open the existing dependency popover in place. The verbatim quote moves BEHIND
+// the row (a per-row "quote" toggle) — evidence on demand, never the headline.
+// The recordId→record join comes from _sopJoinCtx (the decision-log the app
+// already fetches); a ref that doesn't resolve falls back to the verbatim-quote
+// row so nothing is lost. Defensive: returns null unless claims-shaped with at
+// least one renderable ref, so an absent/empty field leaves the surface as before.
 function renderSopClaims(receipts) {
   if (!sopClaimsShaped(receipts)) return null;
   const rows = [];
@@ -4440,7 +4539,7 @@ function renderSopClaims(receipts) {
     if (!c || typeof c !== "object") continue;
     const label = typeof c.claim === "string" ? c.claim.trim() : "";
     const refs = (Array.isArray(c.refs) ? c.refs : []).filter(
-      (r) => r && typeof r === "object" && (r.verbatim || r.documentId),
+      (r) => r && typeof r === "object" && (r.recordId || r.verbatim || r.documentId),
     );
     if (!label || !refs.length) continue;
     rows.push({ label, refs });
@@ -4452,6 +4551,21 @@ function renderSopClaims(receipts) {
 
   const wrap = document.createElement("div");
   wrap.className = "sop-claims";
+  // Kick off the join fetch; when it lands, re-fill any already-open panel in
+  // place (the collapsed ones fill on first open, reading the now-ready ctx).
+  const openPanels = [];
+  if (!_sopJoinCtx) {
+    ensureSopJoinCtx().then((ctx) => {
+      if (!ctx) return;
+      for (const { row, panel } of openPanels) {
+        if (panel.isConnected && !panel.hidden) {
+          panel.innerHTML = "";
+          fillSopClaimPanel(panel, row.refs);
+        }
+      }
+    });
+  }
+
   for (const row of rows) {
     const toggle = document.createElement("button");
     toggle.type = "button";
@@ -4464,6 +4578,7 @@ function renderSopClaims(receipts) {
     const panel = document.createElement("div");
     panel.className = "sop-claim-panel";
     panel.hidden = true;
+    openPanels.push({ row, panel });
     toggle.addEventListener("click", () => {
       const open = toggle.getAttribute("aria-expanded") === "true";
       if (open) {
@@ -4471,25 +4586,7 @@ function renderSopClaims(receipts) {
         panel.hidden = true;
         return;
       }
-      if (!panel.childElementCount) {
-        for (const ref of row.refs) {
-          panel.appendChild(
-            renderReceipt(
-              {
-                verbatim: ref.verbatim,
-                // The engine contract (sopReceipts.ts) emits ref.verbatim as the
-                // record's extractor-grounded source text, never invented, but the
-                // ref triple doesn't carry the verified flag itself — so trust the
-                // contract, while honoring an explicit false should a later
-                // payload add the field.
-                verbatimVerified: ref.verbatimVerified !== false && !!ref.verbatim,
-                documentId: ref.documentId || undefined,
-              },
-              { variant: "receipt-sop-claim", compact: true },
-            ),
-          );
-        }
-      }
+      if (!panel.childElementCount) fillSopClaimPanel(panel, row.refs);
       toggle.setAttribute("aria-expanded", "true");
       panel.hidden = false;
     });
@@ -4505,6 +4602,196 @@ function renderSopClaims(receipts) {
     wrap.appendChild(note);
   }
   return wrap.childElementCount ? wrap : null;
+}
+
+const SOP_CLAIM_ROWS_SHOWN = 6; // top-N rows per claim before the "Show all" expander
+
+// Fill one claim panel with joined rows grouped by project. Reads the live
+// _sopJoinCtx (may be null → every ref renders the verbatim-quote fallback).
+function fillSopClaimPanel(panel, refs) {
+  const ctx = _sopJoinCtx;
+  // Split refs into resolvable (join to a record) vs unresolved (fallback quote).
+  const resolved = [];
+  const unresolved = [];
+  for (const ref of refs) {
+    const rec = ctx && ref.recordId ? ctx.byId.get(ref.recordId) : null;
+    if (rec) resolved.push({ ref, rec });
+    else unresolved.push(ref);
+  }
+
+  // Group resolved rows by project (same keys as Needs attention / project home),
+  // oldest-due first within a group; groups with any overdue float up.
+  if (resolved.length) {
+    const wrappers = resolved.map(({ ref, rec }) => ({ record: rec, _ref: ref }));
+    const dp = (ctx && ctx.docProjects) || new Map();
+    let groups;
+    if (dp.size) {
+      groups = groupRecords(wrappers, "project", dp, {}, {}, {});
+    } else {
+      groups = [{ key: "__all__", label: "", items: wrappers }];
+    }
+    // Oldest-due first within each group.
+    const dueMs = (w) => {
+      const d = parseDueDate(w.record && w.record.due);
+      return d ? d.getTime() : Infinity; // undated sinks to the bottom
+    };
+    for (const g of groups) g.items.sort((a, b) => dueMs(a) - dueMs(b));
+    // Groups carrying the oldest overdue come first (Ross: oldest-due first overall).
+    groups.sort((a, b) => dueMs(a.items[0]) - dueMs(b.items[0]));
+
+    for (const g of groups) {
+      if (g.label) {
+        const gh = document.createElement("div");
+        gh.className = "sop-claim-group-head";
+        gh.textContent = g.label;
+        panel.appendChild(gh);
+      }
+      const shown = g.items.slice(0, SOP_CLAIM_ROWS_SHOWN);
+      const rest = g.items.slice(SOP_CLAIM_ROWS_SHOWN);
+      for (const w of shown) panel.appendChild(renderSopClaimRow(w.record, w._ref, ctx));
+      if (rest.length) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "sop-claim-showall";
+        more.textContent = `Show all ${g.items.length} →`;
+        more.addEventListener("click", () => {
+          for (const w of rest) panel.insertBefore(renderSopClaimRow(w.record, w._ref, ctx), more);
+          more.remove();
+        });
+        panel.appendChild(more);
+      }
+    }
+  }
+
+  // Unresolved refs (recordId absent or not in client data) — the verbatim-quote
+  // fallback (today's row), so evidence is never dropped.
+  for (const ref of unresolved) {
+    panel.appendChild(
+      renderReceipt(
+        {
+          verbatim: ref.verbatim,
+          // sopReceipts.ts emits ref.verbatim as extractor-grounded source text,
+          // never invented; the ref triple omits the verified flag, so trust the
+          // contract while honoring an explicit false a later payload might add.
+          verbatimVerified: ref.verbatimVerified !== false && !!ref.verbatim,
+          documentId: ref.documentId || undefined,
+        },
+        { variant: "receipt-sop-claim", compact: true },
+      ),
+    );
+  }
+}
+
+// One joined claim row: state accent · owner · due (relative+absolute) · summary,
+// with a blocked-by / waiting line when the edges say so, and the verbatim quote
+// tucked behind a per-row "quote" toggle (evidence on demand).
+function renderSopClaimRow(rec, ref, ctx) {
+  const state = (ctx && ctx.stateById.get(rec.recordId)) || "open";
+  const row = document.createElement("div");
+  row.className = "sop-claim-row";
+  row.dataset.state = state;
+
+  const main = document.createElement("div");
+  main.className = "sop-claim-row-main";
+
+  const dot = document.createElement("span");
+  dot.className = "sop-claim-row-accent";
+  main.appendChild(dot);
+
+  const meta = document.createElement("span");
+  meta.className = "sop-claim-row-meta";
+  const bits = [];
+  if (rec.owner) bits.push(prettySlug(rec.owner));
+  if (rec.due) {
+    const rel = formatDueRelative(rec.due);
+    const abs = formatDueDate(rec.due);
+    bits.push(rel ? `${rel} · ${abs}` : abs);
+  }
+  meta.textContent = bits.join(" · ");
+  if (bits.length) main.appendChild(meta);
+
+  const sum = document.createElement("span");
+  sum.className = "sop-claim-row-summary";
+  sum.textContent = rec.summary || "(no summary)";
+  main.appendChild(sum);
+
+  // Verbatim quote behind a per-row toggle — evidence on demand, never the
+  // headline. Only when there's a verified quote or a source to reach.
+  const hasEvidence = (ref && (ref.verbatim || ref.documentId));
+  if (hasEvidence) {
+    const q = document.createElement("button");
+    q.type = "button";
+    q.className = "sop-claim-row-quote-toggle";
+    q.textContent = "quote";
+    q.title = "Show the source quote";
+    q.setAttribute("aria-expanded", "false");
+    const quoteWrap = document.createElement("div");
+    quoteWrap.className = "sop-claim-row-quote";
+    quoteWrap.hidden = true;
+    q.addEventListener("click", () => {
+      const open = q.getAttribute("aria-expanded") === "true";
+      if (open) { q.setAttribute("aria-expanded", "false"); quoteWrap.hidden = true; return; }
+      if (!quoteWrap.childElementCount) {
+        quoteWrap.appendChild(
+          renderReceipt(
+            {
+              verbatim: ref.verbatim,
+              verbatimVerified: ref.verbatimVerified !== false && !!ref.verbatim,
+              documentId: ref.documentId || undefined,
+            },
+            { variant: "receipt-sop-claim", compact: true },
+          ),
+        );
+      }
+      q.setAttribute("aria-expanded", "true");
+      quoteWrap.hidden = false;
+    });
+    main.appendChild(q);
+    row.appendChild(main);
+    row.appendChild(quoteWrap);
+  } else {
+    row.appendChild(main);
+  }
+
+  // Blocked-by / waiting line, joined from the same edges — clicking opens the
+  // existing dependency popover in place (openLinkedMenu pattern).
+  const blocker = sopBlockerFor(ctx, rec.recordId);
+  if (blocker) {
+    row.appendChild(sopClaimEdgeLine("blocked by", blocker.summary, (el) =>
+      openLinkedMenu(el, "This is blocked by", [blocker]),
+    ));
+  } else {
+    const waiters = sopWaitersFor(ctx, rec.recordId);
+    if (waiters.length) {
+      const label = waiters.length === 1 ? "1 waiting" : `${waiters.length} waiting`;
+      const lead = waiters[0].summary || "";
+      row.appendChild(sopClaimEdgeLine(label, lead, (el) =>
+        openLinkedMenu(el, `Waiting on this (${waiters.length})`, waiters),
+      ));
+    }
+  }
+  return row;
+}
+
+// A "blocked by — <summary>" / "N waiting — <summary>" line that opens the
+// dependency popover on click (reuses openLinkedMenu, same as the Log badges).
+function sopClaimEdgeLine(lead, summary, onClick) {
+  const line = document.createElement("button");
+  line.type = "button";
+  line.className = "sop-claim-row-edge";
+  const l = document.createElement("span");
+  l.className = "sop-claim-row-edge-lead";
+  l.textContent = lead;
+  line.appendChild(l);
+  if (summary) {
+    line.appendChild(document.createTextNode(" — "));
+    const s = document.createElement("span");
+    s.className = "sop-claim-row-edge-sum";
+    s.textContent = summary;
+    line.appendChild(s);
+  }
+  line.addEventListener("click", (e) => { e.stopPropagation(); onClick(line, e); });
+  return line;
 }
 
 // Render the SoP prose into a container. `sections`, when present, render as
@@ -4885,7 +5172,7 @@ function renderInformCard(edge, mode) {
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "inform-dismiss";
-  dismiss.textContent = "Not relevant";
+  dismiss.textContent = "Dismiss";
   dismiss.addEventListener("click", () => card.remove());
   actions.appendChild(dismiss);
   card.appendChild(actions);
@@ -5827,7 +6114,7 @@ function renderPriorityCard(item, isTracked) {
   actions.className = "priority-actions";
 
   // Default actions: Track (pin) · Snooze (schedule for later) · Hand off
-  // (delegate) · Not now (dismiss, opens the reason chooser).
+  // (delegate) · Dismiss (opens the reason chooser).
   const buildDefaultActions = () => {
     actions.innerHTML = "";
     actions.classList.remove("priority-actions-col");
@@ -5844,11 +6131,11 @@ function renderPriorityCard(item, isTracked) {
     });
     actions.appendChild(track);
 
-    // Schedule (snooze gesture) — schedule the item for later: opens the date chooser.
+    // Snooze (snooze gesture) — schedule the item for later: opens the date chooser.
     const snooze = document.createElement("button");
     snooze.type = "button";
     snooze.className = "priority-reason";
-    snooze.textContent = "Schedule";
+    snooze.textContent = "Snooze";
     snooze.addEventListener("click", buildSnoozeChooser);
     actions.appendChild(snooze);
 
@@ -5863,7 +6150,7 @@ function renderPriorityCard(item, isTracked) {
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     dismiss.className = "priority-dismiss";
-    dismiss.textContent = "Not now";
+    dismiss.textContent = "Dismiss";
     dismiss.addEventListener("click", buildReasonChooser);
     actions.appendChild(dismiss);
   };
@@ -5879,7 +6166,7 @@ function renderPriorityCard(item, isTracked) {
     const doSnooze = async (iso) => {
       for (const c of actions.querySelectorAll("button, input")) c.disabled = true;
       const ok = await sendPriorityGesture(item, "snooze", null, iso);
-      if (ok) { showToast({ kind: "success", title: "Scheduled", body: `Back in Focus on ${iso}.` }); card.remove(); }
+      if (ok) { showToast({ kind: "success", title: "Snoozed", body: `Back in Focus on ${iso}.` }); card.remove(); }
       else buildDefaultActions();
     };
     for (const p of SNOOZE_PRESETS) {
@@ -8028,7 +8315,7 @@ function buildQuestionCard(card) {
   const later = document.createElement("button");
   later.type = "button";
   later.className = "rule-card-ghost";
-  later.textContent = "Not now";
+  later.textContent = "Snooze";
   later.addEventListener("click", () => snoozeQuestion(card, el));
   actions.appendChild(yes);
   actions.appendChild(no);
@@ -8294,7 +8581,7 @@ async function snoozeQuestion(card, cardEl) {
   try {
     await tauri.core.invoke("snooze_question", { factKey: card.factKey });
     _questionCard = null;
-    showToast({ kind: "idempotent", title: "Not now", body: "Okay — I'll bring this back later." });
+    showToast({ kind: "idempotent", title: "Snoozed", body: "Okay — I'll bring this back later." });
     await enterDecisionsView();
   } catch (e) {
     console.warn("[main] snooze_question failed:", e);

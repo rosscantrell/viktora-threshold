@@ -288,10 +288,10 @@ body {
   border-top: 1px solid var(--glass-border);
 }
 .sop-section-title {
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
   margin-bottom: 4px;
 }
@@ -358,6 +358,115 @@ body {
   font-size: 10.5px;
   color: var(--glass-text-faint);
 }
+
+/* WP-RECEIPTS-V2 — the claim panel now lists JOINED ROWS (state · owner · due ·
+ * summary) instead of a wall of quote boxes. Compact, dark/glassy; the verbatim
+ * quote hides behind a per-row toggle. */
+.sop-claim-group-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-faint);
+  margin: 4px 0 2px;
+}
+.sop-claim-group-head:first-child { margin-top: 0; }
+.sop-claim-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border-radius: var(--glass-radius-sm);
+  border-left: 2px solid var(--glass-border-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sop-claim-row[data-state="superseded"] { opacity: 0.7; }
+.sop-claim-row[data-state="resolved"] { border-left-color: var(--glass-success); }
+.sop-claim-row-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.sop-claim-row-accent {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--glass-text-faint);
+  align-self: center;
+}
+.sop-claim-row[data-state="resolved"] .sop-claim-row-accent { background: var(--glass-success); }
+.sop-claim-row[data-state="superseded"] .sop-claim-row-accent { background: var(--glass-text-faint); }
+.sop-claim-row-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+}
+.sop-claim-row-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--glass-text);
+  word-break: break-word;
+}
+.sop-claim-row-quote-toggle {
+  flex: none;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.12s ease;
+}
+.sop-claim-row-quote-toggle:hover { color: var(--glass-link); }
+.sop-claim-row-quote { margin-top: 2px; }
+.sop-claim-row-quote[hidden] { display: none; }
+.sop-claim-row-edge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  align-self: flex-start;
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: transparent;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+.sop-claim-row-edge:hover { color: var(--glass-text); }
+.sop-claim-row-edge:hover .sop-claim-row-edge-sum { color: var(--glass-link); }
+.sop-claim-row-edge-lead {
+  flex: none;
+  color: var(--glass-danger);
+  font-weight: 600;
+}
+.sop-claim-row-edge-sum {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--glass-text-dim);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.sop-claim-showall {
+  align-self: flex-start;
+  font-size: 11px;
+  color: var(--glass-link);
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.sop-claim-showall:hover { color: var(--glass-text); }
 .sop-maturity-tag {
   font-size: 10px;
   letter-spacing: 0.02em;
@@ -407,10 +516,10 @@ body {
   margin-bottom: 14px;
 }
 .sop-lens-head {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
   margin-bottom: 8px;
 }
@@ -620,9 +729,9 @@ body {
   color: var(--glass-accent);
 }
 .priority-tracking-head {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
   margin-bottom: 8px;
 }
@@ -866,9 +975,9 @@ body {
   margin-top: 4px;
 }
 .stalled-waiting-label, .stalled-edges-head {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 11.5px;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
 }
 .stalled-waiting-list li, .stalled-edge {
@@ -937,9 +1046,9 @@ body {
   gap: 8px;
 }
 .sop-edit-heading {
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
 }
 .sop-edit-card {
@@ -1069,10 +1178,10 @@ body {
   gap: 6px;
 }
 .sop-compose-cites-head {
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-faint);
 }
 
@@ -1175,9 +1284,9 @@ body {
   border-top: 1px solid var(--glass-border);
 }
 .entity-exec-head {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0.01em;
   color: var(--glass-text-faint);
   margin-bottom: 8px;
 }
@@ -1302,8 +1411,8 @@ body {
 }
 .priority-section > .priority-group-head .priority-group-title {
   font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--glass-text-dim);
 }
 .priority-section > .priority-group-body {
