@@ -661,8 +661,8 @@
         </div>
       </section>
 
-      <!-- ② Needs you — the ratification queue, ONE card family (§2.3). Filled by
-           three async sources, each appending its cards as it arrives:
+      <!-- ② Waiting on you — the ratification queue, ONE card family (§2.3).
+           Filled by three async sources, each appending its cards as it arrives:
              · proxy-queue "Wants your eye" cards (renderProxyCard / fetch_proxy_queue)
              · the Question-Engine pull card / affordance (buildQuestionSection)
              · vigilance-void chase cards (renderVoidCard / fetch_vigilance_voids)
@@ -671,7 +671,7 @@
            three resolve to nothing. -->
       <section class="today-queue" id="today-queue-section">
         <div class="today-section-head">
-          <h2 class="today-section-title">Needs you</h2>
+          <h2 class="today-section-title">Waiting on you</h2>
           <span class="today-section-count" id="today-queue-count"></span>
         </div>
         <!-- The Question-Engine pull affordance / card (its own slot so it isn't
@@ -680,22 +680,40 @@
         <div class="today-queue-list" id="today-queue-list"></div>
         <p class="today-queue-skeleton" id="today-queue-skeleton">Checking what's waiting on you…</p>
         <p class="log-empty" id="today-queue-empty" hidden>Nothing's waiting on you right now.</p>
+
+        <!-- Filed automatically — the proxy queue's high-confidence pile, DEMOTED
+             into this section as ONE quiet collapsed line that expands the filed
+             list (renderProxyFiledRow) in place. The whole group is [hidden] until
+             the proxy source lands with filed items; when zero it does not render
+             at all. No longer its own floating stratum. -->
+        <div class="today-filed-demoted" id="today-filed-section" hidden>
+          <button
+            type="button"
+            class="today-filed-line"
+            id="today-filed-toggle"
+            aria-expanded="false"
+          >
+            <span class="proxy-pile-chevron" aria-hidden="true">▸</span>
+            <span id="today-filed-heading-text">Filed automatically — review</span>
+          </button>
+          <div class="proxy-filed-rows" id="today-filed-list" hidden></div>
+        </div>
       </section>
 
-      <!-- ③ Filed confidently — the proxy queue's SECOND pile: high-confidence
-           auto-filed items, collapsed + skimmable, undo per row
-           (renderProxyFiledRow). Hidden until the proxy source lands with any. -->
-      <section class="today-filed proxy-pile" id="today-filed-section" hidden>
-        <button
-          type="button"
-          class="today-section-head proxy-pile-heading proxy-pile-filed-toggle"
-          id="today-filed-toggle"
-          aria-expanded="false"
-        >
-          <span class="proxy-pile-chevron" aria-hidden="true">▸</span>
-          <span id="today-filed-heading-text">Filed confidently</span>
-        </button>
-        <div class="proxy-filed-rows" id="today-filed-list" hidden></div>
+      <!-- ③ Coming up — the forward-looking window (the "windshield"). OPEN
+           commitments due within the next 14 days, soonest first, so a client is
+           told BEFORE the deadline, not the day of. Derived client-side in
+           renderTodayComingUp from the full decision-log records (due present,
+           state open, dueDate in [today, today+14d]). Grouped by project like
+           "Needs attention"; empty ⇒ absent (the whole section is [hidden] when
+           nothing is due soon — no fabricated demo content). -->
+      <section class="today-comingup" id="today-comingup-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Coming up</h2>
+          <span class="today-section-count" id="today-comingup-count"></span>
+        </div>
+        <div class="log-attention-groups" id="today-comingup-groups"></div>
+        <div class="log-attention-list" id="today-comingup-list"></div>
       </section>
 
       <!-- Awaiting send / Sent tray — the Outbox demotion. Appears ONLY when there
@@ -720,22 +738,28 @@
            Additive + silent: empty (no node) when grouped data is absent. -->
       <div id="log-stalled-sections"></div>
 
-      <div class="log-states-strip" id="log-states-strip" hidden>
-        <!-- open / resolved / superseded count pills rendered by main.js -->
-      </div>
-
-      <!-- "Everything else" — the prior Today content (needs-attention, conflicts,
-           workload), grouped under one collapsible. Populated by the decision-log
-           source when it lands (fire-and-forget). -->
+      <!-- "Needs attention" — the prior Today content (needs-attention rows,
+           conflicts, workload), grouped by project under one collapsible. Populated
+           by the decision-log source when it lands (fire-and-forget). ONE header
+           (no inner sub-header). The states strip (open / resolved / replaced)
+           rides in the header row, right-aligned + visually small — it no longer
+           renders as its own floating stratum. -->
       <section class="log-collapse" id="log-everything-section" hidden>
-        <button type="button" class="log-collapse-head" id="log-everything-toggle" aria-expanded="true">
-          <span class="log-collapse-caret">▾</span>
-          <span class="log-collapse-title">Everything else</span>
-          <span class="log-collapse-count" id="log-everything-count"></span>
-        </button>
+        <div class="log-collapse-head-row">
+          <button type="button" class="log-collapse-head" id="log-everything-toggle" aria-expanded="true">
+            <span class="log-collapse-caret">▾</span>
+            <span class="log-collapse-title">Needs attention</span>
+            <span class="log-collapse-count" id="log-everything-count"></span>
+          </button>
+          <div class="log-states-strip" id="log-states-strip" hidden>
+            <!-- open / resolved / superseded count pills rendered by main.js -->
+          </div>
+        </div>
         <div class="log-collapse-body" id="log-everything-body">
           <section class="log-section" id="log-attention-section">
-            <h2 class="log-section-title">Needs attention</h2>
+            <!-- Grouped-by-project rows land here (renderTodayAttention). The flat
+                 list is the ungrouped-degrade fallback when no project data. -->
+            <div class="log-attention-groups" id="log-attention-groups"></div>
             <div class="log-attention-list" id="log-attention-list"></div>
             <p class="log-empty" id="log-attention-empty" hidden>
               Nothing overdue and silent. You're on top of it.

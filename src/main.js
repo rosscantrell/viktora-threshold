@@ -3188,6 +3188,9 @@ async function enterLogView() {
     .then(() => {
       loadPersonLensSoP().catch((e) => console.warn("[main] SoP header:", e));
       renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log rollup:", e));
+      // Coming up — forward-looking due-soon window (needs docProjects from context
+      // for its project grouping, so it fires here after context resolves).
+      loadTodayComingUp().catch((e) => console.warn("[main] Coming up:", e));
     })
     .catch((e) => {
       console.warn("[main] Today context:", e);
@@ -3195,6 +3198,7 @@ async function enterLogView() {
       // that don't strictly need it (they degrade to the forest fallback).
       loadPersonLensSoP().catch(() => {});
       renderTodayDecisionLog().catch(() => {});
+      loadTodayComingUp().catch(() => {});
     });
 
   // ② + ③ Needs-you queue + Filed-confidently — both piles from the proxy queue,
@@ -3227,11 +3231,22 @@ function renderTodaySkeleton() {
   const qCount = document.getElementById("today-queue-count");
   if (qCount) qCount.textContent = "";
 
-  // ③ Filed confidently — hidden until the proxy source lands with any.
+  // Filed automatically (demoted into "Waiting on you") — hidden until the proxy
+  // source lands with any high-confidence filed items.
   const filedSection = document.getElementById("today-filed-section");
   if (filedSection) filedSection.hidden = true;
   const filedList = document.getElementById("today-filed-list");
   if (filedList) filedList.innerHTML = "";
+
+  // Coming up — hidden until the decision-log rollup lands with due-soon items.
+  const comingUp = document.getElementById("today-comingup-section");
+  if (comingUp) comingUp.hidden = true;
+  const comingUpGroups = document.getElementById("today-comingup-groups");
+  if (comingUpGroups) comingUpGroups.innerHTML = "";
+  const comingUpList = document.getElementById("today-comingup-list");
+  if (comingUpList) comingUpList.innerHTML = "";
+  const comingUpCount = document.getElementById("today-comingup-count");
+  if (comingUpCount) comingUpCount.textContent = "";
 
   // Tray — hidden until fetch_outbox lands with staged drafts.
   const tray = document.getElementById("today-outbox-tray");
@@ -3245,6 +3260,10 @@ function renderTodaySkeleton() {
   if (statesStrip) statesStrip.hidden = true;
   const everySection = document.getElementById("log-everything-section");
   if (everySection) everySection.hidden = true;
+  const attnGroups = document.getElementById("log-attention-groups");
+  if (attnGroups) attnGroups.innerHTML = "";
+  const attnList = document.getElementById("log-attention-list");
+  if (attnList) attnList.innerHTML = "";
   const statusEl = document.getElementById("log-status");
   if (statusEl) statusEl.hidden = true;
 
@@ -3262,8 +3281,9 @@ function renderTodaySkeleton() {
   _everythingElseHasContent = false;
 }
 
-// Toggle the Today "Filed confidently" pile (collapsed by default). Idempotent —
-// binds the click handler once across re-renders.
+// Toggle the demoted "Filed automatically" line inside "Waiting on you"
+// (collapsed by default). Idempotent — binds the click handler once across
+// re-renders.
 function wireTodayFiledToggle() {
   const toggle = document.getElementById("today-filed-toggle");
   const list = document.getElementById("today-filed-list");
@@ -3289,6 +3309,10 @@ async function loadTodayContext() {
   await loadDocsMap();
   const viewerEmail = await getViewerEmail();
   const submitterByDoc = new Map();
+  // documentId → projects[] — the same map the Decisions By-project lens groups on
+  // (built in enterDecisionsView from fetch_documents). Reused here so the Today
+  // "Needs attention" rows group by project. Best-effort: empty ⇒ ungrouped.
+  const docProjects = new Map();
   try {
     const docsResp = await tauri.core.invoke("fetch_documents");
     const docs = docsResp && Array.isArray(docsResp.documents) ? docsResp.documents : [];
@@ -3296,13 +3320,15 @@ async function loadTodayContext() {
       if (d && d.id && typeof d.submittedByEmail === "string" && d.submittedByEmail) {
         submitterByDoc.set(d.id, d.submittedByEmail);
       }
+      if (d && d.id) docProjects.set(d.id, Array.isArray(d.projects) ? d.projects : []);
     }
   } catch (err) {
-    console.warn("[main] fetch_documents failed (attribution omitted):", err);
+    console.warn("[main] fetch_documents failed (attribution/projects omitted):", err);
   }
   _todayCtx = {
     needsAttention: (_todayCtx && _todayCtx.needsAttention) || [],
     submitterByDoc,
+    docProjects,
     viewerEmail,
     viewerSlug: viewerEmail ? emailToOwnerSlug(viewerEmail) : null,
   };
@@ -3400,14 +3426,16 @@ async function loadTodayQueueProxy(settle) {
       try { list.appendChild(renderProxyCard(item)); } catch (e) { console.warn("[main] renderProxyCard:", e); }
     }
   }
-  // "Filed confidently" — collapsed rows, undo per row. Hidden when none.
+  // "Filed automatically" — demoted collapsed line inside "Waiting on you"; undo
+  // per row. The whole group stays hidden when there are none (so no floating
+  // header over nothing — the bug this pass removes).
   if (filed.length && filedList && filedSection) {
     for (const item of filed) {
       try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
     }
     filedSection.hidden = false;
     const headText = document.getElementById("today-filed-heading-text");
-    if (headText) headText.textContent = `Filed confidently · ${filed.length}`;
+    if (headText) headText.textContent = `${filed.length} filed automatically — review`;
   }
   settle("proxy", wantsEye.length > 0);
 }
@@ -3590,7 +3618,7 @@ async function renderTodayDecisionLog() {
   // fetched needs-attention list onto it and re-render the rows under the
   // current filter. Guard against a context that hasn't populated (defensive).
   if (!_todayCtx) {
-    _todayCtx = { submitterByDoc: new Map(), viewerEmail: null, viewerSlug: null };
+    _todayCtx = { submitterByDoc: new Map(), docProjects: new Map(), viewerEmail: null, viewerSlug: null };
   }
   _todayCtx.needsAttention = needsAttention;
   renderTodayAttention();
@@ -3621,19 +3649,27 @@ async function renderTodayDecisionLog() {
     }
   }
 
-  // "Everything else" — the grouped legacy fallback. WP-R2 amendment item 3: it
-  // renders ONLY when the Needs-you queue is empty (nothing actionable), and item
-  // 4: never as a header alone — only when the rollup produced content. Record
-  // both signals, then reconcile against the queue's empty state (which may have
-  // already settled on its own async path). The status pills (item 2) are handled
-  // above, independent of this — they stay visible regardless.
+  // "Needs attention" — the grouped rollup (was "Everything else"). WP-R2 amendment
+  // item 3: it renders ONLY when the Waiting-on-you queue is empty (nothing
+  // actionable), and item 4: never as a header alone — only when the rollup
+  // produced content. Record both signals, then reconcile against the queue's empty
+  // state (which may have already settled on its own async path). The status pills
+  // (item 2) are handled above, independent of this — they stay visible regardless.
+  //
+  // COUNT RECONCILIATION (Today composition pass): the header subtitle renders
+  // `${needsAttention.length} need attention` and this section's count badge is the
+  // SAME working list — so the badge is needsAttention.length ALONE (was
+  // needsAttention.length + contradictions.length, which showed 26 against the
+  // header's 25 whenever a conflict existed). Contradictions still render as an
+  // inner sub-block; they just no longer inflate the header count. The section may
+  // still show for a conflict-only state, so its VISIBILITY signal stays inclusive.
   const everyToggle = document.getElementById("log-everything-toggle");
   const everyBody = document.getElementById("log-everything-body");
   const everyCount = document.getElementById("log-everything-count");
-  const everyContentCount = needsAttention.length + contradictions.length;
-  _everythingElseHasContent = everyContentCount > 0;
+  const attentionCount = needsAttention.length;
+  _everythingElseHasContent = attentionCount + contradictions.length > 0;
   if (everyCount) {
-    everyCount.textContent = everyContentCount ? String(everyContentCount) : "";
+    everyCount.textContent = attentionCount ? String(attentionCount) : "";
   }
   reconcileEverythingElseVisibility();
   if (everyToggle && everyBody && !everyToggle.dataset.wired) {
@@ -3702,10 +3738,15 @@ function setTodayFilter(filter) {
   }
 }
 
-/** Render the needs-attention list under the current filter. "Mine" keeps only
- *  rows whose owner slug matches the viewer's (email local-part → slug). */
+/** Render the needs-attention list under the current filter, GROUPED BY PROJECT.
+ *  "Mine" keeps only rows whose owner slug matches the viewer's (email local-part
+ *  → slug). Grouping reuses the Decisions By-project derivation (groupRecords over
+ *  the documentId → projects[] map on _todayCtx.docProjects), ordered by the same
+ *  attention rank; within each group rows keep the server's attention order.
+ *  Degrades to a flat (ungrouped) list when there's no project data. */
 function renderTodayAttention() {
   const ctx = _todayCtx;
+  const groupsEl = document.getElementById("log-attention-groups");
   const listEl = document.getElementById("log-attention-list");
   const emptyEl = document.getElementById("log-attention-empty");
   if (!ctx || !listEl) return;
@@ -3718,10 +3759,52 @@ function renderTodayAttention() {
     });
   }
 
+  const renderRow = (entry) =>
+    renderAttentionRow(entry, ctx.submitterByDoc, ctx.viewerEmail);
+
+  if (groupsEl) groupsEl.innerHTML = "";
   listEl.innerHTML = "";
-  for (const entry of rows) {
-    listEl.appendChild(renderAttentionRow(entry, ctx.submitterByDoc, ctx.viewerEmail));
+
+  // Group by project when we have project data AND it partitions the rows into
+  // more than one named project; otherwise degrade to the flat list. groupRecords
+  // is the same helper the Decisions By-project lens uses; aliases/jobNames/
+  // recordJobs aren't loaded on Today, so it falls to pure document-project keys
+  // (recordJobs empty ⇒ no hot-list re-point) with prettified labels.
+  const docProjects = ctx.docProjects instanceof Map ? ctx.docProjects : new Map();
+  let grouped = null;
+  if (rows.length && docProjects.size && groupsEl) {
+    const g = groupRecords(rows, "project", docProjects, {}, {}, {});
+    // Only group when it's meaningful — more than one bucket, or a single named
+    // (non-"Other") project. A lone "Other" bucket ⇒ flat list (no project data).
+    const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
+    if (g.length > 1 || named.length === 1) {
+      // Order groups attention-first (Other stays last, per groupRecords' order key).
+      grouped = g.slice().sort((a, b) => {
+        if ((a.order || 0) !== (b.order || 0)) return (a.order || 0) - (b.order || 0);
+        return groupAttention(b) - groupAttention(a);
+      });
+    }
   }
+
+  if (grouped) {
+    for (const grp of grouped) {
+      const wrap = document.createElement("div");
+      wrap.className = "log-attention-group";
+      const head = document.createElement("h3");
+      head.className = "log-attention-group-title";
+      head.textContent = grp.label;
+      const count = document.createElement("span");
+      count.className = "log-attention-group-count";
+      count.textContent = String(grp.items.length);
+      head.appendChild(count);
+      wrap.appendChild(head);
+      for (const entry of grp.items) wrap.appendChild(renderRow(entry));
+      groupsEl.appendChild(wrap);
+    }
+  } else {
+    for (const entry of rows) listEl.appendChild(renderRow(entry));
+  }
+
   if (emptyEl) {
     emptyEl.hidden = rows.length > 0;
     if (rows.length === 0) {
@@ -3813,6 +3896,224 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   row.appendChild(footer);
 
   applyRecordCardEditing(row, rec); // Today/daily inline editing (same helpers as the cards)
+  return row;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// "Coming up" — the forward-looking window (the windshield). OPEN commitments due
+// within the next 14 days, soonest first, so a client is told BEFORE a deadline
+// (Trisha: "I'd have wanted to know the day before, not the day of").
+//
+// Sourced from the FULL decision-log records (fetch_decision_log_full — the same
+// records the Decisions view groups; Today's plain /api/decision-log carries only
+// the backward-looking needsAttention list, so this is the forward source). No new
+// IPC, no engine change. Empty ⇒ absent (never fabricates demo content).
+// ══════════════════════════════════════════════════════════════════════════
+const COMINGUP_WINDOW_DAYS = 14;
+// Any silence ≥ this many days on a due-soon item earns the "quiet" badge — the
+// point is due-soon AND nobody-touching-it (looser than the 40d overdue-silent
+// badge, per the amendment).
+const COMINGUP_QUIET_SILENT_DAYS = 7;
+
+// Parse a YYYY-MM-DD (house gotcha: only the first 10 chars are the date) to a
+// local midnight Date. Returns null when absent/unparseable.
+function parseDueDate(due) {
+  if (!due || typeof due !== "string") return null;
+  const d = new Date(due.slice(0, 10) + "T00:00:00");
+  return isNaN(d.getTime()) ? null : d;
+}
+
+async function loadTodayComingUp() {
+  const section = document.getElementById("today-comingup-section");
+  const groupsEl = document.getElementById("today-comingup-groups");
+  const listEl = document.getElementById("today-comingup-list");
+  const countEl = document.getElementById("today-comingup-count");
+  if (!section || (!groupsEl && !listEl)) return;
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_decision_log_full");
+  } catch (err) {
+    console.warn("[main] fetch_decision_log_full failed (Coming up):", err);
+    section.hidden = true; // degrade silently — the backward rollup carries Today
+    return;
+  }
+
+  const records = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const horizon = today.getTime() + COMINGUP_WINDOW_DAYS * 86400000;
+
+  // OPEN commitments due within [today, today+14d]. State lives on the wrapper
+  // (it.state); type on the record. Decisions aren't "coming due" — commitments
+  // are the promises with a deadline someone is waiting on.
+  const upcoming = [];
+  for (const it of records) {
+    const rec = (it && it.record) || {};
+    if ((it.state || "open") !== "open") continue;
+    if (rec.type && rec.type !== "commitment") continue;
+    const d = parseDueDate(rec.due);
+    if (!d) continue;
+    const t = d.getTime();
+    if (t < today.getTime() || t > horizon) continue; // overdue lives in "Needs attention"
+    upcoming.push(it);
+  }
+  // Soonest first.
+  upcoming.sort((a, b) => {
+    const da = parseDueDate(a.record && a.record.due);
+    const db = parseDueDate(b.record && b.record.due);
+    return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
+  });
+
+  // "Mine" filter parity with the needs-attention list.
+  let rows = upcoming;
+  if (_todayFilter === "mine" && _todayCtx && _todayCtx.viewerSlug) {
+    rows = rows.filter((e) => {
+      const owner = ((e.record && e.record.owner) || "").toLowerCase();
+      return owner && owner === _todayCtx.viewerSlug;
+    });
+  }
+
+  if (groupsEl) groupsEl.innerHTML = "";
+  if (listEl) listEl.innerHTML = "";
+  if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
+
+  // Empty ⇒ absent: no header, no container margin.
+  if (!rows.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  const submitterByDoc = (_todayCtx && _todayCtx.submitterByDoc) || new Map();
+  const viewerEmail = _todayCtx && _todayCtx.viewerEmail;
+  const docProjects = _todayCtx && _todayCtx.docProjects instanceof Map ? _todayCtx.docProjects : new Map();
+  const renderRow = (entry) => renderComingUpRow(entry, submitterByDoc, viewerEmail);
+
+  // Group by project when there's project data that partitions the rows; else flat.
+  let grouped = null;
+  if (docProjects.size && groupsEl) {
+    const g = groupRecords(rows, "project", docProjects, {}, {}, {});
+    const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
+    if (g.length > 1 || named.length === 1) {
+      // Preserve soonest-first WITHIN each group (groupRecords keeps input order).
+      grouped = g.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    }
+  }
+
+  if (grouped && groupsEl) {
+    for (const grp of grouped) {
+      const wrap = document.createElement("div");
+      wrap.className = "log-attention-group";
+      const head = document.createElement("h3");
+      head.className = "log-attention-group-title";
+      head.textContent = grp.label;
+      const count = document.createElement("span");
+      count.className = "log-attention-group-count";
+      count.textContent = String(grp.items.length);
+      head.appendChild(count);
+      wrap.appendChild(head);
+      for (const entry of grp.items) wrap.appendChild(renderRow(entry));
+      groupsEl.appendChild(wrap);
+    }
+  } else if (listEl) {
+    for (const entry of rows) listEl.appendChild(renderRow(entry));
+  }
+}
+
+/** One "Coming up" row — the same anatomy as a needs-attention row, but the due
+ *  date is rendered prominently (relative + absolute), items due within 48h get
+ *  the amber/urgent treatment, and a "quiet" badge shows when the item has been
+ *  silent ≥7d (due-soon + nobody-touching-it). Per-row actions unchanged. */
+function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
+  const rec = (entry && entry.record) || {};
+  const lc = (entry && entry.lifecycle) || {};
+  const row = document.createElement("div");
+  row.className = "log-attention-row today-comingup-row";
+  row.dataset.type = rec.type || "";
+
+  const d = parseDueDate(rec.due);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = d ? Math.round((d.getTime() - today.getTime()) / 86400000) : null;
+  const urgent = days !== null && days <= 2; // within 48h → amber
+  if (urgent) row.classList.add("today-comingup-urgent");
+
+  const head = document.createElement("div");
+  head.className = "log-row-head";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.dataset.type = rec.type || "";
+  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  head.appendChild(chip);
+  if (rec.primaryEntity) {
+    const subj = document.createElement("span");
+    subj.className = "log-row-subject";
+    subj.textContent = prettySlug(rec.primaryEntity);
+    head.appendChild(subj);
+  }
+  // Prominent due line — relative + absolute ("due in 2 days · Jul 8").
+  if (d) {
+    const dueTag = document.createElement("span");
+    dueTag.className = "today-comingup-due" + (urgent ? " today-comingup-due-urgent" : "");
+    const rel =
+      days <= 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`;
+    const abs = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    dueTag.textContent = `${rel} · ${abs}`;
+    head.appendChild(dueTag);
+  }
+  // "Quiet" badge — due-soon AND silent ≥7d (nobody touching it).
+  if (typeof lc.silentDays === "number" && lc.silentDays >= COMINGUP_QUIET_SILENT_DAYS) {
+    const quiet = document.createElement("span");
+    quiet.className = "today-comingup-quiet";
+    quiet.textContent = `quiet ${lc.silentDays}d`;
+    quiet.title = "No recent activity on this — worth a nudge before it's due.";
+    head.appendChild(quiet);
+  }
+  row.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "log-row-summary";
+  summary.textContent = rec.summary || "";
+  row.appendChild(summary);
+
+  // Owner meta + capture attribution (same as needs-attention rows; the due date
+  // is already prominent in the head, so it isn't repeated here).
+  const attribution = captureAttribution(rec.documentId, submitterByDoc, viewerEmail);
+  {
+    const meta = document.createElement("p");
+    meta.className = "log-row-meta";
+    const segCount = buildRecordMetaSegments(meta, rec);
+    if (attribution) {
+      if (segCount || meta.textContent) meta.appendChild(document.createTextNode(" · "));
+      const attr = document.createElement("span");
+      attr.className = "log-meta-attr";
+      attr.textContent = attribution;
+      meta.appendChild(attr);
+    }
+    if (meta.childNodes.length) row.appendChild(meta);
+  }
+
+  // Actions — the same set as needs-attention (Show receipts / source / Email /
+  // Resolve / Snooze / dismiss).
+  const footer = document.createElement("div");
+  footer.className = "log-row-actions";
+  if (rec.primaryEntity) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link receipts-entry-btn";
+    btn.textContent = "Show receipts →";
+    btn.addEventListener("click", () =>
+      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
+    footer.appendChild(btn);
+  }
+  appendSourceBadge(footer, rec.documentId, rec.verbatim);
+  appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
+  appendDraftFollowUpControl(footer, rec);
+  appendDismissControl(footer, rec.recordId, row, rec.summary);
+  row.appendChild(footer);
+
+  applyRecordCardEditing(row, rec);
   return row;
 }
 
@@ -5558,6 +5859,8 @@ for (const btn of document.querySelectorAll(".log-filter-btn")) {
   btn.addEventListener("click", () => {
     setTodayFilter(btn.dataset.filter);
     renderTodayAttention();
+    // Coming up honours the same Mine/Everyone filter.
+    loadTodayComingUp().catch((e) => console.warn("[main] Coming up (filter):", e));
   });
 }
 
