@@ -743,7 +743,7 @@ async function renderSovereignty() {
     return;
   }
 
-  const POSTURE_CLASS = { "on-prem": "is-sovereign", hybrid: "is-hybrid", cloud: "is-cloud", mixed: "is-hybrid", unconfigured: "is-cloud" };
+  const POSTURE_CLASS = { "on-prem": "is-sovereign", hybrid: "is-hybrid", cloud: "is-cloud", mixed: "is-hybrid", unconfigured: "is-unconfigured" };
   const cls = POSTURE_CLASS[s.posture] || "is-cloud";
   const lockIcon = s.posture === "on-prem"
     ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
@@ -772,11 +772,32 @@ async function renderSovereignty() {
     (s.tier ? '<p class="privacy-banner-sub">Tier: ' + escapeHtml(s.tier) + "</p>" : "") +
     "</div></div>";
 
+  // A deployment with no AI provider configured isn't a cloud posture — it
+  // isn't processing anything. Say that plainly instead of listing default
+  // models that aren't running.
+  if (s.posture === "unconfigured") {
+    html +=
+      '<p class="privacy-caveat">⚠ No AI provider is configured on this workspace yet, ' +
+      "so your documents aren't being processed. Ask your administrator to finish setup.</p>";
+    body.innerHTML = html;
+    return;
+  }
+
   html +=
     '<div class="privacy-surfaces">' +
     surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation) +
     surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction) +
     surfaceRow("Query understanding", s.surfaces.query) +
+    // The semantic index is a fourth data channel: record summaries are
+    // embedded, and with a cloud provider (Voyage) those vectors leave the
+    // org — this row is what explains a missing "fully sovereign" checkmark.
+    // Older engines don't report it; disabled/inert embeddings move no data.
+    (s.embeddings && s.embeddings.enabled
+      ? surfaceRow("Semantic index (embeddings)", {
+          model: s.embeddings.modelId || s.embeddings.provider || "embeddings",
+          dataLeavesOrg: s.embeddings.dataLeavesOrg,
+        })
+      : "") +
     "</div>";
 
   if (s.localEndpoint) {
