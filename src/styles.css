@@ -2457,6 +2457,21 @@ code {
   padding: 1px 7px;
   white-space: nowrap;
 }
+/* WP-READINESS — the "no draft observed" flag (the Brian warning): the same
+   ghost-pill grammar as the quiet badge but wearing amber, because "due soon
+   and nothing has moved since the promise" is a needs-you signal, not
+   metadata. One badge per row (it replaces the quiet badge when present). */
+.today-comingup-noprecursor {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--glass-accent);
+  background: rgba(255, 196, 64, 0.12);
+  border: 1px solid rgba(255, 196, 64, 0.45);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
 /* WP-R2 amendment item 5 — the tray's `display: flex` (a class rule) outranks the
    UA `[hidden]{display:none}`, so an empty, `hidden` tray (label included) still
    painted. Restore the hide: when the tray carries [hidden], nothing renders. */
@@ -2908,6 +2923,14 @@ code {
   align-self: flex-start;
   font-size: 11.5px;
   color: var(--glass-link);
+}
+/* Same legacy-absolute trap for the Today row actions (Draft follow-up /
+   Show receipts on Coming-up + needs-attention rows): once the #today-rail
+   became position:sticky (WP-TODAY-READ-ACT) it turned into the positioned
+   ancestor, and every row's btn-link stacked at the rail's top-right. */
+.log-row-actions .btn-link {
+  position: static;
+  align-self: flex-start;
 }
 
 .receipts-entry-btn {

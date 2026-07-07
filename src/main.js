@@ -4333,8 +4333,28 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
     dueTag.textContent = `${rel} · ${abs}`;
     head.appendChild(dueTag);
   }
+  // WP-READINESS (app half) — the engine's per-commitment readiness verdict.
+  // 'no-precursor' = due soon and NOTHING related has moved since the promise
+  // (the Brian flag) — the strongest pre-deadline warning, and it owns the
+  // row's one badge. 'quiet' is the same signal as the client-side silence
+  // badge below, so it defers to it; 'active'/absent ⇒ no badge. Shape-
+  // tolerant: the field may ride the wrapper or the record, and is absent
+  // entirely on flag-off servers.
+  const readiness = (entry && entry.readiness) || rec.readiness || null;
+  if (readiness === "no-precursor") {
+    const flag = document.createElement("span");
+    flag.className = "today-comingup-noprecursor";
+    flag.textContent = "no draft observed";
+    flag.title =
+      "Due soon, and nothing related has moved since this was promised — worth flagging early.";
+    head.appendChild(flag);
+  }
   // "Quiet" badge — due-soon AND silent ≥7d (nobody touching it).
-  if (typeof lc.silentDays === "number" && lc.silentDays >= COMINGUP_QUIET_SILENT_DAYS) {
+  if (
+    readiness !== "no-precursor" &&
+    typeof lc.silentDays === "number" &&
+    lc.silentDays >= COMINGUP_QUIET_SILENT_DAYS
+  ) {
     const quiet = document.createElement("span");
     quiet.className = "today-comingup-quiet";
     quiet.textContent = `quiet ${lc.silentDays}d`;
