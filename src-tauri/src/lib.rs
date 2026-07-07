@@ -2057,6 +2057,40 @@ async fn outbox_propose(
         .map_err(|e| format!("outbox_propose: parse response failed: {e}"))
 }
 
+/// WP-READINESS Tier 2 — stage a client heads-up draft for a due-soon
+/// commitment. POST /api/outbox/heads-up { recordId }; the server derives the
+/// readiness reading internally and generates the no-blame template — the app
+/// never composes copy. Same auth + posture as outbox_propose; 201 { item } on
+/// stage, 200 { item, deduped } on re-stage.
+#[tauri::command]
+async fn outbox_heads_up(
+    state: tauri::State<'_, AppState>,
+    record_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/outbox/heads-up", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({ "recordId": record_id }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("outbox_heads_up: parse response failed: {e}"))
+}
+
 /// WP-VIGILANCE-VOID — the "Watching for…" surface. GET /api/vigilance/voids
 /// returns the OPEN voids (records we're expecting back: who/what/when), already
 /// rendered server-side. Same auth + posture as fetch_decision_log. The engine
@@ -7434,6 +7468,7 @@ pub fn run() {
             fetch_outbox,
             outbox_decide,
             outbox_propose,
+            outbox_heads_up,
             fetch_vigilance_voids,
             dismiss_void,
             snooze_void,
