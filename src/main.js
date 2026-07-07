@@ -3352,6 +3352,7 @@ function renderTodaySkeleton() {
   // Needs-attention group expanders start collapsed on each fresh Today entry.
   _attentionExpandedGroups.clear();
   _attentionOpenCards.clear();
+  _queueCapExpanded = false;
 }
 
 // Toggle the demoted "Filed automatically" line inside "Waiting on you"
@@ -3555,6 +3556,41 @@ async function submitNameAsk(ask, newLabel, card, saveBtn) {
   }
 }
 
+// WP-QUEUE-CAP — a long queue must not bury the rest of Today: the rail's
+// height sets where the needs-attention board starts (grid row sizing), so 11
+// stacked cards push the whole worklist below the fold (Ross's dead-real-estate
+// report). Show the first few, collapse the rest behind the same
+// "Show all N →" grammar the board groups use. Re-run after every source
+// settles (cards arrive async); idempotent; expansion sticks per view entry.
+const QUEUE_CAP_VISIBLE = 4;
+let _queueCapExpanded = false;
+function capTodayQueue() {
+  const list = document.getElementById("today-queue-list");
+  if (!list) return;
+  const cards = [...list.children].filter((el) => !el.classList.contains("today-queue-showall"));
+  let btn = list.querySelector(".today-queue-showall");
+  if (cards.length <= QUEUE_CAP_VISIBLE) {
+    for (const c of cards) c.hidden = false;
+    if (btn) btn.remove();
+    return;
+  }
+  for (let i = 0; i < cards.length; i++) {
+    cards[i].hidden = !_queueCapExpanded && i >= QUEUE_CAP_VISIBLE;
+  }
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-link today-queue-showall";
+    btn.addEventListener("click", () => {
+      _queueCapExpanded = !_queueCapExpanded;
+      capTodayQueue();
+    });
+  }
+  btn.textContent = _queueCapExpanded ? "Show less" : `Show all ${cards.length} →`;
+  btn.setAttribute("aria-expanded", _queueCapExpanded ? "true" : "false");
+  list.appendChild(btn); // keep it last as cards stream in
+}
+
 // Show the empty state (and hide the skeleton) only once all three sources have
 // settled; keep the skeleton up until the first one lands. When any source
 // filled the queue, no empty state — just hide the skeleton.
@@ -3573,6 +3609,7 @@ function reconcileTodayQueueEmptyState(settled, filled) {
   // WP-TODAY-READ-ACT dedup: when the question PULL AFFORDANCE is up (it renders
   // without counting as a filled card), its own "nothing right now" answer
   // already says the queue is clear — a second nothing-line under it is noise.
+  capTodayQueue();
   const askSlot = document.getElementById("today-question-slot");
   const askVisible = !!(askSlot && askSlot.firstElementChild);
   if (empty) empty.hidden = !(allSettled && !anyFilled) || askVisible;
