@@ -5523,6 +5523,8 @@ button.rec-source {
 .privacy-banner.is-hybrid { border-color: var(--warn-soft); }
 .privacy-banner.is-hybrid .privacy-banner-icon { color: var(--warn-text); }
 .privacy-banner.is-cloud .privacy-banner-icon { color: var(--text-secondary); }
+.privacy-banner.is-unconfigured { border-color: var(--warn-soft); border-style: dashed; }
+.privacy-banner.is-unconfigured .privacy-banner-icon { color: var(--warn-text); }
 .privacy-banner-headline { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .privacy-banner-sub { margin: 2px 0 0; font-size: 12px; color: var(--text-tertiary); text-transform: capitalize; }
 
