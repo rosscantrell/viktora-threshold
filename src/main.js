@@ -4564,9 +4564,13 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
   // 'no-precursor' = due soon and NOTHING related has moved since the promise
   // (the Brian flag) — the strongest pre-deadline warning, and it owns the
   // row's one badge. 'quiet' is the same signal as the client-side silence
-  // badge below, so it defers to it; 'active'/absent ⇒ no badge. Shape-
-  // tolerant: the field may ride the wrapper or the record, and is absent
-  // entirely on flag-off servers.
+  // badge below, so it defers to it; 'active'/absent ⇒ no badge.
+  // 'unobservable' (WP-R-1c substrate-density guard) = the engine can't SEE
+  // this subject's neighbourhood, so no absence-of-activity flag is honest —
+  // no amber, and the client-side silence badge below is suppressed too (its
+  // silentDays is the same blind sensor's number). Shape-tolerant: the field
+  // may ride the wrapper or the record, and is absent entirely on flag-off
+  // servers.
   const readiness = (entry && entry.readiness) || rec.readiness || null;
   if (readiness === "no-precursor") {
     const flag = document.createElement("span");
@@ -4579,6 +4583,7 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
   // "Quiet" badge — due-soon AND silent ≥7d (nobody touching it).
   if (
     readiness !== "no-precursor" &&
+    readiness !== "unobservable" &&
     typeof lc.silentDays === "number" &&
     lc.silentDays >= COMINGUP_QUIET_SILENT_DAYS
   ) {
