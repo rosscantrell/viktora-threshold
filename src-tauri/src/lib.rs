@@ -6858,6 +6858,7 @@ fn widget_collapse(
             let inner = probe_window.clone();
             let _ = probe_window.run_on_main_thread(move || {
                 if let Ok(ns_window) = inner.ns_window() {
+                    widget_platform_mac::clear_webview_underpage(ns_window, "post-collapse+900ms");
                     widget_platform_mac::debug_window_chrome(ns_window, "post-collapse+900ms");
                     widget_platform_mac::debug_window_deep(ns_window, "post-collapse+900ms");
                 }
@@ -7322,6 +7323,7 @@ pub fn run() {
                             } else {
                                 log::info!("widget_platform_mac: non-activating shim applied");
                             }
+                            widget_platform_mac::clear_webview_underpage(ns_window, "boot");
                             widget_platform_mac::debug_window_chrome(ns_window, "boot");
                             widget_platform_mac::debug_window_deep(ns_window, "boot");
                         }
@@ -7338,6 +7340,7 @@ pub fn run() {
                         let inner = probe_window.clone();
                         let _ = probe_window.run_on_main_thread(move || {
                             if let Ok(ns_window) = inner.ns_window() {
+                                widget_platform_mac::clear_webview_underpage(ns_window, "boot+1500ms");
                                 widget_platform_mac::debug_window_chrome(ns_window, "boot+1500ms");
                                 widget_platform_mac::debug_window_deep(ns_window, "boot+1500ms");
                             }
