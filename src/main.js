@@ -3388,20 +3388,135 @@ async function loadTodayContext() {
 // The skeleton hides + the empty state shows only after ALL THREE settle empty.
 // ══════════════════════════════════════════════════════════════════════════
 async function loadTodayQueue() {
-  // Track completion of the three sources so the empty/skeleton state resolves
+  // Track completion of the four sources so the empty/skeleton state resolves
   // correctly regardless of arrival order.
-  const settled = { proxy: false, question: false, voids: false };
-  const filled = { proxy: false, question: false, voids: false };
+  const settled = { proxy: false, question: false, voids: false, nameAsks: false };
+  const filled = { proxy: false, question: false, voids: false, nameAsks: false };
   const settle = (key, didFill) => {
     settled[key] = true;
     if (didFill) filled[key] = true;
     reconcileTodayQueueEmptyState(settled, filled);
   };
 
-  // Fire all three in parallel; each appends when it lands.
+  // Fire all four in parallel; each appends when it lands.
   loadTodayQueueProxy(settle).catch((e) => { console.warn("[main] proxy queue:", e); settle("proxy", false); });
   loadTodayQueueQuestion(settle).catch((e) => { console.warn("[main] question card:", e); settle("question", false); });
   loadTodayQueueVoids(settle).catch((e) => { console.warn("[main] vigilance voids:", e); settle("voids", false); });
+  loadTodayQueueNameAsks(settle).catch((e) => { console.warn("[main] name asks:", e); settle("nameAsks", false); });
+}
+
+// ── WP-NAME-ASKS — the corpus asks for the one fact only the user has ──
+// Deterministic engine producer (/api/project-canon/name-asks, flag-gated):
+// unnamed code-shaped workstreams carrying open items become a queue card with
+// an inline answer. Saving writes through the existing project-canon rename
+// (read-time application ⇒ every surface picks the name up on next render).
+async function loadTodayQueueNameAsks(settle) {
+  let data = null;
+  try {
+    data = await tauri.core.invoke("fetch_name_asks");
+  } catch (err) {
+    // Older servers have no route — degrade silently (flag-off posture).
+    settle("nameAsks", false);
+    return;
+  }
+  const asks = data && data.enabled !== false && Array.isArray(data.asks) ? data.asks : [];
+  const list = document.getElementById("today-queue-list");
+  if (!list || !asks.length) {
+    settle("nameAsks", false);
+    return;
+  }
+  // Cap: housekeeping never floods the queue.
+  for (const ask of asks.slice(0, 3)) {
+    if (!ask || !ask.key) continue;
+    list.appendChild(renderNameAskCard(ask));
+  }
+  settle("nameAsks", true);
+}
+
+function renderNameAskCard(ask) {
+  const card = document.createElement("div");
+  card.className = "record-card nameask-card";
+
+  const title = document.createElement("p");
+  title.className = "nameask-title";
+  const n = typeof ask.openCount === "number" ? ask.openCount : 0;
+  title.textContent = `${n} open item${n === 1 ? "" : "s"} are grouped under ${ask.code || ask.key} — a code with no name yet.`;
+  card.appendChild(title);
+
+  if (Array.isArray(ask.topEntities) && ask.topEntities.length) {
+    const hints = document.createElement("div");
+    hints.className = "nameask-hints";
+    const lead = document.createElement("span");
+    lead.className = "nameask-hints-label";
+    lead.textContent = "It covers:";
+    hints.appendChild(lead);
+    for (const e of ask.topEntities.slice(0, 3)) {
+      const chip = document.createElement("span");
+      chip.className = "record-chip";
+      chip.textContent = prettySlug(String(e));
+      hints.appendChild(chip);
+    }
+    card.appendChild(hints);
+  }
+
+  const rowEl = document.createElement("div");
+  rowEl.className = "nameask-input-row";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "nameask-input";
+  input.placeholder = "What should this workstream be called?";
+  if (ask.suggestedName) input.value = String(ask.suggestedName);
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn nameask-save";
+  save.textContent = "Save name";
+  const submit = () => submitNameAsk(ask, input.value, card, save);
+  save.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
+  rowEl.appendChild(input);
+  rowEl.appendChild(save);
+  card.appendChild(rowEl);
+
+  appendDismissControl(card, "nameask:" + ask.key, card, ask.code || ask.key);
+  return card;
+}
+
+async function submitNameAsk(ask, newLabel, card, saveBtn) {
+  const label = (newLabel || "").trim();
+  if (!label) return;
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const fp = await projectCanonFingerprint();
+    if (!fp) {
+      showToast({ kind: "failure", title: "Naming isn't available on this server yet." });
+      return;
+    }
+    let actor = "threshold-user";
+    try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
+    await tauri.core.invoke("project_canon_rename", {
+      canonicalId: String(ask.key).replace(/^job:/, ""),
+      newLabel: label,
+      expectedSubstrateFingerprint: fp,
+      actor,
+    });
+    card.remove();
+    showToast({
+      kind: "success",
+      title: `Named: ${label}`,
+      body: "Today, the Log, and the overview pick the name up on their next refresh.",
+    });
+    enterLogView(); // re-derive Today — the served project keys now carry the name
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Couldn't save the name",
+      body: String(err && err.message ? err.message : err),
+    });
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
 }
 
 // Show the empty state (and hide the skeleton) only once all three sources have
@@ -3410,8 +3525,13 @@ async function loadTodayQueue() {
 function reconcileTodayQueueEmptyState(settled, filled) {
   const skel = document.getElementById("today-queue-skeleton");
   const empty = document.getElementById("today-queue-empty");
-  const anyFilled = filled.proxy || filled.question || filled.voids;
-  const allSettled = settled.proxy && settled.question && settled.voids;
+  // Name asks are housekeeping, not urgency: they fill the queue VISUALLY
+  // (skeleton/empty-line accounting) but must not suppress the needs-attention
+  // board below (the WP-R2 gate reads _todayQueueEmpty) — a standing "name
+  // this workstream" card should never hide the day's worklist.
+  const urgentFilled = filled.proxy || filled.question || filled.voids;
+  const anyFilled = urgentFilled || filled.nameAsks;
+  const allSettled = settled.proxy && settled.question && settled.voids && settled.nameAsks;
   // Hide the skeleton as soon as anything filled OR everything has settled.
   if (skel) skel.hidden = anyFilled || allSettled;
   // WP-TODAY-READ-ACT dedup: when the question PULL AFFORDANCE is up (it renders
@@ -3424,9 +3544,9 @@ function reconcileTodayQueueEmptyState(settled, filled) {
   // else" fallback (owned by the decision-log rollup) can show only when empty.
   // Known only once all three sources settle; anyFilled ⇒ not empty.
   if (allSettled) {
-    _todayQueueEmpty = !anyFilled;
+    _todayQueueEmpty = !urgentFilled;
     reconcileEverythingElseVisibility();
-  } else if (anyFilled) {
+  } else if (urgentFilled) {
     // A card landed before everything settled — the queue is definitely non-empty.
     _todayQueueEmpty = false;
     reconcileEverythingElseVisibility();
@@ -3855,8 +3975,13 @@ const _attentionOpenCards = new Set();
 function displayGroupLabel(label) {
   const s = (label == null ? "" : String(label)).trim();
   if (!s) return s;
+  // WP-NAME-ASKS ruling: show the REAL code, formatted (US-NON-22189), not a
+  // "Unnamed workstream" mask — codes are identifiers users recognize and
+  // search by, and masking made distinct unnamed jobs indistinguishable. The
+  // durable fix is the naming ask in the queue; this is the honest interim.
+  const asCode = (v) => v.replace(/[\s_]+/g, "-").toUpperCase();
   // Specific corpus pattern: "Us Non 22189", "abc-non-4021", etc.
-  if (/^[a-z]{2,3}[-\s]?non[-\s]?\d{4,}$/i.test(s)) return "Unnamed workstream";
+  if (/^[a-z]{2,3}[-\s]?non[-\s]?\d{4,}$/i.test(s)) return asCode(s);
   // Token-shape heuristic: a label is slug-shaped when EVERY token is opaque
   // (vowel-free ≥4-char run, or a bare 4+ digit id) and none is a real word.
   const tokens = s.split(/[\s\-_]+/).filter(Boolean);
@@ -3869,7 +3994,7 @@ function displayGroupLabel(label) {
     }
     return lower.length >= 4; // vowel-free run of 4+ letters/digits
   };
-  if (tokens.length && tokens.every(looksOpaque)) return "Unnamed workstream";
+  if (tokens.length && tokens.every(looksOpaque)) return asCode(s);
   return s;
 }
 
@@ -3909,7 +4034,7 @@ function renderTodayAttention() {
   const docProjects = ctx.docProjects instanceof Map ? ctx.docProjects : new Map();
   let grouped = null;
   if (rows.length && docProjects.size && groupsEl) {
-    const g = groupRecords(rows, "project", docProjects, {}, {}, {});
+    const g = groupRecords(rows, "project", docProjects, {}, ctx.jobNames || {}, ctx.recordJobs || {});
     // Only group when it's meaningful — more than one bucket, or a single named
     // (non-"Other") project. A lone "Other" bucket ⇒ flat list (no project data).
     const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
@@ -4210,6 +4335,13 @@ async function loadTodayComingUp() {
   }
 
   const records = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+  // WP-NAME-ASKS plumb-through: the full payload carries the engine's naming
+  // layer; stash it so Today's grouping consults the SAME names the Log uses
+  // (a name fixed anywhere then propagates here on the next render).
+  if (_todayCtx) {
+    _todayCtx.jobNames = (data && data.jobNames) || {};
+    _todayCtx.recordJobs = (data && data.recordJobs) || {};
+  }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const horizon = today.getTime() + COMINGUP_WINDOW_DAYS * 86400000;
@@ -4264,7 +4396,8 @@ async function loadTodayComingUp() {
   // Group by project when there's project data that partitions the rows; else flat.
   let grouped = null;
   if (docProjects.size && groupsEl) {
-    const g = groupRecords(rows, "project", docProjects, {}, {}, {});
+    const g = groupRecords(rows, "project", docProjects, {},
+      (_todayCtx && _todayCtx.jobNames) || {}, (_todayCtx && _todayCtx.recordJobs) || {});
     const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
     if (g.length > 1 || named.length === 1) {
       // Preserve soonest-first WITHIN each group (groupRecords keeps input order).
