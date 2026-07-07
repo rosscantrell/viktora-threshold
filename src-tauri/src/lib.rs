@@ -6854,6 +6854,29 @@ fn widget_collapse(
     // macOS: NSApp → .accessory, collectionBehavior → panel bits). Order
     // matters: the min-size floor from expand must be cleared BEFORE the
     // 180×80 shrink, else set_size is rejected against the 720×560 minimum.
+    // A window still in NATIVE FULLSCREEN cannot take the pill styleMask —
+    // AppKit throws "NSWindowStyleMaskFullScreen cleared on a window outside
+    // of a full screen transition" and the raw msg_send aborts the process
+    // (crash reproduced 2026-07-07: green-button fullscreen → Collapse; the
+    // path only became reachable when #102 made fullscreen work). Leave
+    // fullscreen FIRST and wait for the transition to settle.
+    if window.is_fullscreen().unwrap_or(false) {
+        eprintln!("[persona] collapse requested while fullscreen — exiting fullscreen first");
+        let _ = window.set_fullscreen(false);
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if !window.is_fullscreen().unwrap_or(false) {
+                break;
+            }
+        }
+        // One more beat: the styleMask flip trails the Space animation.
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        eprintln!(
+            "[persona] fullscreen exit settled (is_fullscreen={})",
+            window.is_fullscreen().unwrap_or(false)
+        );
+    }
+
     #[cfg(target_os = "macos")]
     {
         // Restore the Overlay-titlebar-free standard style before dropping
