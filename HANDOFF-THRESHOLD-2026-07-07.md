@@ -102,26 +102,22 @@ compiler — reads the LIVE job set; garbage-in if jobs are empty).
   `[tree]`, `[page-probe]`, `[frames]`, `[fs-poll]`, `[expand]`, `[persona]`,
   `[halo-fix]`).
 - **Engine :3020**: `~/scratch/engine-main-review` worktree on engine main,
-  serving `~/scratch/trisha-pass-corpus`. **The env is load-bearing** — the
-  canonical relaunch (every var matters; omissions this session silently
-  degraded SoP and broke captures):
+  serving `~/scratch/trisha-pass-corpus`.
+  **⚠ SUPERSEDED 2026-07-07-evening: do NOT hand-assemble the env.** The
+  hand-typed recipe that used to live here caused three silent-feature
+  incidents in one day (unexpanded `~`, missing semantic-arm flags silencing
+  the whole Question Engine, missing doc-type flags). Relaunch ONLY via the
+  versioned launcher:
   ```
-  cd ~/scratch/engine-main-review/schema-browser && \
-  env PORT=3020 META_PROJECT_PATH=~/scratch/trisha-pass-corpus \
-    ANTHROPIC_API_KEY=<from AI-Light-Prototype/.claude/launch.json> \
-    INGESTION_API_KEY=ss \
-    ENABLE_DECISION_LOG=true ENABLE_DECISION_LOG_EDITOR=true \
-    ENABLE_ENTITY_CARDS=true ENABLE_PRIORITY_OPERATOR=true \
-    ENABLE_QUESTION_ENGINE=true ENABLE_SYNTHESIS=true \
-    ENABLE_COHESION_OPERATORS=true AUTH_ENABLED=false \
-    COORDINATION_FRAMES_ENABLED=true EMAIL_ONRAMP_ENABLED=true \
-    EMBEDDINGS_ENABLED=true JOB_VIGILANCE_ENABLED=true \
-    PROSE_JOBS_ENABLED=true SOP_CLAIM_RECEIPTS_ENABLED=true \
-    SOP_COMPOSE_ENABLED=true VIGILANCE_VOID_ENABLED=true \
-    WORKFOREST_SOP_ENABLED=true READINESS_ENABLED=true \
-    NAME_ASKS_ENABLED=true RECORD_CLASS_ENABLED=true \
-    nohup npx tsx server/index.ts >> ~/scratch/engine-3020-readiness.log 2>&1 &
+  ~/scratch/launch-engine-3020.sh    # thin wrapper over the repo-canonical
+  # AI-Light-Prototype/schema-browser/scripts/harness/launch-harness-engine.sh
   ```
+  It pre-flights the corpus path, auto-backs-up the org-state bundle, sets
+  `ENGINE_PROFILE=pilot-full` (the canonical flag set, drift-gated by tests),
+  and only reports success when the integrity gate prints OK. Boot log +
+  `/api/diagnostics` carry a feature-posture report — **zero warnings is the
+  green light**; any warning means a feature is silently hollow. Full
+  discipline: `ORG-STATE-PRESERVATION.md` (repo root).
   (`INGESTION_API_KEY=ss` = the dev app's bearer from
   `~/Library/Application Support/Viktora Threshold Dev/config.json`.)
 - **Shim harnesses** (browser pixel-checks without the native app; preserved
