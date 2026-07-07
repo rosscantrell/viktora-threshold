@@ -633,7 +633,10 @@ mod tests {
         assert_eq!(NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY, 1);
         // Workspace-persona additions (WP-WINDOW).
         assert_eq!(NS_APPLICATION_ACTIVATION_POLICY_REGULAR, 0);
-        assert_eq!(NS_COLLECTION_MANAGED, 2);
+        // NSWindowCollectionBehaviorManaged = 1 << 2 per the AppKit header.
+        // (This pin previously asserted 2 — 1 << 1 is MoveToActiveSpace, the
+        // bug-2 root cause fixed in #102; the pin had enshrined the bug.)
+        assert_eq!(NS_COLLECTION_MANAGED, 4);
         assert_eq!(NS_COLLECTION_FULL_SCREEN_PRIMARY, 128);
         // Panel bits = the three overlay flags OR'd together.
         assert_eq!(PANEL_BEHAVIOR_BITS, 1 | 16 | 256);
