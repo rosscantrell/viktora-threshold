@@ -319,8 +319,13 @@ pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
             let cls = (*view).class().name();
             // wry subclasses WKWebView as "WryWebView" — match the suffix, not
             // the WK name (live trace 2026-07-06: the WK needle found nothing).
+            // Do NOT stop at the first hit: WebKit nests several *WebView*-named
+            // views and the first match was an inner one (both property reads
+            // came back n/a while the halo was on screen) — print them ALL,
+            // with class names, so the trace identifies the real WKWebView.
             if cls.to_string_lossy().contains("WebView") {
                 found = true;
+                let cls_name = cls.to_string_lossy().into_owned();
                 let v_opaque: bool = msg_send![view, isOpaque];
                 let v_frame: objc2_foundation::NSRect = msg_send![view, frame];
                 // drawsBackground is a private WKWebView property. NEVER read it
@@ -374,10 +379,9 @@ pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
                     }
                 };
                 eprintln!(
-                    "[chrome-deep:{tag}] WKWebView frame=({:.0},{:.0} {:.0}x{:.0}) viewOpaque={v_opaque} drawsBackground={draws_bg_val} underPageBackgroundColor={upbc_desc} layer.bg={layer_desc}",
+                    "[chrome-deep:{tag}] webview[{cls_name}] frame=({:.0},{:.0} {:.0}x{:.0}) viewOpaque={v_opaque} drawsBackground={draws_bg_val} underPageBackgroundColor={upbc_desc} layer.bg={layer_desc}",
                     v_frame.origin.x, v_frame.origin.y, v_frame.size.width, v_frame.size.height,
                 );
-                break;
             }
             let subviews: *mut AnyObject = msg_send![view, subviews];
             let n: usize = if subviews.is_null() { 0 } else { msg_send![subviews, count] };
@@ -391,6 +395,56 @@ pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
         if !found {
             eprintln!("[chrome-deep:{tag}] no WKWebView found under contentView");
         }
+    }
+}
+
+/// THE HALO FIX (bug 1) — clear the WKWebView's underPageBackgroundColor.
+///
+/// Evidence chain (2026-07-07): the halo is a full-window-rect grey wash,
+/// visible over light desktop content, while EVERY probed layer is clean
+/// (window bgAlpha=0, hasShadow=false, contentView + webview layers nil,
+/// page paints transparent in a plain browser). The one unprobed layer was
+/// WKWebView's `underPageBackgroundColor`, whose macOS dark-mode DEFAULT is
+/// exactly a grey wash painted under transparent page content — invisible
+/// over dark wallpapers, a grey rectangle over light ones (matches every
+/// sighting, including the intermittency).
+///
+/// Walks the contentView tree and sets underPageBackgroundColor = clearColor
+/// on every view that responds (respondsToSelector-guarded — probes must
+/// never crash the app; the KVC abort of 2026-07-06 is the cautionary tale).
+/// Idempotent; call on the main thread at boot and after collapse.
+pub fn clear_webview_underpage(ns_window: *mut std::ffi::c_void, tag: &str) {
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            return;
+        }
+        let clear: *mut AnyObject = msg_send![objc2::class!(NSColor), clearColor];
+        let mut queue: Vec<*mut AnyObject> = vec![content];
+        let mut cleared = 0usize;
+        while let Some(view) = queue.pop() {
+            let responds: bool = msg_send![
+                view,
+                respondsToSelector: objc2::sel!(setUnderPageBackgroundColor:)
+            ];
+            if responds {
+                let _: () = msg_send![view, setUnderPageBackgroundColor: clear];
+                cleared += 1;
+            }
+            let subviews: *mut AnyObject = msg_send![view, subviews];
+            let n: usize = if subviews.is_null() { 0 } else { msg_send![subviews, count] };
+            for i in 0..n {
+                let sv: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                if !sv.is_null() {
+                    queue.push(sv);
+                }
+            }
+        }
+        eprintln!("[halo-fix:{tag}] underPageBackgroundColor → clear on {cleared} view(s)");
     }
 }
 
