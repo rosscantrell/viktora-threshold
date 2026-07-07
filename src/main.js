@@ -3959,17 +3959,28 @@ let _everythingElseHasContent = false;
 // over an unloaded body would read as broken, WP-R2 item 4's real concern).
 let _todayRollupSettled = false;
 
-// Show/hide the "Needs attention" collapsible: shown once the queue settles
-// empty AND the rollup has settled — WITH content (the worklist) or WITHOUT
-// (renderTodayAttention's calm "you're on top of it" line; WP-TODAY-READ-ACT
-// quiet report — an affirmative all-clear, not a vanished section). Until both
-// settle we keep it hidden (skeletons are still up).
+// Show/hide the "Needs attention" collapsible. NARROW (<1200px): the original
+// WP-R2 focus gate — the board shows only once the queue settles EMPTY (clear
+// what's waiting on you first; one column can't hold both). WIDE (>=1200px):
+// the gate is retired (Ross's 2026-07-07 real-estate ruling) — the read|act
+// layout has room for the queue AND the worklist, and hiding the board left
+// the whole lower page dead whenever the queue had cards. Rollup must have
+// settled either way (a header must never paint over an unloaded body).
 function reconcileEverythingElseVisibility() {
   const everySection = document.getElementById("log-everything-section");
   if (!everySection) return;
   const queueEmpty = _todayQueueEmpty === true;
-  everySection.hidden = !(queueEmpty && _todayRollupSettled);
+  const wide = window.innerWidth >= 1200;
+  everySection.hidden = !(_todayRollupSettled && (queueEmpty || wide));
 }
+
+// Crossing the 1200px breakpoint changes the board gate — re-reconcile on
+// resize (debounced; cheap no-op when nothing changes).
+let _boardGateResizeTimer = null;
+window.addEventListener("resize", () => {
+  if (_boardGateResizeTimer) clearTimeout(_boardGateResizeTimer);
+  _boardGateResizeTimer = setTimeout(reconcileEverythingElseVisibility, 150);
+});
 
 /** Set the active filter + reflect it on the segmented control's buttons. */
 function setTodayFilter(filter) {
