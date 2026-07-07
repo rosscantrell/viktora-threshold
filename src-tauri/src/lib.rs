@@ -6693,6 +6693,15 @@ fn widget_expand(
     // Mission Control / Cmd-Tab and can enter native full-screen. Without the
     // macOS half, decorations alone still leave an .accessory panel that the
     // window manager treats as a floating overlay.
+    // ORDER MATTERS: resizable BEFORE decorations. tao's set_decorations
+    // composes its styleMask from shared_state.resizable at CALL time and
+    // applies it async; with the old decorations-first order the late mask
+    // landed as titled-but-NON-resizable (0x0007, lldb-measured 2026-07-07),
+    // and AppKit letterboxes non-resizable windows in native fullscreen
+    // instead of granting them the screen frame (bug 2's black surround).
+    window
+        .set_resizable(true)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
     window
         .set_decorations(true)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
@@ -6704,9 +6713,6 @@ fn widget_expand(
     window
         .set_always_on_top(false)
         .map_err(|e| format!("set_always_on_top failed: {e}"))?;
-    window
-        .set_resizable(true)
-        .map_err(|e| format!("set_resizable failed: {e}"))?;
 
     // Overlay titlebar (macOS): hidden title + inline traffic lights floating
     // over the glass. `set_title("")` drops the title text; Overlay makes the
@@ -6842,15 +6848,19 @@ fn widget_collapse(
     window
         .set_skip_taskbar(true)
         .map_err(|e| format!("set_skip_taskbar failed: {e}"))?;
+    // ORDER MATTERS: resizable BEFORE decorations (mirror of widget_expand).
+    // tao's set_decorations composes its styleMask from shared_state.resizable
+    // at CALL time; with decorations-first the pill's late mask landed as
+    // 0x8 = RESIZABLE (trace 2026-07-07) — the click-and-hold pill resize bug.
+    window
+        .set_resizable(false)
+        .map_err(|e| format!("set_resizable failed: {e}"))?;
     window
         .set_decorations(false)
         .map_err(|e| format!("set_decorations failed: {e}"))?;
     // Restore the shadowless panel persona — toggling decorations re-enables
     // the system shadow, which paints a grey halo around the transparent pill.
     let _ = window.set_shadow(false);
-    window
-        .set_resizable(false)
-        .map_err(|e| format!("set_resizable failed: {e}"))?;
     // Clear the workspace min-size floor first (widget has no minimum), then
     // shrink to the widget pill.
     window
