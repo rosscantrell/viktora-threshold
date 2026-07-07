@@ -1397,7 +1397,17 @@ function isDismissed(item) {
 
 /** Drop dismissed items from an array (tolerates envelopes and bare records). */
 function withoutDismissed(items) {
-  return (Array.isArray(items) ? items : []).filter((it) => !isDismissed(it));
+  // WP-RECORD-CLASS (app half): the engine's binary junk gate marks vague
+  // aspirations / questions / chitchat as recordClass='not-a-commitment'
+  // (RECORD_CLASS_ENABLED, additive field; Ross's v2.0 ruling — a
+  // not-a-commitment verdict SUPPRESSES the record). This is the shared
+  // record chokepoint, so the suppression applies everywhere dismissals do.
+  // Flag-off servers ship no recordClass ⇒ byte-identical behavior.
+  return (Array.isArray(items) ? items : []).filter((it) => {
+    if (isDismissed(it)) return false;
+    const rec = (it && it.record) || it || {};
+    return rec.recordClass !== "not-a-commitment";
+  });
 }
 
 /** Reload the persisted dismissed-id set from the backend. Best-effort: a failed
