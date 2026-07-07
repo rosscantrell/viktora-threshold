@@ -2386,6 +2386,258 @@ code {
   gap: 8px;
   margin-bottom: 16px;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-R-c2 — Deadline outlook (the READ-side runway picture). Wide layout
+   only: below 1200px the section stays display:none regardless of [hidden]
+   state, so the narrow single-column flow renders byte-identically. Rows are
+   buttons (tap → scroll the matching Coming-up row into view).
+   ══════════════════════════════════════════════════════════════════════════ */
+.today-outlook {
+  display: none;
+}
+.today-outlook-rows {
+  --outlook-label-w: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--edge-highlight);
+}
+.today-outlook-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 3px;
+  margin-left: var(--outlook-label-w, 150px);
+}
+.today-outlook-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.today-outlook-row:hover .today-outlook-name {
+  color: var(--text-primary);
+}
+.today-outlook-label {
+  width: var(--outlook-label-w, 150px);
+  flex: none;
+  padding-right: 10px;
+  min-width: 0;
+}
+.today-outlook-name {
+  display: block;
+  font-size: 12px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-outlook-state {
+  display: block;
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-outlook-state[data-tone="warn"] {
+  color: var(--glass-accent);
+}
+.today-outlook-track {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  min-width: 0;
+}
+.today-outlook-bar {
+  position: absolute;
+  left: 0;
+  top: 5px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+}
+.today-outlook-bar[data-tone="warn"] {
+  background: rgba(255, 196, 64, 0.12);
+  border-color: rgba(255, 196, 64, 0.45);
+}
+.today-outlook-tick {
+  position: absolute;
+  top: 3px;
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--glass-text-faint);
+}
+.today-outlook-tick[data-tone="warn"] {
+  background: var(--glass-accent);
+}
+.today-outlook-due {
+  position: absolute;
+  top: 2px;
+  font-size: 10px;
+  color: var(--glass-text-dim);
+  padding-left: 6px;
+  white-space: nowrap;
+}
+.today-outlook-legend {
+  font-size: 10px;
+  color: var(--glass-text-faint);
+  margin: 0;
+  padding: 0 2px;
+}
+.today-outlook-item {
+  display: flex;
+  flex-direction: column;
+}
+.today-outlook-details {
+  margin: 4px 0 6px calc(var(--outlook-label-w, 150px) * 0);
+  padding: 10px 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.today-outlook-quote {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  margin: 0;
+  font-style: italic;
+}
+.today-outlook-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.today-outlook-step {
+  font-size: 11px;
+  color: var(--glass-text);
+  margin: 0;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+.today-outlook-step-text {
+  flex: 1;
+  min-width: 0;
+}
+.today-outlook-step-acts {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.today-outlook-docselect {
+  font-size: 10px;
+  height: 20px;
+  max-width: 220px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+.today-outlook-step[data-seen="no"] {
+  color: var(--glass-text-dim);
+}
+.today-outlook-step-mark {
+  flex: none;
+  font-size: 10px;
+}
+.today-outlook-step[data-seen="yes"] .today-outlook-step-mark {
+  color: var(--success-text);
+}
+.today-outlook-closing {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  margin: 2px 0 0;
+}
+.today-outlook-hop {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 0;
+}
+.today-outlook-mini {
+  font-size: 10px;
+  padding: 0 7px;
+  height: 20px;
+  margin-left: 6px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.today-outlook-mini:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.today-outlook-mini:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.today-outlook-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+.today-outlook-actions .today-outlook-mini {
+  margin-left: 0;
+}
+.today-outlook-datewrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.today-outlook-dateinput,
+.today-outlook-addlabel,
+.today-outlook-adddays {
+  font-size: 10px;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  color-scheme: dark;
+}
+.today-outlook-addlabel {
+  width: 180px;
+}
+.today-outlook-adddays {
+  width: 44px;
+}
+.today-outlook-error {
+  font-size: 10px;
+  color: var(--danger-text);
+  margin: 2px 0 0;
+}
+
+/* Tap-through landing flash on the Coming-up row. */
+.today-row-flash {
+  outline: 1px solid var(--accent-ring);
+  outline-offset: 2px;
+  transition: outline-color 1.2s var(--ease);
+}
 /* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
 .today-comingup[hidden] {
   display: none;
@@ -2395,6 +2647,10 @@ code {
    single-column flow (display:contents), a pinned flex column in the ≥1200px
    two-column grid (see the WP-WIDE-TODAY block). */
 #today-rail {
+  display: contents;
+}
+/* WP-R-c2 — the READ wrapper mirrors the rail: invisible to the narrow flow. */
+#today-read {
   display: contents;
 }
 
@@ -6132,6 +6388,13 @@ button.rec-source {
     max-width: 1480px;
     display: grid;
     grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+    /* WP-R-c2 rework (Ross's wasted-space report + Trisha's overlap repro,
+       both 2026-07-07): NOTHING spans rows anymore. Both columns are wrapped
+       (#today-read | #today-rail) and sit in ONE row-2 band, so the rail can
+       neither inflate the left rows (spanned intrinsic tracks share surplus
+       equally) nor overflow onto the board (spanning items crossing flexible
+       tracks are ignored in intrinsic sizing — a 1fr absorber can't contain
+       them; tried, regressed, reverted). */
     column-gap: 28px;
     row-gap: 0;
     align-items: start;
@@ -6145,34 +6408,50 @@ button.rec-source {
     grid-column: 1 / -1;
   }
   #view-log:not([hidden]) > .log-header { grid-row: 1; }
-  #view-log:not([hidden]) > #log-everything-section { grid-row: 7; }
-  #view-log:not([hidden]) > #log-status { grid-row: 8; }
+  #view-log:not([hidden]) > #log-everything-section { grid-row: 5; }
+  #view-log:not([hidden]) > #log-status { grid-row: 6; }
 
-  /* LEFT column (col 1) — the narrative panel FIRST (row 2), then the
-     on-demand SoP section and the demoted sections. Explicit rows so the
-     column stacks independently of the rail. min-height on the SoP section
-     keeps its composing/skeleton state visible (never a zero-height slot
-     that reads as broken). */
-  #view-log:not([hidden]) > #log-sop-panel { grid-column: 1; grid-row: 2; }
-  #view-log:not([hidden]) > #today-sop-section {
+  /* LEFT column (col 1) — ONE wrapper in the row-2 band: narrative panel,
+     on-demand SoP, Deadline outlook flow inside it (plain block flow, no
+     grid rows to inflate). min-height on the SoP section keeps its
+     composing/skeleton state visible (never a zero-height slot that reads
+     as broken). Priority/Stalled keep their own rows BELOW the band —
+     their DOM position (after the rail) can't join the wrapper without
+     reordering the narrow flow. */
+  #view-log:not([hidden]) > #today-read {
+    display: block;
     grid-column: 1;
-    grid-row: 3;
+    grid-row: 2;
+    min-width: 0;
+  }
+  #view-log:not([hidden]) #today-sop-section {
     min-height: 2.5em;
   }
-  #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 5; }
-  #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 6; }
+  /* WP-R-c2 — Deadline outlook renders in the wide layout only ([hidden] —
+     no due-soon items — still wins over the flex). */
+  #view-log:not([hidden]) #today-outlook-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  #view-log:not([hidden]) #today-outlook-section[hidden] {
+    display: none;
+  }
+  #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 3; }
+  #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 4; }
 
-  /* RIGHT rail (col 2) — one flowing action column spanning the left
-     column's rows: Waiting on you → Coming up → Awaiting send. NOT sticky:
-     the pin was inherited from the old design where the worklist scrolled
-     beside the queue in column 1; the worklist now lives full-width BELOW,
-     and a stuck rail floats out of its column and paints over the board on
-     scroll (Ross's overlap report, reproduced at 1280×860 + scrollY 500 —
-     rail bottom 447px past row-line 7 in document coords). A plain grid
-     item can never hover over row 7. */
+  /* RIGHT rail (col 2) — one flowing action column in the SAME single row-2
+     band as #today-read. NOT sticky (a stuck rail floats out of its column
+     and paints over the board — Ross's original overlap report) and NOT
+     row-spanning (a spanning rail either inflates the left rows — the
+     wasted-space report — or, with an fr absorber, is ignored by intrinsic
+     track sizing and overflows onto the board — Trisha's repro, 2026-07-07).
+     Two wrapped columns in one row: the row is as tall as the taller column,
+     and neither can paint over row 3+. */
   #view-log:not([hidden]) > #today-rail {
     grid-column: 2;
-    grid-row: 2 / 7;
+    grid-row: 2;
     display: flex;
     flex-direction: column;
     gap: 4px;

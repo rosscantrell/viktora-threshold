@@ -638,6 +638,14 @@
 
       <!-- WP-THRESHOLD-STATE-OF-PLAY — corpus altitude: the Monday overview across
            all projects, on demand. -->
+      <!-- WP-R-c2 overlap fix — the READ wrapper, symmetric with #today-rail:
+           display:contents in the narrow flow (order unchanged), a plain
+           block column in the ≥1200px grid. With BOTH columns wrapped,
+           nothing spans grid rows, so the rail can neither inflate the left
+           rows (the wasted-space report) nor overflow onto the board (the
+           overlap report — spec: spanning items crossing flexible tracks are
+           ignored in intrinsic sizing, so a 1fr absorber can't contain it). -->
+      <div id="today-read">
       <div class="sop-panel" id="log-sop-panel" hidden></div>
 
       <!-- ══════════════════════════════════════════════════════════════════
@@ -664,6 +672,30 @@
           <div class="sop-status today-sop-skeleton">Composing your state of play…</div>
         </div>
       </section>
+
+      <!-- WP-R-c2 — Deadline outlook: the READ-side runway picture for the same
+           due-soon commitments the Coming-up rail acts on. One bar per item,
+           today → due date on a 14-day axis; a tick marks where work usually
+           needs to start (workback latest-safe-start, when the engine serves
+           it), amber when that point passed with nothing seen. Fills the
+           left column's vacant row under the SoP in the ≥1200px layout ONLY
+           (display:none below — the narrow single-column flow is unchanged,
+           and Coming-up already carries the facts there). Derived client-side
+           from the same fetch_decision_log_full records as Coming-up; empty ⇒
+           hidden (never fabricated content). Tap a row → the matching
+           Coming-up row scrolls into view. -->
+      <section class="today-outlook" id="today-outlook-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Deadline outlook</h2>
+          <span class="today-section-count" id="today-outlook-count"></span>
+        </div>
+        <div class="today-outlook-rows" id="today-outlook-rows"></div>
+        <p class="today-outlook-legend" id="today-outlook-legend" hidden>
+          | = latest start that still makes the due date · amber = that point passed with nothing seen
+        </p>
+      </section>
+
+      </div><!-- /#today-read -->
 
       <!-- WP-TODAY-READ-ACT — the action rail. Layout-only wrapper: display:contents
            by default (invisible to the single-column flow), a flex column pinned

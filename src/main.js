@@ -3417,6 +3417,11 @@ function renderTodaySkeleton() {
   if (comingUpList) comingUpList.innerHTML = "";
   const comingUpCount = document.getElementById("today-comingup-count");
   if (comingUpCount) comingUpCount.textContent = "";
+  // WP-R-c2 — Deadline outlook resets with Coming up (same data source).
+  const outlook = document.getElementById("today-outlook-section");
+  if (outlook) outlook.hidden = true;
+  const outlookRows = document.getElementById("today-outlook-rows");
+  if (outlookRows) outlookRows.innerHTML = "";
 
   // Tray — hidden until fetch_outbox lands with staged drafts.
   const tray = document.getElementById("today-outbox-tray");
@@ -4803,21 +4808,24 @@ async function loadTodayComingUp() {
   // OPEN commitments due within [today, today+14d]. State lives on the wrapper
   // (it.state); type on the record. Decisions aren't "coming due" — commitments
   // are the promises with a deadline someone is waiting on.
+  // WP-R-c2 — a human due-reset (workback overlay) moves the EFFECTIVE due;
+  // filter/sort/display all follow it so the reset propagates everywhere.
+  const effDueOf = (it) => (it && it.effectiveDue) || ((it && it.record) || {}).due;
   const upcoming = [];
   for (const it of records) {
     const rec = (it && it.record) || {};
     if ((it.state || "open") !== "open") continue;
     if (rec.type && rec.type !== "commitment") continue;
-    const d = parseDueDate(rec.due);
+    const d = parseDueDate(effDueOf(it));
     if (!d) continue;
     const t = d.getTime();
     if (t < today.getTime() || t > horizon) continue; // overdue lives in "Needs attention"
     upcoming.push(it);
   }
-  // Soonest first.
+  // Soonest first (by effective due).
   upcoming.sort((a, b) => {
-    const da = parseDueDate(a.record && a.record.due);
-    const db = parseDueDate(b.record && b.record.due);
+    const da = parseDueDate(effDueOf(a));
+    const db = parseDueDate(effDueOf(b));
     return (da ? da.getTime() : 0) - (db ? db.getTime() : 0);
   });
 
@@ -4833,6 +4841,11 @@ async function loadTodayComingUp() {
   if (groupsEl) groupsEl.innerHTML = "";
   if (listEl) listEl.innerHTML = "";
   if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
+
+  // WP-R-c2 — the Deadline-outlook panel reads the SAME rows (soonest-first,
+  // Mine-filtered) so the two projections can never disagree. Renders only in
+  // the wide layout (CSS-gated); never throws into this loader.
+  try { renderTodayOutlook(rows, today); } catch (e) { console.warn("[main] outlook:", e); }
 
   // Empty ⇒ quiet line (WP-TODAY-READ-ACT): "nothing due in the next two weeks"
   // is affirmative information — the windshield stays present so the morning
@@ -4880,6 +4893,400 @@ async function loadTodayComingUp() {
   }
 }
 
+/** WP-R-c2 — Deadline outlook (the READ half of workback; Ross's vacant-space
+ *  ruling 2026-07-07). One runway bar per due-soon commitment on a 14-day
+ *  axis: bar = today → due; tick = where work usually needs to start (the
+ *  workback latest-safe-start, when the engine serves workbackShadow —
+ *  shape-tolerant, absent on flag-off servers ⇒ bars only, no ticks); amber
+ *  = the engine's claim this isn't moving ('not on track' when the workback
+ *  projection fired, else tier-1's 'no draft observed'). Tap a row → the
+ *  matching Coming-up row scrolls into view in the rail. Same §2.11 copy
+ *  rules as the badges: plain words, no machinery vocabulary. */
+/** Expanded swimlanes survive the full re-render a gesture triggers (the
+ *  refetch is what makes propagation visible everywhere at once). */
+const _outlookExpanded = new Set();
+
+/** POST one workback gesture, then refetch so the reset/verdict propagates
+ *  through every surface (outlook bars, Coming-up tags, scope). Buttons stay
+ *  disabled for the flight; errors land inline, never thrown. */
+async function sendWorkbackGesture(box, recordId, body) {
+  const buttons = box.querySelectorAll("button, input, select");
+  buttons.forEach((b) => (b.disabled = true));
+  try {
+    await tauri.core.invoke("workback_gesture", { recordId, body });
+    await loadTodayComingUp();
+  } catch (e) {
+    buttons.forEach((b) => (b.disabled = false));
+    let err = box.querySelector(".today-outlook-error");
+    if (!err) {
+      err = document.createElement("p");
+      err.className = "today-outlook-error";
+      box.appendChild(err);
+    }
+    err.textContent = "That didn't save — is the server reachable?";
+    console.warn("[main] workback gesture:", e);
+  }
+}
+
+function renderTodayOutlook(rows, today) {
+  const section = document.getElementById("today-outlook-section");
+  const rowsEl = document.getElementById("today-outlook-rows");
+  const countEl = document.getElementById("today-outlook-count");
+  const legendEl = document.getElementById("today-outlook-legend");
+  if (!section || !rowsEl) return;
+  rowsEl.innerHTML = "";
+  if (!rows || !rows.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (countEl) countEl.textContent = "next two weeks";
+
+  const t0 = today.getTime();
+  const span = COMINGUP_WINDOW_DAYS * 86400000;
+  const pctOf = (ms) => Math.max(0, Math.min(100, ((ms - t0) / span) * 100));
+  const shortDate = (d) =>
+    d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  // Axis: today · +7d · +14d over a hairline.
+  const axis = document.createElement("div");
+  axis.className = "today-outlook-axis";
+  for (const [label] of [["today"], [shortDate(new Date(t0 + span / 2))], [shortDate(new Date(t0 + span))]]) {
+    const s = document.createElement("span");
+    s.textContent = label;
+    axis.appendChild(s);
+  }
+  rowsEl.appendChild(axis);
+
+  let anyTick = false;
+  for (const entry of rows) {
+    const rec = (entry && entry.record) || {};
+    const due = parseDueDate((entry && entry.effectiveDue) || rec.due);
+    if (!due) continue;
+    const duePct = pctOf(due.getTime());
+    const days = Math.round((due.getTime() - t0) / 86400000);
+    const rel = days <= 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`;
+
+    // Workback shadow — shape-tolerant (wrapper or record; projection nested
+    // or flat), absent entirely until the engine flag is on and §5b admits it.
+    const wb = entry.workbackShadow || rec.workbackShadow || null;
+    const proj = wb && (wb.projection || wb);
+    const fired = !!(proj && proj.fire);
+    const safeStart = proj && proj.latestSafeStart ? parseDueDate(String(proj.latestSafeStart)) : null;
+
+    const readiness = entry.readiness || rec.readiness || null;
+    const lc = entry.lifecycle || {};
+    let state = "on track";
+    let tone = "";
+    if (fired) {
+      state = `not on track · ${rel}`;
+      tone = "warn";
+    } else if (readiness === "no-precursor") {
+      state = "no draft observed";
+      tone = "warn";
+    } else if (typeof lc.silentDays === "number" && lc.silentDays >= COMINGUP_QUIET_SILENT_DAYS) {
+      state = `quiet ${lc.silentDays}d`;
+    }
+
+    // "on track" alone is empty calories — say when the first unstarted step
+    // needs to begin, when the plan knows it.
+    if (state === "on track" && proj && proj.fireDate) {
+      const fs = parseDueDate(String(proj.fireDate));
+      if (fs && fs.getTime() >= t0) state = `on track · start by ${shortDate(fs)}`;
+    }
+
+    const item = document.createElement("div");
+    item.className = "today-outlook-item";
+
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "today-outlook-row";
+    row.title = rec.summary || "";
+    row.setAttribute("aria-expanded", "false");
+
+    const label = document.createElement("span");
+    label.className = "today-outlook-label";
+    const name = document.createElement("span");
+    name.className = "today-outlook-name";
+    // The summary is the informative line (the entity slug reads as noise —
+    // Ross, live session 2026-07-07); ellipsis handles length, title has it all.
+    name.textContent = rec.summary || (rec.primaryEntity ? prettySlug(rec.primaryEntity) : "");
+    const st = document.createElement("span");
+    st.className = "today-outlook-state";
+    if (tone) st.dataset.tone = tone;
+    st.textContent = state;
+    label.appendChild(name);
+    label.appendChild(st);
+    row.appendChild(label);
+
+    const track = document.createElement("span");
+    track.className = "today-outlook-track";
+    const bar = document.createElement("span");
+    bar.className = "today-outlook-bar";
+    bar.style.width = `${Math.max(duePct, 2)}%`;
+    if (tone === "warn") bar.dataset.tone = "warn";
+    track.appendChild(bar);
+
+    if (safeStart && safeStart.getTime() <= due.getTime()) {
+      const tick = document.createElement("span");
+      tick.className = "today-outlook-tick";
+      tick.style.left = `${pctOf(safeStart.getTime())}%`;
+      if (safeStart.getTime() < t0) tick.dataset.tone = "warn";
+      tick.title = `Work needs to start by ${shortDate(safeStart)} to make the due date`;
+      track.appendChild(tick);
+      anyTick = true;
+    }
+
+    const dueTag = document.createElement("span");
+    dueTag.className = "today-outlook-due";
+    dueTag.style.left = `${Math.min(duePct, 84)}%`;
+    dueTag.textContent = shortDate(due);
+    track.appendChild(dueTag);
+    row.appendChild(track);
+
+    // Click = open the reasoning inline (the swimlane IS the entry point —
+    // Ross's live report: scroll-to-rail read as "nothing happened"). The
+    // details block renders lazily from the shadow payload; "Show in Coming
+    // up" lives inside it as the secondary hop.
+    const details = document.createElement("div");
+    details.className = "today-outlook-details";
+    details.hidden = true;
+    const openDetails = () => {
+      if (!details.childNodes.length) renderOutlookDetails(details, entry, rec, wb, proj);
+      details.hidden = false;
+      row.setAttribute("aria-expanded", "true");
+      _outlookExpanded.add(rec.recordId);
+    };
+    row.addEventListener("click", () => {
+      if (details.hidden) return openDetails();
+      details.hidden = true;
+      row.setAttribute("aria-expanded", "false");
+      _outlookExpanded.delete(rec.recordId);
+    });
+    // Survive the post-gesture re-render.
+    if (_outlookExpanded.has(rec.recordId)) openDetails();
+
+    item.appendChild(row);
+    item.appendChild(details);
+    rowsEl.appendChild(item);
+  }
+  if (legendEl) legendEl.hidden = !anyTick;
+}
+
+/** The inline reasoning block under a Deadline-outlook swimlane. Reads only
+ *  what the engine served (workbackShadow: steps/verdicts/projection +
+ *  record verbatim) — §2.11 plain copy, no machinery vocabulary, absence
+ *  claims scoped to connected sources. */
+function renderOutlookDetails(box, entry, rec, wb, proj) {
+  const shortDate = (d) =>
+    d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const gesture = (body) => sendWorkbackGesture(box, rec.recordId, body);
+  const miniBtn = (label, title, onClick) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "today-outlook-mini";
+    b.textContent = label;
+    if (title) b.title = title;
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onClick();
+    });
+    return b;
+  };
+
+  // Where this came from — the traceback (who promised, verbatim, when).
+  if (rec.verbatim || rec.owner) {
+    const src = document.createElement("p");
+    src.className = "today-outlook-quote";
+    const who = rec.owner ? prettySlug(rec.owner) : "";
+    src.textContent = (who ? who + " — " : "") + (rec.verbatim ? `“${rec.verbatim}”` : "");
+    box.appendChild(src);
+  }
+
+  const steps = (wb && wb.steps) || [];
+  const verdicts = (wb && wb.verdicts) || [];
+  const safeStarts = (proj && proj.latestSafeStart) || [];
+  if (steps.length) {
+    const list = document.createElement("div");
+    list.className = "today-outlook-steps";
+    steps.forEach((s, i) => {
+      const v = verdicts.find((x) => x && x.index === i);
+      const seen = v && v.status === "observed";
+      const line = document.createElement("p");
+      line.className = "today-outlook-step";
+      line.dataset.seen = seen ? "yes" : "no";
+      const mark = document.createElement("span");
+      mark.className = "today-outlook-step-mark";
+      mark.textContent = seen ? "✓" : "○";
+      line.appendChild(mark);
+      const text = document.createElement("span");
+      let when = "";
+      const byd = safeStarts[i] ? parseDueDate(String(safeStarts[i])) : null;
+      if (!seen && byd) when = ` — not seen yet · needs to start by ${shortDate(byd)} to make the date`;
+      else if (seen) when = " — seen";
+      text.className = "today-outlook-step-text";
+      text.textContent = (s.label || s.kind || "step") + when;
+      line.appendChild(text);
+      // The HITL gestures — right-aligned as one column so the pills line up
+      // across rows. Every tap lands in the correction stream AND recomputes
+      // the dates in place (the refetch re-renders all surfaces).
+      const acts = document.createElement("span");
+      acts.className = "today-outlook-step-acts";
+      if (!seen) {
+        acts.appendChild(
+          miniBtn("done", "This already happened — mark it seen", () =>
+            gesture({ gesture: "step-done", stepIndex: i, stepKind: s.kind })),
+        );
+        acts.appendChild(
+          miniBtn("doesn't apply", "This step isn't part of this deliverable", () =>
+            gesture({ gesture: "step-not-applicable", stepIndex: i, stepKind: s.kind })),
+        );
+        // Tag the doc that IS this step's artifact — the human override for
+        // the matcher (renders only when the window has candidate docs).
+        const cands = (wb && wb.candidates) || [];
+        if (cands.length) {
+          const tagBtn = miniBtn("tag a doc", "Point at the document that shows this happened", () => {
+            picker.hidden = !picker.hidden;
+          });
+          const picker = document.createElement("span");
+          picker.hidden = true;
+          picker.className = "today-outlook-datewrap";
+          const sel = document.createElement("select");
+          sel.className = "today-outlook-docselect";
+          for (const c of cands) {
+            const o = document.createElement("option");
+            o.value = c.docId;
+            o.textContent = `${c.title || c.docId} · ${c.date || ""}`;
+            sel.appendChild(o);
+          }
+          picker.appendChild(sel);
+          picker.appendChild(
+            miniBtn("tag", "", () =>
+              gesture({ gesture: "evidence-attach", stepIndex: i, docId: sel.value })),
+          );
+          acts.appendChild(tagBtn);
+          acts.appendChild(picker);
+        }
+      } else if (v && v.evidenceDocId) {
+        acts.appendChild(
+          miniBtn("not this", "That document isn't evidence of this step", () =>
+            gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId })),
+        );
+      }
+      if (acts.childNodes.length) line.appendChild(acts);
+      list.appendChild(line);
+    });
+    box.appendChild(list);
+
+    const closing = document.createElement("p");
+    closing.className = "today-outlook-closing";
+    const fireD = proj && proj.fireDate ? parseDueDate(String(proj.fireDate)) : null;
+    if (proj && proj.fire) {
+      closing.textContent =
+        "At this pace this likely lands late — worth a heads-up while there's still time.";
+    } else if (fireD) {
+      closing.textContent = `Still time — the first step needs to start by ${shortDate(fireD)}. I haven't seen it in the connected sources yet.`;
+    }
+    if (closing.textContent) box.appendChild(closing);
+  } else {
+    // No chain served. Two honest reasons: short runway (deliberately out of
+    // workback scope — the due-soon warning owns items promised <7d before
+    // due; §SW1 finding) vs. in-scope but nothing computed/admitted yet.
+    const none = document.createElement("p");
+    none.className = "today-outlook-closing";
+    const dueD = parseDueDate(rec.due);
+    const capD = rec.date ? parseDueDate(String(rec.date).slice(0, 10)) : null;
+    const runway = dueD && capD ? Math.round((dueD - capD) / 86400000) : null;
+    if (runway !== null && runway < 7) {
+      const days = Math.max(runway, 0);
+      none.textContent = `Promised ${days === 0 ? "the day it was due" : days === 1 ? "a day before it's due" : days + " days before it's due"} — too tight for a step-by-step plan, so watch this one directly.`;
+    } else {
+      none.textContent = "No step-by-step plan for this one yet.";
+    }
+    box.appendChild(none);
+  }
+
+  // Footer gestures: reset the date (event-sourced overlay — the source
+  // document's date stays; undo restores it), add a missed step, undo.
+  const actions = document.createElement("div");
+  actions.className = "today-outlook-actions";
+
+  const dateWrap = document.createElement("span");
+  dateWrap.className = "today-outlook-datewrap";
+  const dateBtn = miniBtn("move the date", "Reset the due date — everything recomputes from it", () => {
+    dateForm.hidden = !dateForm.hidden;
+  });
+  const dateForm = document.createElement("span");
+  dateForm.hidden = true;
+  const dateInput = document.createElement("input");
+  dateInput.type = "date";
+  dateInput.className = "today-outlook-dateinput";
+  dateInput.value = String((entry && entry.effectiveDue) || rec.due || "").slice(0, 10);
+  const dateGo = miniBtn("apply", "", () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput.value)) return;
+    gesture({ gesture: "due-reset", due: dateInput.value });
+  });
+  dateForm.appendChild(dateInput);
+  dateForm.appendChild(dateGo);
+  dateWrap.appendChild(dateBtn);
+  dateWrap.appendChild(dateForm);
+  actions.appendChild(dateWrap);
+
+  const addWrap = document.createElement("span");
+  addWrap.className = "today-outlook-datewrap";
+  const addBtn = miniBtn("add a step", "A step this plan is missing", () => {
+    addForm.hidden = !addForm.hidden;
+  });
+  const addForm = document.createElement("span");
+  addForm.hidden = true;
+  const addLabel = document.createElement("input");
+  addLabel.type = "text";
+  addLabel.placeholder = "What has to happen";
+  addLabel.className = "today-outlook-addlabel";
+  const addDays = document.createElement("input");
+  addDays.type = "number";
+  addDays.min = "0";
+  addDays.max = "60";
+  addDays.value = "1";
+  addDays.title = "Working days this step needs";
+  addDays.className = "today-outlook-adddays";
+  const addGo = miniBtn("add", "", () => {
+    const label = addLabel.value.trim();
+    const leadDays = Math.max(0, Math.min(60, parseInt(addDays.value, 10) || 0));
+    if (!label) return;
+    gesture({ gesture: "add-step", step: { label, kind: "other", leadDays } });
+  });
+  addForm.appendChild(addLabel);
+  addForm.appendChild(addDays);
+  addForm.appendChild(addGo);
+  addWrap.appendChild(addBtn);
+  addWrap.appendChild(addForm);
+  actions.appendChild(addWrap);
+
+  actions.appendChild(
+    miniBtn("undo last change", "Revert the most recent correction on this item", () =>
+      gesture({ gesture: "undo" })),
+  );
+  box.appendChild(actions);
+
+  // Secondary hop: the actionable row in the rail (drafts live there).
+  const hop = document.createElement("button");
+  hop.type = "button";
+  hop.className = "btn btn-link today-outlook-hop";
+  hop.textContent = "Show in Coming up →";
+  hop.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const target = document.querySelector(
+      `#today-comingup-section [data-record-id="${rec.recordId}"]`,
+    );
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.classList.add("today-row-flash");
+    setTimeout(() => target.classList.remove("today-row-flash"), 1600);
+  });
+  box.appendChild(hop);
+}
+
 /** One "Coming up" row — the same anatomy as a needs-attention row, but the due
  *  date is rendered prominently (relative + absolute), items due within 48h get
  *  the amber/urgent treatment, and a "quiet" badge shows when the item has been
@@ -4890,8 +5297,13 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
   const row = document.createElement("div");
   row.className = "log-attention-row today-comingup-row";
   row.dataset.type = rec.type || "";
+  // WP-R-c2 — the Deadline-outlook tap-through target.
+  if (rec.recordId) row.dataset.recordId = rec.recordId;
 
-  const d = parseDueDate(rec.due);
+  // Effective due (a human date-reset overlay) wins over the extracted due.
+  const effDue = (entry && entry.effectiveDue) || rec.due;
+  const moved = !!(entry && entry.effectiveDue && rec.due && entry.effectiveDue !== rec.due);
+  const d = parseDueDate(effDue);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const days = d ? Math.round((d.getTime() - today.getTime()) / 86400000) : null;
@@ -4919,6 +5331,13 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
       days <= 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`;
     const abs = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
     dueTag.textContent = `${rel} · ${abs}`;
+    if (moved) {
+      const od = parseDueDate(rec.due);
+      if (od) {
+        dueTag.textContent += ` · moved from ${od.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+        dueTag.title = "Date was reset by hand — the original came from the source document.";
+      }
+    }
     head.appendChild(dueTag);
   }
   // WP-READINESS (app half) — the engine's per-commitment readiness verdict.
