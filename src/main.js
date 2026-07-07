@@ -2634,6 +2634,18 @@ function buildRecordMetaSegments(meta, rec) {
   return segs.length;
 }
 
+/**
+ * Type-chip label for a record. Categorization tolerance (WP-C fold): a
+ * commitment upgraded to recordClass 'objective' wears its own quiet label —
+ * milestone semantics — the day the objective overlay lights up. Absent or
+ * unknown classes keep today's labels exactly (fail-open; never classify
+ * client-side).
+ */
+function recordTypeLabel(rec) {
+  if (rec && rec.type !== "decision" && rec.recordClass === "objective") return "Objective";
+  return rec && rec.type === "decision" ? "Decision" : "Commitment";
+}
+
 function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   const card = document.createElement("div");
   card.className = "record-card";
@@ -2641,13 +2653,15 @@ function renderRecordCard(rec, recState, lifecycle, recEdges, attribution) {
   if (recState) card.dataset.state = recState;
 
   // Header: type chip + (state pill when not open).
+  // (Type-chip labels flow through recordTypeLabel so the WP-C 'objective'
+  // upgrade renders its own quiet variant the day the overlay lights up.)
   const header = document.createElement("div");
   header.className = "record-header";
 
   const chip = document.createElement("span");
   chip.className = "record-chip";
   chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  chip.textContent = recordTypeLabel(rec);
   header.appendChild(chip);
 
   if (recState && recState !== "open") {
@@ -4437,7 +4451,7 @@ function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
   const chip = document.createElement("span");
   chip.className = "record-chip";
   chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  chip.textContent = recordTypeLabel(rec);
   head.appendChild(chip);
   if (rec.primaryEntity) {
     const subj = document.createElement("span");
@@ -4678,7 +4692,7 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
   const chip = document.createElement("span");
   chip.className = "record-chip";
   chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  chip.textContent = recordTypeLabel(rec);
   head.appendChild(chip);
   if (rec.primaryEntity) {
     const subj = document.createElement("span");
@@ -7422,7 +7436,7 @@ function renderEdgeEndpoint(rec, baseUrl) {
   const chip = document.createElement("span");
   chip.className = "record-chip";
   chip.dataset.type = rec.type || "";
-  chip.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  chip.textContent = recordTypeLabel(rec);
   head.appendChild(chip);
   // Project chip(s) — trace this record back to its project (WP-THRESHOLD-NAV).
   for (const p of (_edgesDocProjects.get(rec.documentId) || []).slice(0, 2)) {
@@ -9989,6 +10003,47 @@ function openBulkJobMovePicker(anchorEl) {
   input.placeholder = "+ New category…";
   input.className = "frame-move-new-input";
   header.appendChild(input);
+
+  // Trisha UAT Issue 2 (bulk half): when every ticked job lives under the same
+  // top frame, a new category defaults to NESTING there (her model: everything
+  // Merck stays under Merck Above Brand). Mixed selections keep top-level.
+  const topOf = (jobKey) => {
+    for (const f of frames) {
+      if (Array.isArray(f.jobKeys) && f.jobKeys.includes(jobKey)) {
+        if (f.parentFid == null) return f;
+        return frames.find((p) => p.fid === f.parentFid) || f;
+      }
+    }
+    return null;
+  };
+  const tops = new Set(selected.map(([jk]) => topOf(jk)).filter(Boolean));
+  const homeTop = tops.size === 1 ? [...tops][0] : null;
+  let nestUnderTop = !!homeTop;
+  if (homeTop) {
+    const scope = document.createElement("div");
+    scope.className = "frame-move-scope";
+    const underChip = document.createElement("button");
+    underChip.type = "button";
+    underChip.className = "frame-type-chip active";
+    underChip.textContent = `Under ${homeTop.name}`;
+    underChip.title = `Create as a sub-category inside ${homeTop.name}`;
+    const topChip = document.createElement("button");
+    topChip.type = "button";
+    topChip.className = "frame-type-chip";
+    topChip.textContent = "New top-level";
+    topChip.title = "Create as a new top-level category";
+    const setScope = (nest) => {
+      nestUnderTop = nest;
+      underChip.classList.toggle("active", nest);
+      topChip.classList.toggle("active", !nest);
+      input.focus();
+    };
+    underChip.addEventListener("click", () => setScope(true));
+    topChip.addEventListener("click", () => setScope(false));
+    scope.appendChild(underChip);
+    scope.appendChild(topChip);
+    header.appendChild(scope);
+  }
   menu.appendChild(header);
 
   const emit = async (toFrameName, createEdit) => {
@@ -10010,7 +10065,12 @@ function openBulkJobMovePicker(anchorEl) {
     if (e.key !== "Enter") return;
     const name = input.value.trim();
     if (!name) return;
-    emit(name, { eventType: "create_frame", frameName: name, frameType: "initiative" });
+    emit(
+      name,
+      nestUnderTop && homeTop
+        ? { eventType: "create_frame", frameName: name, frameType: "workstream", parentFrameName: homeTop.name }
+        : { eventType: "create_frame", frameName: name, frameType: "initiative" },
+    );
   });
 
   const list = document.createElement("div");
@@ -10490,7 +10550,7 @@ function renderDigestProposals(container, decomp, slug, label, panel) {
       const c = card();
       const txt = document.createElement("div");
       txt.className = "sop-edit-text";
-      txt.textContent = `${cand.type === "decision" ? "Decision" : "Commitment"}: ${cand.summary}`;
+      txt.textContent = `${recordTypeLabel(cand)}: ${cand.summary}`;
       c.appendChild(txt);
       const row = document.createElement("div");
       row.className = "sop-edit-controls";
@@ -11678,7 +11738,7 @@ function renderLinkedRecord(rec, recState) {
   const t = document.createElement("span");
   t.className = "linked-rec-type";
   t.dataset.type = rec.type || "";
-  t.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  t.textContent = recordTypeLabel(rec);
   head.appendChild(t);
   // Status pill — mirrors the record card's lifecycle pill so the popover shows
   // whether the other end is still standing (open) or already closed. Only when
@@ -11912,7 +11972,7 @@ function renderDecisionCard(rec, recState, projects) {
   const typeLabel = document.createElement("span");
   typeLabel.className = "record-type-label";
   typeLabel.dataset.type = rec.type || "";
-  typeLabel.textContent = rec.type === "decision" ? "Decision" : "Commitment";
+  typeLabel.textContent = recordTypeLabel(rec);
   header.appendChild(typeLabel);
 
   const isOpen = !recState || recState === "open";
