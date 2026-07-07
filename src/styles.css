@@ -2457,6 +2457,27 @@ code {
   padding: 1px 7px;
   white-space: nowrap;
 }
+/* WP-READINESS Tier 2 — "Draft heads-up to client": the row's amber primary
+   action (mockup 3's grammar — amber-tint fill, spent only on the needs-you
+   action). Small to sit in the row-actions line. */
+.today-headsup-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 7px;
+  background: rgba(255, 196, 64, 0.14);
+  border: 1px solid rgba(255, 196, 64, 0.5);
+  color: var(--glass-accent);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.today-headsup-btn:hover {
+  background: rgba(255, 196, 64, 0.22);
+}
+.today-headsup-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* WP-READINESS — the "no draft observed" flag (the Brian warning): the same
    ghost-pill grammar as the quiet badge but wearing amber, because "due soon
    and nothing has moved since the promise" is a needs-you signal, not

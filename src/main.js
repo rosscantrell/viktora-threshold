@@ -4400,12 +4400,56 @@ function renderComingUpRow(entry, submitterByDoc, viewerEmail) {
   }
   appendSourceBadge(footer, rec.documentId, rec.verbatim);
   appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
+  // WP-READINESS Tier 2 — the mockup-3 amber action: when this due-soon item
+  // isn't moving (no-precursor or quiet), offer the one-tap client heads-up.
+  // The server composes the no-blame copy and stages it to the Outbox; nothing
+  // sends. Follow-up (chasing the OWNER) stays available beside it.
+  if (readiness === "no-precursor" || readiness === "quiet") {
+    appendHeadsUpControl(footer, rec);
+  }
   appendDraftFollowUpControl(footer, rec);
   appendDismissControl(footer, rec.recordId, row, rec.summary);
   row.appendChild(footer);
 
   applyRecordCardEditing(row, rec);
   return row;
+}
+
+/** WP-READINESS Tier 2 — "Draft heads-up to client": stages the server-composed
+ *  no-blame heads-up for a due-soon commitment into the Outbox (staging only).
+ *  Amber — this is the row's needs-you action. */
+function appendHeadsUpControl(actionsEl, rec) {
+  if (!rec || !rec.recordId) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn today-headsup-btn";
+  btn.textContent = "Draft heads-up to client";
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    btn.disabled = true;
+    try {
+      const res = await tauri.core.invoke("outbox_heads_up", { recordId: rec.recordId });
+      const deduped = !!(res && res.deduped);
+      showToast(
+        deduped
+          ? { kind: "success", title: "Already staged", body: "This heads-up is already in your Outbox." }
+          : {
+              kind: "success",
+              title: "Heads-up drafted",
+              body: "Find it in Outbox, or bring it forward from the Threshold add-in in Outlook.",
+            },
+      );
+    } catch (err) {
+      showToast({
+        kind: "failure",
+        title: "Couldn't draft the heads-up",
+        body: String(err && err.message ? err.message : err),
+      });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  actionsEl.appendChild(btn);
 }
 
 /** One contradiction — a compact inline warning chip (severity tag + the two
