@@ -2172,6 +2172,65 @@ code {
   padding: 2px 0;
 }
 
+/* ── WP-ATTN-CARDS (mockup 2) — compact accent-bar group cards ─────────────
+   One card per project group: 2px amber left bar (the one place amber marks
+   attention), ghost surface, title · count head that toggles the rows, and the
+   worst-item summary line while collapsed. Rows keep their existing rendering
+   inside .attn-card-body. */
+.attn-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 0.5px solid var(--glass-border);
+  border-left: 2px solid var(--glass-accent);
+  border-radius: 0 var(--glass-radius-sm) var(--glass-radius-sm) 0;
+  padding: 9px 12px 10px;
+  gap: 0;
+}
+.attn-card-head {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.attn-card-head .log-attention-group-title {
+  margin: 0;
+  color: var(--glass-text-dim);
+}
+.attn-card-caret {
+  margin-left: auto;
+  color: var(--glass-text-faint);
+  font-size: 11px;
+  line-height: 1;
+}
+.attn-card-worst {
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--glass-text-dim);
+}
+.attn-status-silent,
+.attn-status-overdue {
+  color: var(--glass-accent);
+}
+.attn-status-blocked {
+  color: var(--glass-danger);
+}
+.attn-card-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.attn-card-body[hidden] {
+  display: none;
+}
+
 .log-state-pill {
   display: inline-flex;
   align-items: center;
@@ -2332,6 +2391,34 @@ code {
   background: transparent;
   border-color: transparent;
   padding-left: 0;
+}
+
+/* ── WP-SOP-DIGEST (mockup 2) — Today's overview leads with a digest ───────
+   While collapsed: the lead prose clamps to 4 lines and labelled sections hide;
+   the "Do this first" action line stays fully visible (it's the point of the
+   morning report). Show more reveals the full narrative in place. */
+.sop-digest.sop-digest-collapsed .sop-prose:not(.sop-dothis) {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sop-digest.sop-digest-collapsed .sop-section {
+  display: none;
+}
+.sop-dothis {
+  margin-top: 8px;
+  color: var(--glass-text);
+}
+.sop-showmore {
+  /* Override the legacy global `.btn-link { position:absolute; top:4px;
+     right:0 }` (same fight as .main-header-actions / .record-actions) so the
+     toggle flows in place under the digest. */
+  position: static;
+  align-self: flex-start;
+  font-size: 11.5px;
+  padding: 2px 0;
+  margin-top: 2px;
 }
 
 /* Coming up — the forward-looking window. Rows reuse .log-attention-row; the due

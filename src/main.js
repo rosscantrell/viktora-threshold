@@ -3315,6 +3315,7 @@ function renderTodaySkeleton() {
 
   // Needs-attention group expanders start collapsed on each fresh Today entry.
   _attentionExpandedGroups.clear();
+  _attentionOpenCards.clear();
 }
 
 // Toggle the demoted "Filed automatically" line inside "Waiting on you"
@@ -3830,6 +3831,11 @@ const ATTENTION_GROUP_COLLAPSE_THRESHOLD = 6;
 const ATTENTION_GROUP_COLLAPSE_VISIBLE = 5;
 // Group keys the user expanded this session (survives re-render; cleared on view enter).
 const _attentionExpandedGroups = new Set();
+// WP-ATTN-CARDS — group keys whose compact card is OPEN (rows visible). Separate
+// from _attentionExpandedGroups, which tracks the >6 ⇒ "Show all" row expander
+// INSIDE an open card; sharing the set would force every opened card to show
+// all rows. Cleared together on view enter.
+const _attentionOpenCards = new Set();
 
 /**
  * WP-WIDE-TODAY (coordinator amendment 2) — display-side fail-safe for
@@ -3923,18 +3929,7 @@ function renderTodayAttention() {
 
   if (grouped) {
     for (const grp of grouped) {
-      const wrap = document.createElement("div");
-      wrap.className = "log-attention-group";
-      const head = document.createElement("h3");
-      head.className = "log-attention-group-title";
-      head.textContent = displayGroupLabel(grp.label);
-      const count = document.createElement("span");
-      count.className = "log-attention-group-count";
-      count.textContent = String(grp.items.length);
-      head.appendChild(count);
-      wrap.appendChild(head);
-      renderAttentionGroupRows(wrap, grp, renderRow);
-      groupsEl.appendChild(wrap);
+      groupsEl.appendChild(renderAttentionGroupCard(grp, renderRow));
     }
   } else {
     for (const entry of sortAttentionRows(rows)) listEl.appendChild(renderRow(entry));
@@ -3949,6 +3944,111 @@ function renderTodayAttention() {
           : "Nothing overdue and silent. You're on top of it.";
     }
   }
+}
+
+/**
+ * WP-ATTN-CARDS (mockup 2) — one needs-attention GROUP as a compact accent-bar
+ * card: amber left bar, title · count, and the group's WORST item as a single
+ * quiet summary line (owner · due · status; status word amber for silent/
+ * overdue, soft red for blocked). The full rows render IN PLACE on expand
+ * (lazily, first open) via renderAttentionGroupRows — which keeps its own
+ * >6 ⇒ top-5 + "Show all N →" behavior. Expansion is remembered per group key
+ * (_attentionExpandedGroups) so re-renders keep open cards open.
+ */
+function renderAttentionGroupCard(grp, renderRow) {
+  const wrap = document.createElement("div");
+  wrap.className = "log-attention-group attn-card";
+  const expanded = _attentionOpenCards.has(grp.key);
+
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "attn-card-head";
+  head.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const title = document.createElement("h3");
+  title.className = "log-attention-group-title";
+  title.textContent = displayGroupLabel(grp.label);
+  const count = document.createElement("span");
+  count.className = "log-attention-group-count";
+  count.textContent = String(grp.items.length);
+  title.appendChild(count);
+  const caret = document.createElement("span");
+  caret.className = "attn-card-caret";
+  caret.textContent = expanded ? "▾" : "▸";
+  head.appendChild(title);
+  head.appendChild(caret);
+  wrap.appendChild(head);
+
+  const summary = attnWorstLine(grp.items[0]);
+  if (summary) {
+    summary.hidden = expanded;
+    wrap.appendChild(summary);
+  }
+
+  const body = document.createElement("div");
+  body.className = "attn-card-body";
+  body.hidden = !expanded;
+  if (expanded) renderAttentionGroupRows(body, grp, renderRow);
+  wrap.appendChild(body);
+
+  head.addEventListener("click", () => {
+    const opening = body.hidden;
+    if (opening && !body.childElementCount) renderAttentionGroupRows(body, grp, renderRow);
+    body.hidden = !opening;
+    if (summary) summary.hidden = opening;
+    caret.textContent = opening ? "▾" : "▸";
+    head.setAttribute("aria-expanded", opening ? "true" : "false");
+    if (opening) _attentionOpenCards.add(grp.key);
+    else _attentionOpenCards.delete(grp.key);
+  });
+
+  return wrap;
+}
+
+/** The card's collapsed summary: the worst item's "owner · due <date> · status"
+ *  line. Status word carries the urgency colour; everything else stays dim.
+ *  Items arrive pre-sorted (blocked ▷ overdue ▷ silent), so [0] is the winner. */
+function attnWorstLine(entry) {
+  if (!entry) return null;
+  const rec = entry.record || {};
+  const lc = entry.lifecycle || {};
+  const p = document.createElement("p");
+  p.className = "attn-card-worst";
+  const addSep = () => {
+    if (p.childNodes.length) p.appendChild(document.createTextNode(" · "));
+  };
+  if (rec.owner) {
+    p.appendChild(document.createTextNode(prettySlug(String(rec.owner))));
+  }
+  if (rec.due) {
+    // Compact date — the year only when it isn't this year (mockup grammar:
+    // "due May 31", not "due May 31, 2026").
+    const d = parseDueDate(rec.due);
+    const compact =
+      d && d.getFullYear() === new Date().getFullYear()
+        ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+        : formatDueDate(rec.due);
+    addSep();
+    p.appendChild(document.createTextNode("due " + compact));
+  }
+  const silentDays = typeof lc.silentDays === "number" ? lc.silentDays : 0;
+  const dueDate = parseDueDate(rec.due);
+  const overdue = dueDate ? dueDate.getTime() < ATTENTION_TODAY_MS() : false;
+  const status = document.createElement("span");
+  if (attentionIsBlocked(entry)) {
+    status.className = "attn-status-blocked";
+    status.textContent = "blocked";
+  } else if (silentDays > 0) {
+    status.className = "attn-status-silent";
+    status.textContent = silentDays + "d silent";
+  } else if (overdue) {
+    status.className = "attn-status-overdue";
+    status.textContent = "overdue";
+  }
+  if (status.textContent) {
+    addSep();
+    p.appendChild(status);
+  }
+  return p.childNodes.length ? p : null;
 }
 
 /** Append a group's rows into `wrap`. Groups over the threshold render the first
@@ -4814,10 +4914,35 @@ function sopClaimEdgeLine(lead, summary, onClick) {
 function renderSoPProse(container, data, opts) {
   opts = opts || {};
   container.innerHTML = "";
+
+  // WP-SOP-DIGEST (mockup 2): in digest mode the panel LEADS with a clamped
+  // digest — the "Do this first" action line is pulled out of the prose and
+  // stays fully visible, the rest of the narrative clamps to ~4 lines behind a
+  // Show-more toggle, and labelled sections collapse with it. Chips/claims and
+  // the licence line render as always. Non-digest surfaces are unchanged.
+  let leadText = data.prose || "";
+  let actionText = "";
+  if (opts.digest) {
+    const paras = leadText.split(/\n\s*\n/);
+    const ai = paras.findIndex((p) => /^do this first\b/i.test(p.trim()));
+    if (ai >= 0) {
+      actionText = paras.splice(ai, 1)[0].trim();
+      leadText = paras.join("\n\n").trim();
+    }
+    container.classList.add("sop-digest", "sop-digest-collapsed");
+  }
+
   const lead = document.createElement("p");
   lead.className = "sop-prose";
-  lead.textContent = data.prose || "";
+  lead.textContent = leadText;
   container.appendChild(lead);
+
+  if (actionText) {
+    const act = document.createElement("p");
+    act.className = "sop-prose sop-dothis";
+    act.textContent = actionText;
+    container.appendChild(act);
+  }
 
   const sections = Array.isArray(data.sections) ? data.sections : [];
   for (const sec of sections) {
@@ -4859,12 +4984,41 @@ function renderSoPProse(container, data, opts) {
   }
 
   // Licence footnote — RECOMMEND (measured) vs IMPLICATE (inferred). Plain text,
-  // dim, single line; omitted in compact mode and when absent.
+  // dim, single line; omitted in compact mode and when absent. Sentence-cased
+  // for display (ruling 7 — the server ships it uppercase).
   if (!opts.compact && data.license && typeof data.license === "string") {
     const lic = document.createElement("div");
     lic.className = "sop-license";
-    lic.textContent = data.license;
+    const raw = data.license.trim();
+    lic.textContent = raw ? raw[0].toUpperCase() + raw.slice(1).toLowerCase() : raw;
     container.appendChild(lic);
+  }
+
+  // Digest mode: append the Show more / Show less toggle — only when there is
+  // actually more to show (the clamped lead overflows, or sections are hidden).
+  // Overflow is a layout fact, so measure on a macrotask after insertion —
+  // NOT requestAnimationFrame, which never fires while the window is hidden
+  // (the widget's Today can render before the window is frontmost).
+  if (opts.digest) {
+    const hasSections = !!container.querySelector(".sop-section");
+    setTimeout(() => {
+      const overflows = lead.scrollHeight > lead.clientHeight + 1;
+      if (!overflows && !hasSections) {
+        container.classList.remove("sop-digest-collapsed");
+        return;
+      }
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "btn btn-link sop-showmore";
+      toggle.textContent = "Show more";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.addEventListener("click", () => {
+        const collapsed = container.classList.toggle("sop-digest-collapsed");
+        toggle.textContent = collapsed ? "Show more" : "Show less";
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      });
+      container.appendChild(toggle);
+    }, 0);
   }
 }
 
@@ -4926,7 +5080,9 @@ function renderCorpusPanel(panel, data) {
 
   const proseWrap = document.createElement("div");
   proseWrap.className = "sop-prose-wrap";
-  renderSoPProse(proseWrap, data, {});
+  // Today's panel renders the DIGEST (mockup 2): action line out front, lead
+  // clamped behind Show more. Other SoP surfaces keep the full prose.
+  renderSoPProse(proseWrap, data, { digest: true });
   panel.appendChild(proseWrap);
 
   // Phase B — inline digest edit (forest altitude). Editor edits the flattened
