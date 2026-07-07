@@ -317,7 +317,9 @@ pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
         let mut found = false;
         while let Some(view) = queue.pop() {
             let cls = (*view).class().name();
-            if cls.to_string_lossy().contains("WKWebView") {
+            // wry subclasses WKWebView as "WryWebView" — match the suffix, not
+            // the WK name (live trace 2026-07-06: the WK needle found nothing).
+            if cls.to_string_lossy().contains("WebView") {
                 found = true;
                 let v_opaque: bool = msg_send![view, isOpaque];
                 let v_frame: objc2_foundation::NSRect = msg_send![view, frame];
