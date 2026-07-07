@@ -1752,6 +1752,10 @@ code {
   border-radius: var(--glass-radius-md);
 }
 
+/* display:flex outranks the [hidden] attribute (house landmine): without this
+ * guard the Today queue cap set by JS renders all 18 cards anyway. */
+.record-card[hidden] { display: none; }
+
 .record-card[data-state="superseded"] {
   opacity: 0.7;
 }
