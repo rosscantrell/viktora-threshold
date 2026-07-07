@@ -50,6 +50,13 @@
 use objc2::msg_send;
 use objc2::runtime::AnyObject;
 use objc2_app_kit::NSApplication;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The widget window's styleMask as first seen at boot. Collapse restores it
+/// verbatim: the expand/collapse pipeline's async decoration/resizable calls
+/// land out of order and were leaving the pill RESIZABLE (mask 0x8 at rest —
+/// Ross's click-and-hold-resizes-the-pill report, trace-confirmed 2026-07-07).
+static BOOT_STYLE_MASK: AtomicU64 = AtomicU64::new(u64::MAX);
 
 /// NSWindowCollectionBehavior flags for the always-on-top-across-spaces
 /// posture (AC-CUX-02). Bit definitions pinned to AppKit headers:
@@ -138,6 +145,20 @@ pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<
             (current_behavior & !PANEL_BEHAVIOR_BITS) | NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY;
         let _: () = msg_send![win, setCollectionBehavior: new_behavior];
 
+        // WORKSPACE windows are OPAQUE. The expanded UI paints a full opaque
+        // glass gradient anyway; window-level transparency only serves the
+        // collapsed pill — and a transparent NSWindow is the leading suspect
+        // for the green-button fullscreen never resizing the window (trace
+        // 2026-07-07: zero Resized events during the transition, black
+        // letterbox around a stale-sized window). Solid background matches
+        // the glass base (#1c1e26) so any pre-paint flash is on-palette.
+        let _: () = msg_send![win, setOpaque: true];
+        let bg: *mut AnyObject = msg_send![
+            objc2::class!(NSColor),
+            colorWithSRGBRed: 0.110f64, green: 0.118f64, blue: 0.149f64, alpha: 1.0f64
+        ];
+        let _: () = msg_send![win, setBackgroundColor: bg];
+
         // A policy change on a RUNNING app does not activate it by itself —
         // without an explicit activate, the app stays behind and window clicks
         // de-focus it (the exact .accessory symptom). Kick activation + key.
@@ -171,6 +192,21 @@ pub fn restore_widget_window_style(ns_window: *mut std::ffi::c_void) -> Result<(
         let current_behavior: u64 = msg_send![win, collectionBehavior];
         let cleared = current_behavior & !(NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY);
         let _: () = msg_send![win, setCollectionBehavior: cleared];
+
+        // Back to the transparent floating pill (inverse of the workspace
+        // opaque-ing above).
+        let _: () = msg_send![win, setOpaque: false];
+        let clear: *mut AnyObject = msg_send![objc2::class!(NSColor), clearColor];
+        let _: () = msg_send![win, setBackgroundColor: clear];
+
+        // Restore the pristine boot styleMask — the async expand/collapse
+        // pipeline was leaving the pill resizable (0x8) at rest.
+        let boot_mask = BOOT_STYLE_MASK.load(Ordering::Relaxed);
+        if boot_mask != u64::MAX {
+            let _: () = msg_send![win, setStyleMask: boot_mask];
+            let now: u64 = msg_send![win, styleMask];
+            eprintln!("[persona] collapse styleMask restored: {now:#x} (boot {boot_mask:#x})");
+        }
     }
     // Re-apply the full panel posture (activation policy → accessory,
     // collectionBehavior → panel bits, native drag off).
@@ -207,6 +243,14 @@ pub fn apply_non_activating_widget_style(ns_window: *mut std::ffi::c_void) -> Re
     // Step 2: widget window collectionBehavior + disable native drag.
     unsafe {
         let win = ns_window as *mut AnyObject;
+
+        // First call is boot: remember the pristine widget styleMask so
+        // collapse can restore it exactly (see BOOT_STYLE_MASK).
+        if BOOT_STYLE_MASK.load(Ordering::Relaxed) == u64::MAX {
+            let mask: u64 = msg_send![win, styleMask];
+            BOOT_STYLE_MASK.store(mask, Ordering::Relaxed);
+            eprintln!("[persona] boot styleMask captured: {mask:#x}");
+        }
 
         let current_behavior: u64 = msg_send![win, collectionBehavior];
         let new_behavior = current_behavior

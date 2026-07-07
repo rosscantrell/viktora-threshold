@@ -6750,6 +6750,36 @@ fn widget_expand(
         }
     }
 
+    // Transition poller (bug-2 instrumentation): for 60s after expand, print
+    // frame/styleMask/isFullscreen CHANGES twice a second. The green-button
+    // fullscreen produced ZERO Resized events in two traces — this catches
+    // whatever the window ACTUALLY does (or fails to do) during the Space
+    // transition, without relying on tao delivering resize events.
+    {
+        let poll_window = window.clone();
+        std::thread::spawn(move || {
+            let mut last = String::new();
+            for _ in 0..120 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let size = poll_window.outer_size().ok();
+                let pos = poll_window.outer_position().ok();
+                let fs = poll_window.is_fullscreen().unwrap_or(false);
+                let line = format!(
+                    "{}x{} at ({},{}) fullscreen={}",
+                    size.as_ref().map(|s| s.width).unwrap_or(0),
+                    size.as_ref().map(|s| s.height).unwrap_or(0),
+                    pos.as_ref().map(|p| p.x).unwrap_or(0),
+                    pos.as_ref().map(|p| p.y).unwrap_or(0),
+                    fs
+                );
+                if line != last {
+                    eprintln!("[fs-poll] {line}");
+                    last = line;
+                }
+            }
+        });
+    }
+
     // Step 4: navigate to expanded UI. The URL fragment tells main.js
     // which view to land in. window.eval is the cleanest cross-platform
     // navigation; window.navigate exists in Tauri 2 but isn't available
