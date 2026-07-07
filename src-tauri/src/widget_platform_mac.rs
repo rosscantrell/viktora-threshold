@@ -218,8 +218,19 @@ pub fn restore_widget_window_style(ns_window: *mut std::ffi::c_void) -> Result<(
 
         // Restore the pristine boot styleMask — the async expand/collapse
         // pipeline was leaving the pill resizable (0x8) at rest.
+        // NEVER while the FullScreen bit is set: clearing it outside a
+        // fullscreen transition makes AppKit throw, and a throw through a raw
+        // msg_send aborts the whole process (crash-traced 2026-07-07). The
+        // collapse path exits fullscreen before reaching here; this guard is
+        // the backstop for any timing where the bit still lingers.
+        const NS_WINDOW_STYLE_MASK_FULL_SCREEN: u64 = 1 << 14;
         let boot_mask = BOOT_STYLE_MASK.load(Ordering::Relaxed);
-        if boot_mask != u64::MAX {
+        let current_mask: u64 = msg_send![win, styleMask];
+        if current_mask & NS_WINDOW_STYLE_MASK_FULL_SCREEN != 0 {
+            eprintln!(
+                "[persona] collapse styleMask restore SKIPPED — window still fullscreen (mask {current_mask:#x})"
+            );
+        } else if boot_mask != u64::MAX {
             let _: () = msg_send![win, setStyleMask: boot_mask];
             let now: u64 = msg_send![win, styleMask];
             eprintln!("[persona] collapse styleMask restored: {now:#x} (boot {boot_mask:#x})");
