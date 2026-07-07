@@ -9,6 +9,67 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-07
+
+The deadline release — Today learns to look ahead. A two-week Deadline
+outlook, workback plans you can correct by hand, and the "no draft observed"
+warning Trisha asked for after the June 30 miss.
+
+### Added
+- **Deadline outlook** (Today, wide layout) — a two-week runway panel under
+  the State of Play: one bar per due-soon commitment, a tick at the latest
+  start that still makes the due date, amber when that point passed with
+  nothing seen. Click a swimlane for the reasoning: who promised it
+  (verbatim + source), the step-by-step plan with per-step dates, and an
+  honest absence claim scoped to connected sources.
+- **Workback corrections (HITL)** — every part of the plan is editable in
+  place: mark a step done, rule it not-applicable, tag the document that
+  shows it happened, reject a wrong match, add a missing step, **move the
+  due date** (propagates to bars, tags, ordering, and scope — with a
+  "moved from …" marker), and undo. Every correction lands in the learning
+  stream and recomputes the dates deterministically.
+- **Readiness warnings** — the amber "no draft observed" badge on Coming-up
+  rows (the Brian flag), a one-tap **"Draft heads-up to client"** staged to
+  the outbox (no-blame copy, nothing auto-sends), and an honest
+  "unobservable" reading that keeps the badge quiet when the corpus can't
+  support an absence claim.
+- **Project home** — inline relationships + per-project state of play
+  (the Trisha-session flagship), with SoP claim-level receipts (expandable
+  claim pills) and the SoP digest card grammar.
+- **Naming and merging asks** — the engine asks what unnamed workstreams
+  should be called (queue cards, honest code labels like US-NON-22189) and
+  proposes combining near-duplicate project keys; answers propagate
+  everywhere via canon aliases (Today groups like the Log).
+- **Email capture card** (Settings) — self-service capture address +
+  approved senders, with an inline owner-email prompt.
+- **Junk suppression, reviewable** — not-a-commitment records are suppressed
+  from queues but visible + reversible behind a review affordance.
+- **Bulk nested category create** in the Log's frame-correction tools.
+- **End-to-end user guide** with live screenshots, covering the heads-up
+  action.
+
+### Changed
+- **Wide Today: read | act** — State of Play + Deadline outlook on the
+  left, the action rail (Waiting on you → Coming up → Awaiting send) on the
+  right, the full-width board below; board and queue render together at
+  wide widths; overlay titlebar reinstated; first-class Mac window.
+- **Both Today columns are now layout-wrapped and nothing spans grid rows**
+  — fixes the inflated left-column dead space and the rail-paints-over-the-
+  board overlap for good.
+- **Taste canon + receipts v2** — one verb language, glass everywhere,
+  calmer widget pill, queue primary actions amber, question-card grammar
+  unified across card types, queue cap that actually caps.
+
+### Fixed
+- Shell: the grey halo behind the window, green-button fullscreen not
+  filling the screen, collapse-while-fullscreen crash (deferred until
+  AppKit's exit settles), expand crash (AppKit off main thread), opaque
+  workspace window restore.
+- Today: duplicated State-of-Play narrative, SoP auto-load on entry,
+  dismiss-as rows hiding correctly.
+- Privacy panel: embeddings channel rendered with an honest unconfigured
+  state.
+
 ## [0.9.0] — 2026-07-03
 
 The biggest feature release yet — the app collapses from one-view-per-engine-concept
