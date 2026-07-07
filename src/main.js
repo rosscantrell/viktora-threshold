@@ -3508,19 +3508,20 @@ async function loadTodayContext() {
 async function loadTodayQueue() {
   // Track completion of the four sources so the empty/skeleton state resolves
   // correctly regardless of arrival order.
-  const settled = { proxy: false, question: false, voids: false, nameAsks: false };
-  const filled = { proxy: false, question: false, voids: false, nameAsks: false };
+  const settled = { proxy: false, question: false, voids: false, nameAsks: false, mergeAsks: false };
+  const filled = { proxy: false, question: false, voids: false, nameAsks: false, mergeAsks: false };
   const settle = (key, didFill) => {
     settled[key] = true;
     if (didFill) filled[key] = true;
     reconcileTodayQueueEmptyState(settled, filled);
   };
 
-  // Fire all four in parallel; each appends when it lands.
+  // Fire all five in parallel; each appends when it lands.
   loadTodayQueueProxy(settle).catch((e) => { console.warn("[main] proxy queue:", e); settle("proxy", false); });
   loadTodayQueueQuestion(settle).catch((e) => { console.warn("[main] question card:", e); settle("question", false); });
   loadTodayQueueVoids(settle).catch((e) => { console.warn("[main] vigilance voids:", e); settle("voids", false); });
   loadTodayQueueNameAsks(settle).catch((e) => { console.warn("[main] name asks:", e); settle("nameAsks", false); });
+  loadTodayQueueMergeAsks(settle).catch((e) => { console.warn("[main] merge asks:", e); settle("mergeAsks", false); });
 }
 
 // ── WP-NAME-ASKS — the corpus asks for the one fact only the user has ──
@@ -3695,6 +3696,194 @@ async function submitNameAsk(ask, newLabel, card, saveBtn) {
   }
 }
 
+// ── WP-MERGE-ASKS — the corpus asks whether two keys are the same project ──
+// Deterministic engine producer (/api/project-canon/merge-asks, flag-gated):
+// near-duplicate project keys (initialism / plural / separator variants) that
+// both carry open items become a combine-ask card. Combining writes through
+// the EXISTING project-canon merge (read-time application ⇒ every surface
+// regroups on next render, and the ask self-clears server-side).
+async function loadTodayQueueMergeAsks(settle) {
+  let data = null;
+  try {
+    data = await tauri.core.invoke("fetch_merge_asks");
+  } catch (err) {
+    // Older servers have no route — degrade silently (flag-off posture).
+    settle("mergeAsks", false);
+    return;
+  }
+  const asks = data && data.enabled !== false && Array.isArray(data.asks) ? data.asks : [];
+  const list = document.getElementById("today-queue-list");
+  if (!list || !asks.length) {
+    settle("mergeAsks", false);
+    return;
+  }
+  // Cap: housekeeping never floods the queue (shared budget with name asks).
+  let appended = 0;
+  for (const ask of asks) {
+    if (!ask || !ask.keyA || !ask.keyB || _mergeAskSuppressed(_mergeAskPairKey(ask))) continue;
+    if (appended >= 2) break;
+    list.appendChild(renderMergeAskCard(ask));
+    appended++;
+  }
+  if (appended > 0) capTodayQueue();
+  settle("mergeAsks", appended > 0);
+}
+
+function renderMergeAskCard(ask) {
+  // The ONE question-card grammar (rule-card question-card), same as name
+  // asks: statement + Question tag + "Why I'm asking" + answer affordance +
+  // canon Snooze/Dismiss verbs.
+  const el = document.createElement("div");
+  el.className = "rule-card question-card mergeask-card";
+
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = "Are these the same workstream?";
+  top.appendChild(stmt);
+  const tag = document.createElement("span");
+  tag.className = "rule-auth question-tag";
+  tag.textContent = "Question";
+  top.appendChild(tag);
+  el.appendChild(top);
+
+  const a = ask.displayA || ask.keyA;
+  const b = ask.displayB || ask.keyB;
+  const nA = typeof ask.openCountA === "number" ? ask.openCountA : 0;
+  const nB = typeof ask.openCountB === "number" ? ask.openCountB : 0;
+  const why = document.createElement("div");
+  why.className = "question-why";
+  why.textContent =
+    "Why I’m asking: " +
+    (nA + nB) + " open items are split between " + a + " (" + nA + ") and " +
+    b + " (" + nB + ") — they look like the same project filed two ways.";
+  el.appendChild(why);
+
+  // Answer affordance: the surviving name (prefilled with the engine's
+  // suggestion — the busier key's label) + one Combine action.
+  const rowEl = document.createElement("div");
+  rowEl.className = "nameask-input-row";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "nameask-input";
+  input.placeholder = "Name for the combined workstream…";
+  if (ask.suggestedTarget) input.value = String(ask.suggestedTarget);
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn nameask-save";
+  save.textContent = "Combine";
+  const submit = () => submitMergeAsk(ask, input.value, el, save);
+  save.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit();
+  });
+  rowEl.appendChild(input);
+  rowEl.appendChild(save);
+  el.appendChild(rowEl);
+
+  // Footer — canon verbs. Dismiss here means "keep them separate".
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  const pairKey = _mergeAskPairKey(ask);
+  const snooze = vvActionBtn("Snooze", () => {
+    _mergeAskSuppress(pairKey, Date.now() + 7 * 86400000);
+    el.remove();
+  });
+  snooze.title = "Snooze — ask again in 7 days";
+  const dismiss = vvActionBtn("Dismiss", () => {
+    _mergeAskSuppress(pairKey, Number.MAX_SAFE_INTEGER);
+    el.remove();
+  });
+  dismiss.title = "Dismiss — keep these workstreams separate";
+  actions.append(snooze, dismiss);
+  el.appendChild(actions);
+
+  return el;
+}
+
+/** Canonical pair key for the local suppress store (order-independent). */
+function _mergeAskPairKey(ask) {
+  const ks = [String(ask.keyA), String(ask.keyB)].sort();
+  return ks[0] + "|" + ks[1];
+}
+
+/** Local suppress store for merge asks (pairKey → not-before epoch ms).
+ *  Display preference only — an applied merge clears the ask server-side. */
+function _mergeAskSuppress(pairKey, untilMs) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("mergeask-suppress") || "{}");
+    raw[pairKey] = untilMs;
+    localStorage.setItem("mergeask-suppress", JSON.stringify(raw));
+  } catch (_e) { /* best effort */ }
+}
+function _mergeAskSuppressed(pairKey) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("mergeask-suppress") || "{}");
+    return typeof raw[pairKey] === "number" && raw[pairKey] > Date.now();
+  } catch (_e) {
+    return false;
+  }
+}
+
+async function submitMergeAsk(ask, targetLabel, card, saveBtn) {
+  const label = (targetLabel || "").trim();
+  if (!label) return;
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const fp = await projectCanonFingerprint();
+    if (!fp) {
+      showToast({ kind: "failure", title: "Combining isn't available on this server yet." });
+      return;
+    }
+    let actor = "threshold-user";
+    try { actor = (await getViewerEmail()) || actor; } catch (_e) { /* keep default */ }
+    // The existing canon merge: both keys unify under the TYPED label as the
+    // surviving canonical, in ONE proposal (backend contract: sources ≥2 +
+    // targetCanonical). Never merge-then-rename — a contested merge records
+    // without applying, and the follow-up rename then half-lands (measured
+    // live 2026-07-07).
+    const res = await tauri.core.invoke("project_canon_merge", {
+      sources: [ask.keyA, ask.keyB].map((k) => String(k).replace(/^job:/, "")),
+      targetCanonical: label,
+      expectedSubstrateFingerprint: fp,
+      actor,
+      overrideVeto: !!card.dataset.overrideVeto,
+    });
+    // The topology sibling-veto can CONTEST the merge (recorded, not applied)
+    // — same contract the Log's combine flow handles. Surface it in-card:
+    // second click overrides, same as the Log's confirm.
+    if (res && res.disposition === "contested" && !card.dataset.overrideVeto) {
+      card.dataset.overrideVeto = "1";
+      if (saveBtn) saveBtn.textContent = "Combine anyway";
+      let note = card.querySelector(".mergeask-contested-note");
+      if (!note) {
+        note = document.createElement("div");
+        note.className = "question-why mergeask-contested-note";
+        note.textContent =
+          "These two keep separate company in the corpus (they appear side by side as distinct projects), so I want to be sure — combine anyway?";
+        card.insertBefore(note, saveBtn.closest(".nameask-input-row"));
+      }
+      return;
+    }
+    card.remove();
+    showToast({
+      kind: "success",
+      title: `Combined into ${label}`,
+      body: "Today, the Log, and the overview regroup on their next refresh.",
+    });
+    enterLogView(); // re-derive Today — the served project keys now regroup
+  } catch (err) {
+    showToast({
+      kind: "failure",
+      title: "Couldn't combine the workstreams",
+      body: String(err && err.message ? err.message : err),
+    });
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
 // WP-QUEUE-CAP — a long queue must not bury the rest of Today: the rail's
 // height sets where the needs-attention board starts (grid row sizing), so 11
 // stacked cards push the whole worklist below the fold (Ross's dead-real-estate
@@ -3741,8 +3930,9 @@ function reconcileTodayQueueEmptyState(settled, filled) {
   // board below (the WP-R2 gate reads _todayQueueEmpty) — a standing "name
   // this workstream" card should never hide the day's worklist.
   const urgentFilled = filled.proxy || filled.question || filled.voids;
-  const anyFilled = urgentFilled || filled.nameAsks;
-  const allSettled = settled.proxy && settled.question && settled.voids && settled.nameAsks;
+  const anyFilled = urgentFilled || filled.nameAsks || filled.mergeAsks;
+  const allSettled =
+    settled.proxy && settled.question && settled.voids && settled.nameAsks && settled.mergeAsks;
   // Hide the skeleton as soon as anything filled OR everything has settled.
   if (skel) skel.hidden = anyFilled || allSettled;
   // WP-TODAY-READ-ACT dedup: when the question PULL AFFORDANCE is up (it renders

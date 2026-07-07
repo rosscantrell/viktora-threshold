@@ -3024,6 +3024,41 @@ async fn fetch_name_asks(
         .map_err(|e| format!("fetch_name_asks: parse response failed: {e}"))
 }
 
+/// WP-MERGE-ASKS — GET /api/project-canon/merge-asks: deterministic asks to
+/// COMBINE near-duplicate project keys (initialism / plural / separator
+/// variants) that both carry open items. Flag-gated server-side
+/// (MERGE_ASKS_ENABLED); off ⇒ { enabled:false, asks:[] } and the queue
+/// renders nothing. Same auth/posture as fetch_name_asks.
+#[tauri::command]
+async fn fetch_merge_asks(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/project-canon/merge-asks",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_merge_asks: parse response failed: {e}"))
+}
+
 async fn project_canon_post(
     cfg: &AppConfig,
     path: &str,
@@ -7577,6 +7612,7 @@ pub fn run() {
             outbox_propose,
             outbox_heads_up,
             fetch_name_asks,
+            fetch_merge_asks,
             probe_report,
             fetch_vigilance_voids,
             dismiss_void,
