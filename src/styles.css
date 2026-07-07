@@ -6191,3 +6191,46 @@ button.rec-source {
    superseded by the auto-fill grid inside the ≥1200px block above — the
    worklist now spans the full width, so the density gate rides the same
    breakpoint as the page split.) */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Pixel-pass D4 — fail-closed-but-VISIBLE junk-gate affordance.
+   Quiet count line under the Today/Log subtitle + a read-only review panel of
+   the records suppressed as not-a-commitment. Every new .btn-link needs
+   position:static (global absolute-corner landmine).
+   ══════════════════════════════════════════════════════════════════════════ */
+.nac-review-line {
+  position: static;
+  padding: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.nac-review-line:hover { color: var(--text-secondary); }
+
+.nac-review-panel {
+  margin: 4px 24px 12px;
+  padding: 10px 14px;
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--glass-radius-md);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.nac-review-panel[hidden] { display: none; }
+.nac-review-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.nac-review-row:last-child { border-bottom: none; }
+.nac-review-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.nac-review-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}

@@ -1414,6 +1414,59 @@ function withoutDismissed(items) {
   });
 }
 
+/**
+ * Quiet count + review affordance for records the engine's junk gate marked
+ * not-a-commitment (suppressed by withoutDismissed). House law §2b.3:
+ * fail-closed-but-VISIBLE — the user can always see how many were filtered
+ * and read them; nothing disappears silently. Idempotent per render.
+ */
+function renderNacReviewAffordance(items) {
+  const header = document.querySelector("#view-log .log-header");
+  if (!header) return;
+  let line = document.getElementById("nac-review-line");
+  let panel = document.getElementById("nac-review-panel");
+  if (!items.length) {
+    if (line) line.remove();
+    if (panel) panel.remove();
+    return;
+  }
+  if (!line) {
+    line = document.createElement("button");
+    line.type = "button";
+    line.id = "nac-review-line";
+    line.className = "btn btn-link nac-review-line";
+    const text = header.querySelector(".log-header-text");
+    (text || header).appendChild(line);
+    line.addEventListener("click", () => {
+      const p = document.getElementById("nac-review-panel");
+      if (p) p.hidden = !p.hidden;
+      line.setAttribute("aria-expanded", p && !p.hidden ? "true" : "false");
+    });
+  }
+  line.textContent = `${items.length} filtered as not commitments — review`;
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "nac-review-panel";
+    panel.className = "nac-review-panel";
+    panel.hidden = true;
+    header.insertAdjacentElement("afterend", panel);
+  }
+  panel.innerHTML = "";
+  for (const { rec } of items) {
+    const row = document.createElement("div");
+    row.className = "nac-review-row";
+    const text = document.createElement("div");
+    text.className = "nac-review-text";
+    text.textContent = rec.summary || rec.text || rec.verbatim || "(no summary)";
+    const meta = document.createElement("div");
+    meta.className = "nac-review-meta";
+    const owner = rec.owner || (rec.commitment && rec.commitment.owner) || "";
+    meta.textContent = owner ? `${owner} · not a commitment` : "not a commitment";
+    row.append(text, meta);
+    panel.appendChild(row);
+  }
+}
+
 /** Reload the persisted dismissed-id set from the backend. Best-effort: a failed
  *  read leaves the existing in-memory set intact (never throws into a view). */
 async function refreshDismissedIds() {
@@ -3895,6 +3948,9 @@ async function renderTodayDecisionLog() {
         : "What needs your attention";
   }
 
+  // (The junk-gate review affordance renders from loadTodayComingUp — the
+  // full-records payload lives there; this summary payload carries none.)
+
   // States strip (open / resolved / superseded).
   if (statesStrip) {
     statesStrip.innerHTML = "";
@@ -4491,6 +4547,14 @@ async function loadTodayComingUp() {
   }
 
   const records = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+  // Fail-closed-but-VISIBLE (house law §2b.3): whatever the junk gate
+  // suppressed from this full payload stays countable and reviewable in the
+  // header — never a silent disappearance. Plain language only.
+  renderNacReviewAffordance(
+    (Array.isArray(data && data.records) ? data.records : [])
+      .map((it) => ({ rec: (it && it.record) || it || {} }))
+      .filter(({ rec }) => rec.recordClass === "not-a-commitment" && !isDismissed(rec)),
+  );
   // WP-NAME-ASKS plumb-through: the full payload carries the engine's naming
   // layer; stash it so Today's grouping consults the SAME names the Log uses
   // (a name fixed anywhere then propagates here on the next render).
