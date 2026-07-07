@@ -154,7 +154,17 @@ soonest first. The badges matter:
   still show the due and quiet badges.)*
 
 Row actions: **Show receipts →** (the verbatim evidence behind the item),
-**Draft follow-up →** (stages a nudge to the item's owner into the outbox).
+**Resolve / Snooze / ✕ Dismiss**, and two different drafts:
+
+- **Draft heads-up to client** (amber — appears only on flagged rows): one tap
+  stages a short, no-blame note to the client — *"Quick heads-up — [the
+  deliverable] is due [date] and may need a few extra days. Flagging early so
+  we can adjust the timeline together if needed."* The copy is composed
+  server-side, never mentions any internal signal, and lands in your Outbox
+  for review — clients accept lateness when warned early; this makes the
+  warning one click.
+- **Draft follow-up →** stages a nudge to the item's **owner** instead — chase
+  internally, warn externally, whichever the moment needs.
 
 **Awaiting send** appears in the rail only when you have staged drafts —
 review and send them from there or from the Outlook add-in; nothing ever sends
