@@ -3472,23 +3472,46 @@ async function loadTodayQueueNameAsks(settle) {
     settle("nameAsks", false);
     return;
   }
-  // Cap: housekeeping never floods the queue.
-  for (const ask of asks.slice(0, 3)) {
-    if (!ask || !ask.key) continue;
+  // Cap: housekeeping never floods the queue. Snoozed/dismissed keys skipped.
+  let appended = 0;
+  for (const ask of asks) {
+    if (!ask || !ask.key || _nameAskSuppressed(ask.key)) continue;
+    if (appended >= 3) break;
     list.appendChild(renderNameAskCard(ask));
+    appended++;
   }
-  settle("nameAsks", true);
+  settle("nameAsks", appended > 0);
 }
 
 function renderNameAskCard(ask) {
-  const card = document.createElement("div");
-  card.className = "record-card nameask-card";
+  // Presented in the ONE question-card grammar (rule-card question-card) —
+  // the same shape every engine→user question wears: the QUESTION is the
+  // statement, "Question" tag top-right, a "Why I'm asking" line, context,
+  // then the answer affordance. Canon verbs (Snooze / Dismiss) in the footer.
+  const el = document.createElement("div");
+  el.className = "rule-card question-card nameask-card";
 
-  const title = document.createElement("p");
-  title.className = "nameask-title";
+  const top = document.createElement("div");
+  top.className = "rule-card-top";
+  const stmt = document.createElement("div");
+  stmt.className = "rule-card-statement";
+  stmt.textContent = "What should this workstream be called?";
+  top.appendChild(stmt);
+  const tag = document.createElement("span");
+  tag.className = "rule-auth question-tag";
+  tag.textContent = "Question";
+  top.appendChild(tag);
+  el.appendChild(top);
+
   const n = typeof ask.openCount === "number" ? ask.openCount : 0;
-  title.textContent = `${n} open item${n === 1 ? "" : "s"} are grouped under ${ask.code || ask.key} — a code with no name yet.`;
-  card.appendChild(title);
+  const why = document.createElement("div");
+  why.className = "question-why";
+  why.textContent =
+    "Why I\u2019m asking: " +
+    n + " open item" + (n === 1 ? "" : "s") +
+    " are grouped under " + (ask.code || ask.key) +
+    " \u2014 a code with no name \u2014 so this work is hard to find and read.";
+  el.appendChild(why);
 
   if (Array.isArray(ask.topEntities) && ask.topEntities.length) {
     const hints = document.createElement("div");
@@ -3503,7 +3526,7 @@ function renderNameAskCard(ask) {
       chip.textContent = prettySlug(String(e));
       hints.appendChild(chip);
     }
-    card.appendChild(hints);
+    el.appendChild(hints);
   }
 
   const rowEl = document.createElement("div");
@@ -3511,23 +3534,58 @@ function renderNameAskCard(ask) {
   const input = document.createElement("input");
   input.type = "text";
   input.className = "nameask-input";
-  input.placeholder = "What should this workstream be called?";
+  input.placeholder = "Name it\u2026";
   if (ask.suggestedName) input.value = String(ask.suggestedName);
   const save = document.createElement("button");
   save.type = "button";
   save.className = "btn nameask-save";
   save.textContent = "Save name";
-  const submit = () => submitNameAsk(ask, input.value, card, save);
+  const submit = () => submitNameAsk(ask, input.value, el, save);
   save.addEventListener("click", submit);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") submit();
   });
   rowEl.appendChild(input);
   rowEl.appendChild(save);
-  card.appendChild(rowEl);
+  el.appendChild(rowEl);
 
-  appendDismissControl(card, "nameask:" + ask.key, card, ask.code || ask.key);
-  return card;
+  // Footer — the queue's canon verbs. Snooze = quiet for 7 days; Dismiss =
+  // stop asking about this key. Both are local display preferences (the
+  // engine ask self-clears the moment the workstream is actually named).
+  const actions = document.createElement("div");
+  actions.className = "watching-actions";
+  const snooze = vvActionBtn("Snooze", () => {
+    _nameAskSuppress(ask.key, Date.now() + 7 * 86400000);
+    el.remove();
+  });
+  snooze.title = "Snooze \u2014 ask again in 7 days";
+  const dismiss = vvActionBtn("Dismiss", () => {
+    _nameAskSuppress(ask.key, Number.MAX_SAFE_INTEGER);
+    el.remove();
+  });
+  dismiss.title = "Dismiss \u2014 stop asking about this workstream";
+  actions.append(snooze, dismiss);
+  el.appendChild(actions);
+
+  return el;
+}
+
+/** Local suppress store for name asks (key → not-before epoch ms). Display
+ *  preference only — renames clear asks server-side. */
+function _nameAskSuppress(key, untilMs) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("nameask-suppress") || "{}");
+    raw[key] = untilMs;
+    localStorage.setItem("nameask-suppress", JSON.stringify(raw));
+  } catch (_e) { /* best effort */ }
+}
+function _nameAskSuppressed(key) {
+  try {
+    const raw = JSON.parse(localStorage.getItem("nameask-suppress") || "{}");
+    return typeof raw[key] === "number" && raw[key] > Date.now();
+  } catch (_e) {
+    return false;
+  }
 }
 
 async function submitNameAsk(ask, newLabel, card, saveBtn) {
