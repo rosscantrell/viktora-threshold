@@ -6841,41 +6841,82 @@ fn widget_expand(
     Ok(())
 }
 
+/// Read the window's real AppKit styleMask from a worker thread (main-thread
+/// dispatch + channel). None on dispatch/timeout failure — callers treat that
+/// as "assume unsafe".
+#[cfg(target_os = "macos")]
+fn appkit_style_mask(window: &tauri::WebviewWindow) -> Option<u64> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let w = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let mask = w.ns_window().ok().map(widget_platform_mac::style_mask_of);
+            let _ = tx.send(mask);
+        })
+        .ok()?;
+    rx.recv_timeout(std::time::Duration::from_millis(500)).ok().flatten()
+}
+
 /// Collapse the expanded UI back to the floating widget. Restores
 /// widget size, position, chrome, and navigates back to widget.html.
+///
+/// FULLSCREEN LAW (three crash traces, 2026-07-07): a window still in native
+/// fullscreen cannot take ANY styleMask that clears NSWindowStyleMaskFullScreen
+/// — AppKit throws and a raw msg_send abort follows. And because this command
+/// is SYNC (= runs on the main thread), it must NEVER block-wait for the exit:
+/// sleeping here freezes the very runloop that pumps the transition (that was
+/// fix attempts 1 and 2). So: when fullscreen, request the exit, return, and a
+/// watcher thread re-runs the collapse once the REAL AppKit bit clears (tao's
+/// is_fullscreen() flips early, at windowWillExitFullScreen — not a safe signal).
 #[tauri::command]
 fn widget_collapse(
     state: tauri::State<AppState>,
     webview_window: tauri::WebviewWindow,
 ) -> Result<(), String> {
-    let window = &webview_window;
-    // Reverse the expand operations — restore the WIDGET (floating-panel)
-    // persona exactly (skipTaskbar true, resizable false, alwaysOnTop true;
-    // macOS: NSApp → .accessory, collectionBehavior → panel bits). Order
-    // matters: the min-size floor from expand must be cleared BEFORE the
-    // 180×80 shrink, else set_size is rejected against the 720×560 minimum.
-    // A window still in NATIVE FULLSCREEN cannot take the pill styleMask —
-    // AppKit throws "NSWindowStyleMaskFullScreen cleared on a window outside
-    // of a full screen transition" and the raw msg_send aborts the process
-    // (crash reproduced 2026-07-07: green-button fullscreen → Collapse; the
-    // path only became reachable when #102 made fullscreen work). Leave
-    // fullscreen FIRST and wait for the transition to settle.
-    if window.is_fullscreen().unwrap_or(false) {
-        eprintln!("[persona] collapse requested while fullscreen — exiting fullscreen first");
-        let _ = window.set_fullscreen(false);
-        for _ in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if !window.is_fullscreen().unwrap_or(false) {
-                break;
+    if webview_window.is_fullscreen().unwrap_or(false) {
+        eprintln!("[persona] collapse requested while fullscreen — deferring until the exit settles");
+        let _ = webview_window.set_fullscreen(false);
+        let w = webview_window.clone();
+        std::thread::spawn(move || {
+            const FS_BIT: u64 = 1 << 14;
+            let mut cleared = false;
+            for i in 0..80 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                #[cfg(target_os = "macos")]
+                let mask = appkit_style_mask(&w).unwrap_or(FS_BIT);
+                #[cfg(not(target_os = "macos"))]
+                let mask = if w.is_fullscreen().unwrap_or(false) { FS_BIT } else { 0 };
+                if mask & FS_BIT == 0 {
+                    eprintln!(
+                        "[persona] fullscreen exit settled after ~{}ms — running deferred collapse",
+                        (i + 1) * 100
+                    );
+                    cleared = true;
+                    break;
+                }
             }
-        }
-        // One more beat: the styleMask flip trails the Space animation.
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        eprintln!(
-            "[persona] fullscreen exit settled (is_fullscreen={})",
-            window.is_fullscreen().unwrap_or(false)
-        );
+            if !cleared {
+                eprintln!("[persona] fullscreen exit NEVER settled — abandoning deferred collapse (window stays expanded)");
+                return;
+            }
+            if let Err(e) = perform_widget_collapse(&w) {
+                eprintln!("[persona] deferred collapse failed: {e}");
+            }
+        });
+        return Ok(());
     }
+    let _ = state; // config is re-fetched inside perform_widget_collapse
+    perform_widget_collapse(&webview_window)
+}
+
+/// The actual collapse work. Runs on the main thread when invoked directly by
+/// the sync command, or via the deferred-collapse watcher after a fullscreen
+/// exit settles (safe either way: every AppKit mutation inside dispatches to
+/// the main thread itself).
+fn perform_widget_collapse(webview_window: &tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::Manager;
+    let state = webview_window.app_handle().state::<AppState>();
+    let window = webview_window;
 
     #[cfg(target_os = "macos")]
     {
