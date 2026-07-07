@@ -1965,11 +1965,18 @@ code {
   padding-top: 9px;
   border-top: 1px solid var(--glass-border);
 }
+/* The flex display outranks the UA [hidden] rule — same landmine as the
+   outbox tray (WP-R2 amendment item 5). Without this, every void card
+   rendered its "Dismiss as" reason picker permanently open (Ross's clutter
+   report, 2026-07-07). Same guard for the actions row it swaps with. */
+.watching-reasons[hidden],
+.watching-actions[hidden] {
+  display: none;
+}
 .watching-reasons::before {
   content: "Dismiss as";
   font-size: 10px;
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--glass-text-dim);
 }
 .watching-action-btn {
@@ -2471,6 +2478,15 @@ code {
   padding: 1px 7px;
   white-space: nowrap;
 }
+/* WP-QUEUE-CAP — long queues collapse to the first few cards + the same
+   "Show all N →" grammar the needs-attention groups use. */
+.today-queue-showall {
+  align-self: flex-start;
+  font-size: 11.5px;
+  padding: 2px 0;
+  position: static; /* legacy .btn-link absolute landmine */
+}
+
 /* ── WP-NAME-ASKS — the "name this workstream" queue card ─────────────────
    Same record-card family as the rest of the queue; the input row is the
    card's action. Save wears the amber primary-action recipe. */
