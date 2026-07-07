@@ -2227,6 +2227,20 @@ code {
   flex-direction: column;
   gap: 8px;
 }
+/* Rows inside an expanded card flatten — the card already provides the
+   surface; full row chrome inside it reads as boxes-in-boxes (Ross's
+   "stacked on one another"). Keep a hairline separator rhythm instead. */
+.attn-card-body > .log-attention-row {
+  background: transparent;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0;
+  padding: 10px 2px;
+}
+.attn-card-body > .log-attention-row:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
 .attn-card-body[hidden] {
   display: none;
 }
