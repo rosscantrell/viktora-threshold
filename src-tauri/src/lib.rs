@@ -2062,6 +2062,14 @@ async fn outbox_propose(
 /// readiness reading internally and generates the no-blame template — the app
 /// never composes copy. Same auth + posture as outbox_propose; 201 { item } on
 /// stage, 200 { item, deduped } on re-stage.
+/// Probe v4 — the PAGE reports its own computed backgrounds (what HIS webview
+/// actually renders, stale-cache and all — the browser repro never covered
+/// that). The eval'd JS calls this; we just put it on the trace.
+#[tauri::command]
+fn probe_report(payload: String) {
+    eprintln!("[page-probe] {payload}");
+}
+
 #[tauri::command]
 async fn outbox_heads_up(
     state: tauri::State<'_, AppState>,
@@ -6861,6 +6869,7 @@ fn widget_collapse(
                     widget_platform_mac::clear_webview_underpage(ns_window, "post-collapse+900ms");
                     widget_platform_mac::debug_window_chrome(ns_window, "post-collapse+900ms");
                     widget_platform_mac::debug_window_deep(ns_window, "post-collapse+900ms");
+                    widget_platform_mac::debug_view_tree(ns_window, "post-collapse+900ms");
                 }
             });
         });
@@ -7343,7 +7352,16 @@ pub fn run() {
                                 widget_platform_mac::clear_webview_underpage(ns_window, "boot+1500ms");
                                 widget_platform_mac::debug_window_chrome(ns_window, "boot+1500ms");
                                 widget_platform_mac::debug_window_deep(ns_window, "boot+1500ms");
+                                widget_platform_mac::debug_view_tree(ns_window, "boot+1500ms");
                             }
+                            // Probe v4: ask the PAGE what it paints (computed
+                            // backgrounds land on the trace via probe_report).
+                            let _ = inner.eval(
+                                "try{const cs=(el)=>el?getComputedStyle(el).backgroundColor:'absent';\
+                                 window.__TAURI__.core.invoke('probe_report',{payload:'href='+location.href+\
+                                 ' html.bg='+cs(document.documentElement)+' body.bg='+cs(document.body)+\
+                                 ' widget.bg='+cs(document.getElementById('widget'))+' dpr='+devicePixelRatio});}catch(e){}",
+                            );
                         });
                     });
                 } else {
@@ -7519,6 +7537,7 @@ pub fn run() {
             outbox_propose,
             outbox_heads_up,
             fetch_name_asks,
+            probe_report,
             fetch_vigilance_voids,
             dismiss_void,
             snooze_void,
