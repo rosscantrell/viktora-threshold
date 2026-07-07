@@ -4904,11 +4904,20 @@ code {
   background: rgba(255, 96, 56, 0.14);
   border-color: rgba(255, 96, 56, 0.42);
 }
-.record-action-badge.is-waiting,
+/* Pixel-pass D3 (conservative slice): the card's one clickable primary
+   ("Draft follow-up") wears the house amber-tint — the same grammar as the
+   heads-up button — instead of the legacy blue; a waiting STATUS is quiet
+   neutral, not a second accent. Full accent-token recolor is a separate
+   Ross taste call (defect list D3). */
+.record-action-badge.is-waiting {
+  color: var(--glass-text-dim);
+  background: var(--glass-surface);
+  border-color: var(--glass-border);
+}
 .record-action-badge.is-decision {
-  color: #d6e9ff;
-  background: rgba(56, 132, 255, 0.16);
-  border-color: rgba(56, 132, 255, 0.38);
+  color: var(--glass-accent);
+  background: rgba(255, 196, 64, 0.14);
+  border-color: rgba(255, 196, 64, 0.5);
 }
 .record-action-badge.is-neutral {
   color: var(--glass-text-dim);
