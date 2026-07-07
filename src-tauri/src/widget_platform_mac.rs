@@ -323,19 +323,41 @@ pub fn debug_window_deep(ns_window: *mut std::ffi::c_void, tag: &str) {
                 found = true;
                 let v_opaque: bool = msg_send![view, isOpaque];
                 let v_frame: objc2_foundation::NSRect = msg_send![view, frame];
-                // drawsBackground is a private WKWebView property — read via KVC
-                // (this is exactly what wry sets for transparent windows).
-                let key = objc2_foundation::NSString::from_str("drawsBackground");
-                let draws_bg: *mut AnyObject = msg_send![view, valueForKey: &*key];
-                let draws_bg_val: bool = if draws_bg.is_null() {
-                    true
-                } else {
-                    msg_send![draws_bg, boolValue]
+                // drawsBackground is a private WKWebView property. NEVER read it
+                // via KVC — valueForKey: on an unexposed key raises
+                // NSUnknownKeyException, which objc2 turns into an abort (this
+                // exact crash took the app down on 2026-07-06 the moment the
+                // walk first reached the WryWebView). respondsToSelector-guard a
+                // direct read of the private getter instead; "n/a" when absent.
+                let draws_bg_val: String = {
+                    let responds_private: bool =
+                        msg_send![view, respondsToSelector: objc2::sel!(_drawsBackground)];
+                    let responds_public: bool =
+                        msg_send![view, respondsToSelector: objc2::sel!(drawsBackground)];
+                    if responds_private {
+                        let b: bool = msg_send![view, _drawsBackground];
+                        format!("{b}")
+                    } else if responds_public {
+                        let b: bool = msg_send![view, drawsBackground];
+                        format!("{b}")
+                    } else {
+                        "n/a".into()
+                    }
                 };
                 // underPageBackgroundColor (macOS 12+): grey in dark mode by
-                // default; a live suspect for the halo.
-                let upbc: *mut AnyObject = msg_send![view, underPageBackgroundColor];
-                let upbc_desc = objc_description(upbc);
+                // default; a live suspect for the halo. Guarded the same way.
+                let upbc_desc = {
+                    let responds: bool = msg_send![
+                        view,
+                        respondsToSelector: objc2::sel!(underPageBackgroundColor)
+                    ];
+                    if responds {
+                        let upbc: *mut AnyObject = msg_send![view, underPageBackgroundColor];
+                        objc_description(upbc)
+                    } else {
+                        "n/a".into()
+                    }
+                };
                 let v_layer: *mut AnyObject = msg_send![view, layer];
                 let layer_desc = if v_layer.is_null() {
                     "no-layer".into()
