@@ -190,6 +190,24 @@ pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<
     Ok(())
 }
 
+/// Read the window's CURRENT AppKit styleMask. tao's `is_fullscreen()` flips
+/// at windowWillExitFullScreen — before AppKit actually clears
+/// NSWindowStyleMaskFullScreen — so callers sequencing mask writes around a
+/// fullscreen exit must poll THIS, the real bit (crash-traced 2026-07-07:
+/// tao's own queued set_style_mask landed on 0x400f and AppKit threw).
+///
+/// # Safety
+/// `ns_window` must be a valid NSWindow pointer; call on the main thread.
+pub fn style_mask_of(ns_window: *mut std::ffi::c_void) -> u64 {
+    if ns_window.is_null() {
+        return 0;
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        msg_send![win, styleMask]
+    }
+}
+
 /// Restore the WIDGET (panel) persona: `.accessory` app + across-Spaces
 /// overlay window that cannot own native full-screen. Called on COLLAPSE.
 /// Symmetric to [`apply_workspace_window_style`]; delegates to
