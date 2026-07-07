@@ -2099,6 +2099,46 @@ async fn outbox_heads_up(
         .map_err(|e| format!("outbox_heads_up: parse response failed: {e}"))
 }
 
+/// WP-R-c2 — one workback HITL gesture (step-done / step-not-applicable /
+/// evidence verdicts / add-step / due-reset / undo). POST
+/// /api/decision-log/workback/{recordId}/gesture with the gesture body as-is;
+/// the server validates, appends the hitl event, and responds with the
+/// re-folded shadow so the panel re-renders without a full refetch. The app
+/// composes NO semantics here — body passes through verbatim.
+#[tauri::command]
+async fn workback_gesture(
+    state: tauri::State<'_, AppState>,
+    record_id: String,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/decision-log/workback/{}/gesture",
+        cfg.base_url.trim_end_matches('/'),
+        record_id
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("workback_gesture: parse response failed: {e}"))
+}
+
 /// WP-VIGILANCE-VOID — the "Watching for…" surface. GET /api/vigilance/voids
 /// returns the OPEN voids (records we're expecting back: who/what/when), already
 /// rendered server-side. Same auth + posture as fetch_decision_log. The engine
@@ -7675,6 +7715,7 @@ pub fn run() {
             outbox_decide,
             outbox_propose,
             outbox_heads_up,
+            workback_gesture,
             fetch_name_asks,
             fetch_merge_asks,
             probe_report,
