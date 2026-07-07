@@ -836,32 +836,68 @@ async function renderEmailCapture() {
   const active = addresses.find((a) => a && a.active);
   const senders = Array.isArray(data.senders) ? data.senders : [];
 
-  // Enabled, but no address minted yet: explainer + create button.
+  // Enabled, but no address minted yet: explainer + create button. The server
+  // resolves the owner from the signed-in identity when present; the bearer
+  // lane has none (whoami → null), so there we ask for the owner email inline —
+  // specifically the address the user will forward FROM, since that is what the
+  // sender allowlist matches against.
   if (!active) {
+    let viewerEmail = null;
+    try { viewerEmail = await getViewerEmail(); } catch (_e) { /* optional */ }
+
     body.innerHTML =
       '<p class="field-help">Create a private capture address for this workspace. ' +
       "BCC or forward any email to it and Threshold files what it finds, then replies " +
       "with a receipt.</p>" +
+      (viewerEmail
+        ? ""
+        : '<div class="ec-add-sender">' +
+          '<input type="email" class="ec-sender-input" id="ec-owner-email" ' +
+          'placeholder="you@company.com" autocomplete="email" spellcheck="false" />' +
+          "</div>" +
+          '<p class="field-help">The address you’ll forward email from — it becomes the ' +
+          "owner of your capture address.</p>") +
       '<div class="ec-actions"><button type="button" class="btn btn-primary" id="ec-create">' +
-      "Create my capture address</button></div>";
+      "Create my capture address</button></div>" +
+      '<p class="field-help ec-sender-error" id="ec-owner-error" hidden></p>';
+
     const create = document.getElementById("ec-create");
-    if (create) {
-      create.addEventListener("click", async () => {
-        create.disabled = true;
-        create.textContent = "Creating…";
-        try {
-          // Owner resolves from the signed-in identity server-side when present;
-          // pass the whoami email as a fallback for the identity-less bearer lane.
-          let ownerEmail = null;
-          try { ownerEmail = await getViewerEmail(); } catch (_e) { /* optional */ }
-          await tauri.core.invoke("email_capture_mint_address", { ownerEmail: ownerEmail || null });
-          await renderEmailCapture(); // re-GET, no optimistic state
-        } catch (err) {
-          create.disabled = false;
-          create.textContent = "Create my capture address";
-          showToast({ kind: "failure", title: "Couldn't create address", body: String(err) });
+    const ownerInput = document.getElementById("ec-owner-email");
+    const ownerErr = document.getElementById("ec-owner-error");
+    const doCreate = async () => {
+      let ownerEmail = viewerEmail;
+      if (!ownerEmail) {
+        // Owner must be a bare email — the @domain wildcard form senders allow
+        // has no meaning as an owner.
+        const value = normalizeCaptureSender(ownerInput ? ownerInput.value : "");
+        if (!value || value.startsWith("@")) {
+          if (ownerErr) {
+            ownerErr.textContent = "Enter the email address you’ll forward from (name@company.com).";
+            ownerErr.removeAttribute("hidden");
+          }
+          return;
         }
-      });
+        ownerEmail = value;
+      }
+      if (ownerErr) ownerErr.setAttribute("hidden", "");
+      create.disabled = true;
+      create.textContent = "Creating…";
+      try {
+        await tauri.core.invoke("email_capture_mint_address", { ownerEmail });
+        await renderEmailCapture(); // re-GET, no optimistic state
+      } catch (err) {
+        create.disabled = false;
+        create.textContent = "Create my capture address";
+        showToast({ kind: "failure", title: "Couldn't create address", body: String(err) });
+      }
+    };
+    if (create) {
+      create.addEventListener("click", doCreate);
+      if (ownerInput) {
+        ownerInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") { e.preventDefault(); doCreate(); }
+        });
+      }
     }
     return;
   }
