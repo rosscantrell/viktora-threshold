@@ -6609,18 +6609,30 @@ fn widget_expand(
         *cfg_guard = Some(cfg);
     }
 
-    // Step 2: resize. INITIAL size only — sized to hug the main-view content
-    // (golden-ratio tile pair + header + drop hint) rather than leave it
-    // swimming in an 800×600 frame. The webview layout is responsive, so the
-    // other expanded views (Configure, Connections, Auto-import — all
-    // max-width 720 and scrollable) adapt cleanly, and Today reflows into a
-    // two-column layout at ≥1200px when the user drags wider. This set_size
-    // runs once per expand transition, NOT on focus/refresh, so a user resize
-    // is never clobbered (the collapse→expand cycle is the only re-apply).
+    // Step 2: resize. INITIAL size only. WP-TODAY-READ-ACT: the flagship Today
+    // composition (read | act split) engages at ≥1200px — the old 720×560
+    // default meant a fresh expand NEVER showed the approved layout (Ross hit
+    // exactly this: "everything is stacked on one another"). Open WIDE by
+    // default — 1280×860, clamped to ~88% of the current monitor's logical
+    // size, floored at the old 720×560 for small screens. Runs once per
+    // expand transition, NOT on focus/refresh, so a user resize is never
+    // clobbered (the collapse→expand cycle is the only re-apply).
+    let (init_w, init_h) = {
+        let (mut w, mut h) = (1280.0_f64, 860.0_f64);
+        if let Ok(Some(mon)) = window.current_monitor() {
+            let scale = mon.scale_factor();
+            let avail_w = mon.size().width as f64 / scale * 0.88;
+            let avail_h = mon.size().height as f64 / scale * 0.88;
+            w = w.min(avail_w).max(720.0);
+            h = h.min(avail_h).max(560.0);
+        }
+        (w, h)
+    };
+    eprintln!("[expand] initial size {init_w:.0}x{init_h:.0} (wide default, monitor-clamped)");
     window
         .set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 720.0,
-            height: 560.0,
+            width: init_w,
+            height: init_h,
         }))
         .map_err(|e| format!("set_size failed: {e}"))?;
     // A sane floor so the two-column / scrollable layouts never collapse into
