@@ -88,7 +88,11 @@
          (feedback: "the button to go back… should go at the top").
          ────────────────────────────────────────────────────────────────── -->
     <nav id="app-nav" class="app-nav" aria-label="Primary navigation" data-tauri-drag-region hidden>
-      <div class="app-nav-left">
+      <!-- data-tauri-drag-region must sit on the element that RECEIVES the
+           mousedown — Tauri only honors it on the event target, and this
+           filler div covers the whole strip (drag-by-nav was dead without it,
+           CGEvent-verified 2026-07-07). Interactive children still win. -->
+      <div class="app-nav-left" data-tauri-drag-region>
         <button type="button" id="app-nav-back" class="app-nav-back" title="Back" aria-label="Back" hidden>←</button>
         <ol class="app-nav-crumbs" id="app-nav-crumbs"></ol>
       </div>
