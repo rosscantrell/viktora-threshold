@@ -4034,7 +4034,7 @@ function renderTodayAttention() {
   const docProjects = ctx.docProjects instanceof Map ? ctx.docProjects : new Map();
   let grouped = null;
   if (rows.length && docProjects.size && groupsEl) {
-    const g = groupRecords(rows, "project", docProjects, {}, ctx.jobNames || {}, ctx.recordJobs || {});
+    const g = groupRecords(rows, "project", docProjects, ctx.aliases || {}, ctx.jobNames || {}, ctx.recordJobs || {});
     // Only group when it's meaningful — more than one bucket, or a single named
     // (non-"Other") project. A lone "Other" bucket ⇒ flat list (no project data).
     const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
@@ -4341,6 +4341,15 @@ async function loadTodayComingUp() {
   if (_todayCtx) {
     _todayCtx.jobNames = (data && data.jobNames) || {};
     _todayCtx.recordJobs = (data && data.recordJobs) || {};
+    // Canon alias map (slug → canonical label) — THE channel a project-canon
+    // rename travels through (verified live: rename lands here immediately).
+    _todayCtx.aliases = (data && data.aliases) || {};
+    // The needs-attention board may have painted before this stash landed
+    // (its rollup is a separate async path) — re-render it so canon names
+    // apply on FIRST entry, not the next refresh.
+    if (_todayCtx.needsAttention && _todayCtx.needsAttention.length) {
+      try { renderTodayAttention(); } catch (_e) { /* board not up yet */ }
+    }
   }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -4396,7 +4405,8 @@ async function loadTodayComingUp() {
   // Group by project when there's project data that partitions the rows; else flat.
   let grouped = null;
   if (docProjects.size && groupsEl) {
-    const g = groupRecords(rows, "project", docProjects, {},
+    const g = groupRecords(rows, "project", docProjects,
+      (_todayCtx && _todayCtx.aliases) || {},
       (_todayCtx && _todayCtx.jobNames) || {}, (_todayCtx && _todayCtx.recordJobs) || {});
     const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
     if (g.length > 1 || named.length === 1) {
