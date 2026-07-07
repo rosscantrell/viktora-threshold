@@ -6073,21 +6073,21 @@ button.rec-source {
   #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 5; }
   #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 6; }
 
-  /* RIGHT rail (col 2) — one flowing, sticky action column spanning the left
-     column's rows: Waiting on you → Coming up → Awaiting send. `top` clears
-     the sticky #app-nav (~48px) with breathing room; max-height + overflow so
-     an unusually tall stack scrolls within itself. */
+  /* RIGHT rail (col 2) — one flowing action column spanning the left
+     column's rows: Waiting on you → Coming up → Awaiting send. NOT sticky:
+     the pin was inherited from the old design where the worklist scrolled
+     beside the queue in column 1; the worklist now lives full-width BELOW,
+     and a stuck rail floats out of its column and paints over the board on
+     scroll (Ross's overlap report, reproduced at 1280×860 + scrollY 500 —
+     rail bottom 447px past row-line 7 in document coords). A plain grid
+     item can never hover over row 7. */
   #view-log:not([hidden]) > #today-rail {
     grid-column: 2;
     grid-row: 2 / 7;
     display: flex;
     flex-direction: column;
     gap: 4px;
-    position: sticky;
-    top: 60px;
     align-self: start;
-    max-height: calc(100vh - 76px);
-    overflow-y: auto;
   }
 
   /* Needs-attention header row: keep the "Needs attention" title on one line
