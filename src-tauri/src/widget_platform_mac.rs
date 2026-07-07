@@ -448,6 +448,78 @@ pub fn clear_webview_underpage(ns_window: *mut std::ffi::c_void, tag: &str) {
     }
 }
 
+/// FULL view-tree dump (probe v4) — every subview, not just *WebView* ones.
+/// The halo persists with every previously-probed layer clean; if ANY view in
+/// the window paints grey, this prints it: class, frame, alpha, hidden,
+/// wantsLayer, layer background + opacity. Depth- and count-capped. Reads only.
+pub fn debug_view_tree(ns_window: *mut std::ffi::c_void, tag: &str) {
+    if ns_window.is_null() {
+        return;
+    }
+    unsafe {
+        let win = ns_window as *mut AnyObject;
+        // Window-level color description — alpha alone can hide colorspace surprises.
+        let bg: *mut AnyObject = msg_send![win, backgroundColor];
+        eprintln!("[tree:{tag}] window.backgroundColor = {}", objc_description(bg));
+        let content: *mut AnyObject = msg_send![win, contentView];
+        if content.is_null() {
+            eprintln!("[tree:{tag}] contentView NULL");
+            return;
+        }
+        let mut printed = 0usize;
+        fn walk(
+            view: *mut AnyObject,
+            depth: usize,
+            printed: &mut usize,
+            tag: &str,
+        ) {
+            if depth > 5 || *printed > 40 {
+                return;
+            }
+            unsafe {
+                let cls = (*view).class().name().to_string_lossy().into_owned();
+                let frame: objc2_foundation::NSRect = msg_send![view, frame];
+                let alpha: f64 = msg_send![view, alphaValue];
+                let hidden: bool = msg_send![view, isHidden];
+                let wants_layer: bool = msg_send![view, wantsLayer];
+                let layer: *mut AnyObject = msg_send![view, layer];
+                let layer_desc = if layer.is_null() {
+                    "no-layer".to_string()
+                } else {
+                    let cg: *mut AnyObject = msg_send![layer, backgroundColor];
+                    let l_opaque: bool = msg_send![layer, isOpaque];
+                    let bg_desc = if cg.is_null() {
+                        "nil".to_string()
+                    } else {
+                        let ns: *mut AnyObject = msg_send![
+                            objc2::class!(NSColor),
+                            colorWithCGColor: cg as *mut std::ffi::c_void
+                        ];
+                        objc_description(ns)
+                    };
+                    format!("bg={bg_desc} opaque={l_opaque}")
+                };
+                let indent = "  ".repeat(depth);
+                eprintln!(
+                    "[tree:{tag}] {indent}{cls} ({:.0},{:.0} {:.0}x{:.0}) alpha={alpha:.2}{} wantsLayer={wants_layer} {layer_desc}",
+                    frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                    if hidden { " HIDDEN" } else { "" },
+                );
+                *printed += 1;
+                let subviews: *mut AnyObject = msg_send![view, subviews];
+                let n: usize = if subviews.is_null() { 0 } else { msg_send![subviews, count] };
+                for i in 0..n {
+                    let sv: *mut AnyObject = msg_send![subviews, objectAtIndex: i];
+                    if !sv.is_null() {
+                        walk(sv, depth + 1, printed, tag);
+                    }
+                }
+            }
+        }
+        walk(content, 0, &mut printed, tag);
+    }
+}
+
 /// Print the live NSWindow chrome state — the grey-halo investigation probe.
 /// Reads, never writes. Call on the main thread.
 pub fn debug_window_chrome(ns_window: *mut std::ffi::c_void, tag: &str) {
