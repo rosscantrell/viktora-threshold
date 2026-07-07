@@ -81,10 +81,14 @@ const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: i64 = 1;
 /// widget's `.accessory` panel posture.
 const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
 
-/// NSWindowCollectionBehavior::Managed = 1 << 1. The window participates
+/// NSWindowCollectionBehavior::Managed = 1 << 2. The window participates
 /// in Spaces + Exposé/Mission Control as a first-class window, as opposed
 /// to the `canJoinAllSpaces | stationary` overlay-panel posture.
-const NS_COLLECTION_MANAGED: u64 = 1 << 1;
+/// CAUTION: 1 << 1 is MoveToActiveSpace, not Managed — shipping that bit
+/// here left the workspace window UNMANAGED, so green-button fullscreen
+/// moved it to its Space but never granted it the screen frame (letterboxed
+/// at old size on black, ~10s watchdog revert; measured live 2026-07-07).
+const NS_COLLECTION_MANAGED: u64 = 1 << 2;
 
 /// NSWindowCollectionBehavior::FullScreenPrimary = 1 << 7. The window can
 /// enter its OWN native full-screen Space (green-button / ⌃⌘F path).
@@ -144,6 +148,19 @@ pub fn apply_workspace_window_style(ns_window: *mut std::ffi::c_void) -> Result<
         let new_behavior =
             (current_behavior & !PANEL_BEHAVIOR_BITS) | NS_COLLECTION_MANAGED | NS_COLLECTION_FULL_SCREEN_PRIMARY;
         let _: () = msg_send![win, setCollectionBehavior: new_behavior];
+        let applied_behavior: u64 = msg_send![win, collectionBehavior];
+        eprintln!("[persona] collectionBehavior applied: {applied_behavior:#x} (managed|fullScreenPrimary = 0x84)");
+
+        // Belt-and-braces for the async styleMask race (see widget_expand's
+        // resizable-before-decorations ordering note): the workspace window
+        // must rest titled+closable+miniaturizable+RESIZABLE — AppKit only
+        // grants the fullscreen screen frame to resizable windows. OR the
+        // bits in here on the main thread; never strip what's already set.
+        const WORKSPACE_STYLE_BITS: u64 = 0xF; // titled|closable|miniaturizable|resizable
+        let mask_before: u64 = msg_send![win, styleMask];
+        let _: () = msg_send![win, setStyleMask: mask_before | WORKSPACE_STYLE_BITS];
+        let mask_after: u64 = msg_send![win, styleMask];
+        eprintln!("[persona] styleMask enforced: {mask_before:#x} -> {mask_after:#x}");
 
         // WORKSPACE windows are OPAQUE. The expanded UI paints a full opaque
         // glass gradient anyway; window-level transparency only serves the
