@@ -110,6 +110,13 @@ pain table (memory `trisha-deadline-pain-session.md`) is the product bar:
    v0.9.0 smoke (still owed from the July-5 handoff) → 7. v0.9.1 installer
    (version drift note: package.json says 0.8.1, Cargo.toml 0.9.0 — reconcile).
 
+### Ready-to-dispatch next WP (Ross-motivated, specced at handoff)
+`WP-READINESS-BRIEF-2026-07-06.md` (repo root) — workback readiness flags
+("due soon + no draft observed", the Brian flag) + client heads-up drafts.
+Trisha's #1 want; Coming up (shipped) is the calendar half, this is the
+"you won't make it" half. Deterministic tier first, acceptance demo = replaying
+the Brian June-30 scenario on the :3020 harness corpus.
+
 ## OPERATING POSTURE FOR THE SUCCESSOR (Ross's exit diagnosis — the root of it all)
 Ross, at handoff: the predecessor "did good work there [strategy/eval] but
 couldn't switch context to the frontend effectively." He is right, and the
