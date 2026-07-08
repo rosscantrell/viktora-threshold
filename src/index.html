@@ -695,6 +695,14 @@
         </p>
       </section>
 
+      <!-- WP-FOCUS — "This week": the short-fuse pick list, PAIRED with the
+           outlook in the left column (Ross, 2026-07-08: the two-week picture
+           reads as one — plans above, burn-down below; the rail was also too
+           narrow for the rows). Runway <7d items get no swimlane, no card:
+           a dense owner-grouped row here, click to expand the full item.
+           Filled by renderThisWeekList; empty ⇒ hidden. -->
+      <div class="today-thisweek" id="today-thisweek" hidden></div>
+
       </div><!-- /#today-read -->
 
       <!-- WP-TODAY-READ-ACT — the action rail. Layout-only wrapper: display:contents
@@ -757,11 +765,6 @@
           <h2 class="today-section-title">Coming up</h2>
           <span class="today-section-count" id="today-comingup-count"></span>
         </div>
-        <!-- WP-FOCUS — "This week": the short-fuse pick list (runway <7d gets
-             no swimlane and no card — a dense row in a list built to be
-             burned down, grouped by owner so one follow-up chases a person's
-             whole pile). Filled by renderThisWeekList; empty ⇒ hidden. -->
-        <div class="today-thisweek" id="today-thisweek" hidden></div>
         <div class="log-attention-groups" id="today-comingup-groups"></div>
         <div class="log-attention-list" id="today-comingup-list"></div>
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due in the next two weeks.</p>
