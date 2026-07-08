@@ -105,7 +105,12 @@ letting people in in small waves.
 **Referral hook (Dropbox mechanic):** after signup — "know someone else who's
 accountable for other people's promises? Invites move you both up the list."
 
-Footer: Viktora · Threshold is in active pilot · privacy note link.
+Footer: **Viktora · Threshold · Privacy** — "in active pilot" CUT (Ross,
+2026-07-08): earliness is already carried by the beta CTAs + "small waves,"
+and "pilot" reads as a hedge / implies an unnamed customer. The Privacy link
+now resolves to a REAL one-line note (email used only for the invite + spot
+notice, never sold/shared, removal on request at beta@viktora.ai) instead of
+scrolling to the signup form.
 
 ## GTM notes (Dropbox strategy, Ross 2026-07-08)
 - Individual-first: beta users → rapid individual expansion. All copy speaks
@@ -132,7 +137,9 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
   payoff or a receipt), or re-shoot.
 - **Hero video end-state**: FIXED — resets to the poster on `ended` instead
   of resting on a dark final frame that read as a blank page.
-- **Hero video audio**: none currently. Intended, or add VO/captions?
+- **Hero video audio**: none currently. Ross wants to REVISIT and add audio
+  (2026-07-08, confirmed post-launch queue item) — VO or a scored
+  walkthrough; pairs with the hero-poster re-shoot. Not a launch gate.
 - **Section screenshots too dense** (Trisha): ADDRESSED for statics
   (2026-07-08 pass) — features 1/2/4 now use tight crops (capture strip,
   expanded plan card, single drifting-item card); feature copy trimmed
@@ -156,13 +163,18 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
   organize your workspace — and teach it."
 
 ## Claims for Ross to adjudicate (skill rule: flag, don't decide)
-1. "in active pilot" in the footer — say it, soften it, or cut it?
-   (No customer names/quotes anywhere, per the no-signed-customer rule.)
+1. ~~"in active pilot" in the footer~~ — RESOLVED (Ross, 2026-07-08): CUT.
+   Footer is now Viktora · Threshold · Privacy with a real privacy note.
 2. Product naming on the site: "Threshold" with "Viktora" as the company —
-   matches installer branding. Confirm.
-3. The hero story is Trisha's June-30 incident, fully genericized (no names,
-   no client, no agency). Comfortable?
-4. Beta promise wording: "onboarding a small number of teams" — accurate?
+   matches installer branding. Confirm. (Standing as-is; no objection raised.)
+3. ~~The hero story (Trisha's June-30 incident, genericized)~~ — RESOLVED
+   (Ross, 2026-07-08): comfortable. Rebuilt WITH Trisha in the live session;
+   she confirmed it's her experience and "not a very unique thing."
+4. Beta promise wording — the site says "one person from day one / small
+   waves," not "onboarding a small number of teams." Individual-first per
+   the Dropbox GTM. (Consistent; no open question.)
+
+REMAINING GATE: only Ross's explicit GO. All three prior calls are closed.
 
 ## Build spec (for the Opus build agent, after copy sign-off)
 - Static single page, self-contained (inline CSS, no trackers, no CDN

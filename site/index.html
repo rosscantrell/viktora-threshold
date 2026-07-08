@@ -246,6 +246,11 @@ footer{
   color:var(--text-tertiary);font-size:14px;
 }
 footer .dot{margin:0 8px;opacity:.5}
+.foot-privacy{
+  margin:12px auto 0;max-width:52ch;
+  font-size:13px;color:var(--text-tertiary);opacity:.85;line-height:1.5;
+}
+.foot-privacy a{color:var(--text-secondary)}
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
 @media (max-width:760px){
@@ -424,9 +429,10 @@ footer .dot{margin:0 8px;opacity:.5}
 </section>
 
 <!-- ── Footer ──────────────────────────────────────────────────────── -->
-<footer>
+<footer id="privacy">
   <div class="wrap">
-    Viktora <span class="dot">·</span> Threshold is in active pilot <span class="dot">·</span> <a href="#join">privacy note</a>
+    <div class="foot-id">Viktora <span class="dot">·</span> Threshold <span class="dot">·</span> <a href="#privacy">Privacy</a></div>
+    <p class="foot-privacy">We use your email only to send your beta invite and let you know when a spot opens — never sold, never shared. Want it removed? Email <a href="mailto:beta@viktora.ai?subject=Remove%20me">beta@viktora.ai</a>.</p>
   </div>
 </footer>
 
