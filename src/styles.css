@@ -6299,6 +6299,20 @@ button.rec-source {
   color: var(--text-primary);
   word-break: break-all;
 }
+
+/* Connected-AI grant rows (WP-MCP-V2 Phase C) — a two-line variant of the
+   sender row: label on top, quiet kind · scopes · last-used meta beneath. */
+.ai-grant-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ai-grant-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .ec-sender-remove {
   flex: 0 0 auto;
   background: transparent;
