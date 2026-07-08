@@ -13,11 +13,15 @@ Someone on your team made a promise three weeks ago, at the bottom of an
 email you were barely on. Nobody put it on a list. Someone had to ask.
 Threshold exists so that never happens again.
 
-[HERO IMAGE: hero-outlook.jpg — the two-week deadline outlook (windshield):
-timeline today→Jul 22, deadline bars per promise, one amber "not on track",
-legend "amber = that point passed with nothing seen". REAL capture, Trisha-
-pass corpus via shim harness. The HERO VIDEO is DEFERRED (Ross, 2026-07-08)
-pending an audio/VO revisit — hero.mp4/webm + poster stay in the repo.]
+[HERO IMAGE: hero-app.jpg — the Today view showing MORE OF THE APP (Ross):
+the State of Play digest (synthesized forest narrative + counts pills:
+"32 overdue · 6 blocked · 3 gone stale" + Compose-update-to-team) above the
+two-week deadline outlook, with the waiting-on-you queue on the right. REAL
+capture from the ANONYMIZED scrub-corpus (Northwind/Daniel/Maya). The SoP
+had to be composed live (valid ANTHROPIC key) then the rendered panel
+injected into a headless page — the harness shim's fetch_sop lens param
+returns 400, so the on-Today panel wouldn't populate otherwise. Video
+DEFERRED pending an audio/VO revisit — hero.mp4/webm stay in the repo.]
 
 CTA button: **Ask for a beta invite**
 
