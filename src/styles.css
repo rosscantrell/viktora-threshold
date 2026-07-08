@@ -6524,3 +6524,77 @@ button.rec-source {
   color: var(--text-tertiary);
   white-space: nowrap;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WP-FOCUS — "This week" pick list (short-fuse items: dense burn-down rows,
+   owner-grouped, one chase per pile) + the seen-evidence link.
+   ══════════════════════════════════════════════════════════════════════════ */
+.today-thisweek {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--edge-highlight);
+  margin-bottom: 10px;
+}
+.today-thisweek[hidden] { display: none; }
+.thisweek-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text);
+  margin: 0;
+}
+.thisweek-group { display: flex; flex-direction: column; gap: 2px; }
+.thisweek-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 2px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.thisweek-owner {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-dim);
+}
+.thisweek-chase .btn-link { font-size: 11px; padding: 0; position: static; }
+.thisweek-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  min-width: 0;
+}
+.thisweek-due {
+  flex: none;
+  width: 64px;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}
+.thisweek-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thisweek-acts {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.thisweek-acts .btn { font-size: 10px; padding: 1px 8px; }
+.today-outlook-seen-link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+.today-outlook-seen-link:hover { color: var(--text-primary); }

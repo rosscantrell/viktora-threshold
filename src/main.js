@@ -4497,10 +4497,8 @@ function renderTodayAttention() {
 
   let rows = ctx.needsAttention;
   if (_todayFilter === "mine" && ctx.viewerSlug) {
-    rows = rows.filter((e) => {
-      const owner = ((e.record && e.record.owner) || "").toLowerCase();
-      return owner && owner === ctx.viewerSlug;
-    });
+    rows = rows.filter((e) =>
+      entryIsMine(e, ctx.viewerSlug, ctx.viewerEmail, ctx.submitterByDoc));
   }
 
   const renderRow = (entry) =>
@@ -4873,20 +4871,31 @@ async function loadTodayComingUp() {
   // "Mine" filter parity with the needs-attention list.
   let rows = upcoming;
   if (_todayFilter === "mine" && _todayCtx && _todayCtx.viewerSlug) {
-    rows = rows.filter((e) => {
-      const owner = ((e.record && e.record.owner) || "").toLowerCase();
-      return owner && owner === _todayCtx.viewerSlug;
-    });
+    rows = rows.filter((e) =>
+      entryIsMine(e, _todayCtx.viewerSlug, _todayCtx.viewerEmail, _todayCtx.submitterByDoc));
   }
 
   if (groupsEl) groupsEl.innerHTML = "";
   if (listEl) listEl.innerHTML = "";
   if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
 
-  // WP-R-c2 — the Deadline-outlook panel reads the SAME rows (soonest-first,
-  // Mine-filtered) so the two projections can never disagree. Renders only in
-  // the wide layout (CSS-gated); never throws into this loader.
-  try { renderTodayOutlook(rows, today); } catch (e) { console.warn("[main] outlook:", e); }
+  // WP-FOCUS (Ross rulings 2026-07-08, from the live 34-record flood): split
+  // at the 7-day runway boundary the workback engine already uses. PLANNED
+  // (runway ≥7d — plans/ticks exist or will) keeps swimlanes + full cards;
+  // SHORT-FUSE gets NO swimlane and NO card — it renders as the dense
+  // "This week" pick list, built to be worked through, not read.
+  const runwayOf = (it) => {
+    const rec = (it && it.record) || {};
+    const d = parseDueDate(effDueOf(it));
+    const c = rec.date ? parseDueDate(String(rec.date).slice(0, 10)) : null;
+    return d && c ? Math.round((d.getTime() - c.getTime()) / 86400000) : 0;
+  };
+  const planned = rows.filter((it) => runwayOf(it) >= 7);
+  const thisWeek = rows.filter((it) => runwayOf(it) < 7);
+
+  try { renderTodayOutlook(planned, today); } catch (e) { console.warn("[main] outlook:", e); }
+  try { renderThisWeekList(thisWeek, today); } catch (e) { console.warn("[main] this-week:", e); }
+  rows = planned;
 
   // Empty ⇒ quiet line (WP-TODAY-READ-ACT): "nothing due in the next two weeks"
   // is affirmative information — the windshield stays present so the morning
@@ -4943,6 +4952,20 @@ async function loadTodayComingUp() {
  *  projection fired, else tier-1's 'no draft observed'). Tap a row → the
  *  matching Coming-up row scrolls into view in the rail. Same §2.11 copy
  *  rules as the badges: plain words, no machinery vocabulary. */
+/** "Mine" = items I OWN or items I CAPTURED (Ross ruling 2026-07-08: for the
+ *  accountable-but-not-responsible user, what she forwards IS her watchlist —
+ *  ownership alone hid every item from her own forward). */
+function entryIsMine(e, viewerSlug, viewerEmail, submitterByDoc) {
+  const rec = (e && e.record) || {};
+  const owner = (rec.owner || "").toLowerCase();
+  if (viewerSlug && owner === viewerSlug) return true;
+  const sub =
+    submitterByDoc && submitterByDoc.get && submitterByDoc.get(rec.documentId);
+  return !!(
+    viewerEmail && sub && String(sub).toLowerCase() === String(viewerEmail).toLowerCase()
+  );
+}
+
 /** Expanded swimlanes survive the full re-render a gesture triggers (the
  *  refetch is what makes propagation visible everywhere at once). */
 const _outlookExpanded = new Set();
@@ -4966,6 +4989,97 @@ async function sendWorkbackGesture(box, recordId, body) {
     }
     err.textContent = "That didn't save — is the server reachable?";
     console.warn("[main] workback gesture:", e);
+  }
+}
+
+/** WP-FOCUS — "This week": the short-fuse pick list. Runway <7d means the
+ *  engine deliberately has no plan (tier-1 territory: just do it / chase it),
+ *  so these render as dense burn-down rows instead of cards: grouped by
+ *  OWNER (sorted by each group's earliest due), one group-level Draft
+ *  follow-up chasing that person's whole pile, per-row Resolve + dismiss.
+ *  §2.11 copy throughout. Empty ⇒ hidden. */
+function renderThisWeekList(rows, today) {
+  const box = document.getElementById("today-thisweek");
+  if (!box) return;
+  box.innerHTML = "";
+  if (!rows || !rows.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+
+  const t0 = today.getTime();
+  const relDue = (it) => {
+    const d = parseDueDate(effDueOf_local(it));
+    if (!d) return "";
+    const days = Math.round((d.getTime() - t0) / 86400000);
+    return days <= 0 ? "today" : days === 1 ? "tomorrow" : d.toLocaleDateString(undefined, { weekday: "short" });
+  };
+  function effDueOf_local(it) {
+    return (it && it.effectiveDue) || ((it && it.record) || {}).due;
+  }
+
+  // Group by owner, order groups by earliest due within.
+  const groups = new Map();
+  for (const it of rows) {
+    const key = ((it.record || {}).owner || "unassigned").toLowerCase();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(it);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const first = (g) => Math.min(...g[1].map((it) => (parseDueDate(effDueOf_local(it)) || new Date(8640000000000000)).getTime()));
+    return first(a) - first(b);
+  });
+
+  const head = document.createElement("p");
+  head.className = "thisweek-head";
+  head.textContent = `This week — ${rows.length} to work through`;
+  box.appendChild(head);
+
+  for (const [ownerKey, items] of ordered) {
+    const grp = document.createElement("div");
+    grp.className = "thisweek-group";
+
+    const gh = document.createElement("div");
+    gh.className = "thisweek-group-head";
+    const name = document.createElement("span");
+    name.className = "thisweek-owner";
+    name.textContent = prettySlug(ownerKey) + " · " + items.length;
+    gh.appendChild(name);
+    // One chase for the whole pile — anchored on the group's most urgent item.
+    const anchor = items[0].record || {};
+    const chase = document.createElement("span");
+    chase.className = "thisweek-chase";
+    appendDraftFollowUpControl(chase, anchor);
+    gh.appendChild(chase);
+    grp.appendChild(gh);
+
+    for (const it of items) {
+      const rec = it.record || {};
+      const row = document.createElement("div");
+      row.className = "thisweek-row";
+      if (rec.recordId) row.dataset.recordId = rec.recordId;
+
+      const due = document.createElement("span");
+      due.className = "thisweek-due";
+      due.textContent = relDue(it);
+      row.appendChild(due);
+
+      const sum = document.createElement("span");
+      sum.className = "thisweek-summary";
+      sum.textContent = rec.summary || "";
+      sum.title = rec.summary || "";
+      row.appendChild(sum);
+
+      const acts = document.createElement("span");
+      acts.className = "thisweek-acts";
+      appendResolveSnoozeControls(acts, rec.recordId, row, rec.summary);
+      appendDismissControl(acts, rec.recordId, row, rec.summary);
+      row.appendChild(acts);
+
+      grp.appendChild(row);
+    }
+    box.appendChild(grp);
   }
 }
 
@@ -5093,6 +5207,11 @@ function renderTodayOutlook(rows, today) {
     details.className = "today-outlook-details";
     details.hidden = true;
     const openDetails = () => {
+      // Accordion (Ross, 2026-07-08): one open at a time — a dozen stuck-open
+      // expansions turned the panel into a wall.
+      for (const d of rowsEl.querySelectorAll(".today-outlook-details")) d.hidden = true;
+      for (const r of rowsEl.querySelectorAll(".today-outlook-row")) r.setAttribute("aria-expanded", "false");
+      _outlookExpanded.clear();
       if (!details.childNodes.length) renderOutlookDetails(details, entry, rec, wb, proj);
       details.hidden = false;
       row.setAttribute("aria-expanded", "true");
@@ -5209,6 +5328,20 @@ function renderOutlookDetails(box, entry, rec, wb, proj) {
           acts.appendChild(picker);
         }
       } else if (v && v.evidenceDocId) {
+        // WP-FOCUS task #5 (Ross, 2026-07-08): a "seen" verdict is the
+        // matcher's CLAIM — make it inspectable. The step text opens the
+        // standard source panel on the matched doc; "that's the one" is the
+        // positive confirm the calibration stream never got before.
+        text.classList.add("today-outlook-seen-link");
+        text.title = "See the document this was matched to";
+        text.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openSourcePanel(v.evidenceDocId, s.label || null);
+        });
+        acts.appendChild(
+          miniBtn("that's the one", "Confirm this document is the right evidence", () =>
+            gesture({ gesture: "evidence-confirm", stepIndex: i, docId: v.evidenceDocId })),
+        );
         acts.appendChild(
           miniBtn("not this", "That document isn't evidence of this step", () =>
             gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId })),

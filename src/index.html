@@ -757,6 +757,11 @@
           <h2 class="today-section-title">Coming up</h2>
           <span class="today-section-count" id="today-comingup-count"></span>
         </div>
+        <!-- WP-FOCUS — "This week": the short-fuse pick list (runway <7d gets
+             no swimlane and no card — a dense row in a list built to be
+             burned down, grouped by owner so one follow-up chases a person's
+             whole pile). Filled by renderThisWeekList; empty ⇒ hidden. -->
+        <div class="today-thisweek" id="today-thisweek" hidden></div>
         <div class="log-attention-groups" id="today-comingup-groups"></div>
         <div class="log-attention-list" id="today-comingup-list"></div>
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due in the next two weeks.</p>
