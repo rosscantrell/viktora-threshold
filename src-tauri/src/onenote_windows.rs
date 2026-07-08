@@ -118,6 +118,16 @@ pub enum OneNoteError {
     /// hotkey UX can render "Open a OneNote notebook first" rather than a
     /// generic error.
     NoNotebookOpen,
+    /// No ONENOTE.exe process exists at all — the notebook genuinely isn't
+    /// open. Distinct from Unreachable so the toast tells the truth.
+    OneNoteNotRunning,
+    /// ONENOTE.exe IS running but the COM attach yielded an instance with no
+    /// CurrentWindow (typically a fresh headless COM server spawned because
+    /// the real instance runs at a different elevation, or a Store-sandboxed
+    /// install). Live pilot repro 2026-07-08: notebook visibly open, toast
+    /// claimed it wasn't. User-actionable: click into the page / restart
+    /// OneNote un-elevated.
+    OneNoteUnreachable,
     /// `powershell.exe` exited non-zero. Carries stderr for the toast body.
     PowerShellExitNonZero { code: i32, stderr: String },
     /// `powershell.exe` couldn't be spawned at all (most likely cause: PATH
@@ -149,7 +159,13 @@ impl OneNoteError {
                 "OneNote COM unavailable (try the Microsoft 365 desktop OneNote, or drag a PDF export instead)"
             }
             OneNoteError::NoNotebookOpen => {
-                "No OneNote notebook is currently open"
+                "OneNote is open, but no page is active — click into a page and try again"
+            }
+            OneNoteError::OneNoteNotRunning => {
+                "OneNote isn't running — open your notebook first"
+            }
+            OneNoteError::OneNoteUnreachable => {
+                "OneNote is open, but Threshold couldn't reach it — click inside the page and try again. If it keeps happening, restart OneNote (and make sure neither app is running as administrator)."
             }
             OneNoteError::PowerShellExitNonZero { .. } => {
                 "Couldn't run OneNote COM command (PowerShell error)"
@@ -178,6 +194,10 @@ impl std::fmt::Display for OneNoteError {
                 write!(f, "OneNote.Application COM class not registered")
             }
             OneNoteError::NoNotebookOpen => write!(f, "No OneNote notebook is open"),
+            OneNoteError::OneNoteNotRunning => write!(f, "ONENOTE.exe is not running"),
+            OneNoteError::OneNoteUnreachable => {
+                write!(f, "ONENOTE.exe is running but COM attached to an instance with no CurrentWindow")
+            }
             OneNoteError::PowerShellExitNonZero { code, stderr } => {
                 write!(f, "powershell.exe exited with code {}: {}", code, stderr)
             }
@@ -255,7 +275,22 @@ try {
     $windows = $onenote.Windows
     $active = $windows.CurrentWindow
     if ($null -eq $active) {
-        Write-Output 'NO_NOTEBOOK_OPEN'
+        # The COM attach can land on a NEW headless OneNote instance (empty
+        # Windows collection) instead of the user's real one — elevation
+        # mismatch or Store-sandboxed COM. Live pilot repro 2026-07-08: a
+        # notebook visibly open, CurrentWindow null. Retry once after a
+        # beat, then DISTINGUISH not-running from running-but-unreachable
+        # so the toast can say something actionable.
+        Start-Sleep -Milliseconds 1500
+        $active = $onenote.Windows.CurrentWindow
+    }
+    if ($null -eq $active) {
+        $proc = Get-Process -Name ONENOTE -ErrorAction SilentlyContinue
+        if ($null -eq $proc) {
+            Write-Output 'ONENOTE_NOT_RUNNING'
+        } else {
+            Write-Output 'ONENOTE_UNREACHABLE'
+        }
     } else {
         $pageId = $active.CurrentPageId
         if ([string]::IsNullOrEmpty($pageId)) {
@@ -399,6 +434,13 @@ try {{
 
     pub fn get_active_page() -> Result<Option<String>, OneNoteError> {
         let stdout = spawn_ps_script(PS_GET_ACTIVE_PAGE)?;
+        let trimmed = stdout.trim();
+        if trimmed.starts_with("ONENOTE_NOT_RUNNING") {
+            return Err(OneNoteError::OneNoteNotRunning);
+        }
+        if trimmed.starts_with("ONENOTE_UNREACHABLE") {
+            return Err(OneNoteError::OneNoteUnreachable);
+        }
         Ok(parse_active_page_stdout(&stdout))
     }
 
