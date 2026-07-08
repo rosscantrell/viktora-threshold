@@ -60,8 +60,13 @@ you before they're due.
    Every plan is correctable in place — mark a step done, rule it out,
    move the date, undo any of it. When Threshold isn't sure, it asks
    instead of guessing — and your answers teach it.
-   [screenshot: 28-name-ask — already card-tight; the ask examples live in
-   the image now, not the copy]
+   [screenshot: 23-plan-editor — Trisha's plan with the editing controls
+   visible: done / doesn't-apply on every step, the move-the-date inline
+   editor OPEN (date input + apply), add a step, undo last change. REAL
+   capture from the Trisha-pass corpus via shim harness; the date editor
+   is a client-side toggle — no gesture posted, no corpus mutation.
+   (Prior 28-name-ask was the wrong screenshot here (Ross) — it shows the
+   ask, not the editor; it moved to No homework.)]
 
 4. **Put out the fire before it starts.**
    When something starts drifting, you see it early — while there's still
@@ -79,6 +84,8 @@ matters and it does the filing — the emails, the meeting notes, the running
 log of decisions and commitments — organized and kept current on its own.
 When it isn't sure, it asks you one small question instead of handing you a
 system to manage.
+[screenshot: 28-name-ask, inside the trust card — the literal "one small
+question" (moved here from feature 3, 2026-07-08)]
 
 ### Trust, stated plainly
 Threshold only sees what you forward or connect. Every claim it makes

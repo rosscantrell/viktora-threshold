@@ -175,6 +175,13 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
   padding:34px 38px;
 }
 .trust-card .section-lead{max-width:none;color:var(--text-secondary);font-size:17px}
+.trust-media{
+  margin-top:22px;
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-md);
+  overflow:hidden;
+}
+.trust-media img{max-width:100%;height:auto;display:block}
 
 /* ── CTA / waitlist ─────────────────────────────────────────────────── */
 .join{border-top:1px solid var(--border-subtle);text-align:center}
@@ -337,7 +344,9 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
       </div>
       <div class="feature-media">
-        <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096" height="426">
+        <!-- Real capture (Trisha-pass corpus, shim harness): the inline date editor
+             open — a client-side toggle, no gesture posted, no corpus mutation. -->
+        <img src="assets/23-plan-editor.jpg" alt="A worked-back plan with its editing controls — done and doesn't-apply on every step, the move-the-date editor open, add a step, and undo last change." loading="lazy" width="1620" height="422">
       </div>
     </div>
 
@@ -361,6 +370,9 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="trust-card">
       <div class="section-eyebrow">No homework</div>
       <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
+      <div class="trust-media">
+        <img src="assets/28-name-ask.png" alt="The one small question: Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096" height="426">
+      </div>
     </div>
   </div>
 </section>
