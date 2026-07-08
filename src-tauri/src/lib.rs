@@ -4080,7 +4080,7 @@ async fn save_text_file(
         .dialog()
         .file()
         .set_file_name(&default_name)
-        .add_filter("Text", &["txt", "md"])
+        .add_filter("Text", &["txt", "md", "vcf"])
         .save_file(move |path| {
             let _ = tx.send(path);
         });
