@@ -13,7 +13,11 @@ Someone on your team made a promise three weeks ago, at the bottom of an
 email you were barely on. Nobody put it on a list. Someone had to ask.
 Threshold exists so that never happens again.
 
-[screenshot: 02-today-wide — the full Today view]
+[HERO IMAGE: hero-outlook.jpg — the two-week deadline outlook (windshield):
+timeline today→Jul 22, deadline bars per promise, one amber "not on track",
+legend "amber = that point passed with nothing seen". REAL capture, Trisha-
+pass corpus via shim harness. The HERO VIDEO is DEFERRED (Ross, 2026-07-08)
+pending an audio/VO revisit — hero.mp4/webm + poster stay in the repo.]
 
 CTA button: **Ask for a beta invite**
 

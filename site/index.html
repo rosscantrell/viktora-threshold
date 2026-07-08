@@ -284,17 +284,12 @@ footer .dot{margin:0 8px;opacity:.5}
     <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
     <a class="cta-btn" href="#join">Ask for a beta invite</a>
 
-    <!-- HERO VIDEO: ~62s screencast — forward → receipt → Today fills →
-         plan unfolds → date-move ripple → close. Poster shown until play. -->
+    <!-- HERO IMAGE: the two-week deadline outlook — the windshield the
+         headline promises. Video (hero.mp4/webm) is deferred pending an
+         audio/VO revisit; assets stay in the repo. -->
     <div class="media-card hero-video">
-      <video
-        controls playsinline preload="none"
-        poster="assets/hero-poster.jpg"
-        title="Threshold hero screencast: forward an email, get a receipt, Today fills with promises, a worked-back plan unfolds, and moving a date ripples through the plan.">
-        <source src="assets/hero.webm" type="video/webm">
-        <source src="assets/hero.mp4" type="video/mp4">
-        <img src="assets/02-today-wide.jpg" alt="The Threshold Today view — the full two-week deadline outlook." loading="lazy">
-      </video>
+      <img src="assets/hero-outlook.jpg" width="1680" height="600"
+           alt="Threshold's two-week deadline outlook — a timeline of promises, each with the latest date it can start, one already amber and not on track.">
     </div>
   </div>
 </div>
@@ -437,17 +432,6 @@ footer .dot{margin:0 8px;opacity:.5}
 </footer>
 
 <script>
-/* ─────────────────────────────────────────────────────────────────────────
-   Hero video: when it finishes, return to the poster frame instead of resting
-   on the last (dark) frame — otherwise a played-through hero reads as a blank
-   page. load() re-displays the poster because preload is 'none'.
-   ───────────────────────────────────────────────────────────────────────── */
-(function(){
-  var hero = document.querySelector('.hero-video video');
-  if (!hero) return;
-  hero.addEventListener('ended', function(){ try { hero.load(); } catch(e){} });
-})();
-
 /* ─────────────────────────────────────────────────────────────────────────
    Progressive enhancement. With JS off (or the endpoint down), the form is a
    plain POST to /api/waitlist and the mailto: fallback is always visible.
