@@ -135,6 +135,21 @@ scrolling to the signup form.
   "Sent via Threshold" line is the lever; touching client-facing email is
   sensitive, so it's a decision, not a default.
 
+## SCRUB STATUS (real-data → anonymized, 2026-07-08)
+All screenshots came from Trisha's live corpus (real names/clients). Fix:
+an anonymized corpus COPY at ~/scratch/scrub-corpus (Vantage Collective /
+Northwind / Daniel-Maya persona set; 0 residual real entities, verified),
+served by a throwaway engine on :3030, re-captured via the shim harness.
+- **hero-outlook.jpg, 22-workback-seen.jpg, 23-plan-editor.jpg** — RE-SHOT
+  clean and swapped in (Daniel / Maya; amber + seen states re-staged and
+  reverted). Visually QA'd, zero real names.
+- **27-headsup-crop.jpg (feature 4) + 29-merge-ask.png (No homework)** —
+  PULLED. The heads-up card and the merge/alias question don't surface from
+  the scrubbed corpus (client-facing detection + a broken alias→job linkage),
+  and forcing it is out-of-scope corpus surgery (Ross: "don't do the whole
+  app"). Sections are copy-only pending Ross's call: reconstruct faithfully
+  from the anonymized text, capture a clean substitute, or leave copy-only.
+
 ## Open from the Trisha session (visual pass, not copy — 2026-07-08)
 - **Hero poster frame**: current opening frame shows "the state of play,
   nothing important" (Ross). Re-select a meaningful first frame (the Today
