@@ -6313,6 +6313,26 @@ button.rec-source {
   color: var(--text-tertiary);
 }
 
+/* Connect-a-platform onboarding (WP-MCP-V2 Phase C) — one-click Claude +
+   guided ChatGPT, sharing the connector URL above them. */
+.ai-connect-row { margin-top: 2px; }
+.ai-connect-steps {
+  margin-top: 4px;
+  padding: 12px 14px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.ai-steps-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+.ai-steps-list li { margin-bottom: 4px; }
+.ai-connect-gemini { margin-top: 2px; }
+
 .ec-sender-remove {
   flex: 0 0 auto;
   background: transparent;
