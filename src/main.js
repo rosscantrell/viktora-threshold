@@ -1229,13 +1229,37 @@ async function renderAiConnections() {
 
   let html = "";
   if (mcpUrl) {
+    // claude.ai supports a prefill deep-link: it opens the add-connector dialog
+    // with the name + URL filled in; the user still reviews and consents (it
+    // grants nothing on its own). ChatGPT has no such link — it's a guided
+    // paste. Gemini's consumer app doesn't do custom remote MCP connectors;
+    // that path is Gemini Enterprise / the Gemini CLI, noted but not buttoned.
+    const claudeDeepLink =
+      "https://claude.ai/customize/connectors?modal=add-custom-connector" +
+      "&connectorName=" + encodeURIComponent("Viktora Threshold") +
+      "&connectorUrl=" + encodeURIComponent(mcpUrl);
+
     html +=
       '<div class="ec-address-row">' +
       '<code class="ec-address" id="ai-mcp-url">' + escapeHtml(mcpUrl) + "</code>" +
       '<button type="button" class="btn btn-secondary ec-copy" id="ai-copy-url">Copy</button>' +
       "</div>" +
-      '<p class="field-help">Add this as a custom connector in any AI platform (claude.ai, ChatGPT, …). ' +
-      "You approve access once, on this workspace's consent screen.</p>";
+      '<p class="field-help">Your workspace connector. Approve access once, on this ' +
+      "workspace's consent screen — then the AI can read your field and file captures, " +
+      "nothing more.</p>";
+
+    // One-click Claude + guided ChatGPT, sharing the URL above.
+    html +=
+      '<div class="ec-actions ai-connect-row">' +
+      '<button type="button" class="btn btn-primary" id="ai-connect-claude" ' +
+      'data-deeplink="' + escapeHtml(claudeDeepLink) + '">Connect to Claude</button>' +
+      '<button type="button" class="btn btn-secondary" id="ai-connect-chatgpt">Set up in ChatGPT</button>' +
+      "</div>";
+    html += '<div id="ai-connect-chatgpt-steps" class="ai-connect-steps" hidden></div>';
+    html +=
+      '<p class="field-help ai-connect-gemini">Gemini: connect the URL above via ' +
+      "<strong>Gemini Enterprise</strong> (Google Cloud console) or the <strong>Gemini CLI</strong> — " +
+      "the consumer Gemini app doesn't take custom connectors yet.</p>";
   }
 
   if (active.length) {
@@ -1306,6 +1330,53 @@ async function renderAiConnections() {
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
       } catch (err) {
         showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
+      }
+    });
+  }
+
+  // One-click Claude: open the prefilled add-connector dialog in the browser.
+  const claudeBtn = document.getElementById("ai-connect-claude");
+  if (claudeBtn) {
+    claudeBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("plugin:opener|open_url", { url: claudeBtn.dataset.deeplink });
+      } catch (err) {
+        showToast({ kind: "failure", title: "Couldn't open Claude", body: String(err) });
+      }
+    });
+  }
+
+  // ChatGPT has no prefill link — reveal the guided steps + open its connector
+  // settings, and copy the URL so the paste is one keystroke. Consumer accounts
+  // get read-only custom connectors (reconciliation works; capture needs a
+  // Business/Enterprise workspace) — say so, it's a real limit.
+  const gptBtn = document.getElementById("ai-connect-chatgpt");
+  const gptSteps = document.getElementById("ai-connect-chatgpt-steps");
+  if (gptBtn && gptSteps) {
+    gptBtn.addEventListener("click", async () => {
+      if (!gptSteps.hasAttribute("hidden")) { gptSteps.setAttribute("hidden", ""); return; }
+      gptSteps.innerHTML =
+        "<ol class=\"ai-steps-list\">" +
+        "<li>In ChatGPT: <strong>Settings → Connectors → Advanced → turn on Developer mode</strong>.</li>" +
+        "<li><strong>Connectors → Create</strong>. Name it <em>Viktora Threshold</em>; paste the connector URL above (already copied).</li>" +
+        "<li>Approve access on this workspace's consent screen.</li>" +
+        "</ol>" +
+        '<p class="field-help">Note: on ChatGPT Plus/Pro, custom connectors are ' +
+        "read-only — checking a draft against your field works; filing captures back " +
+        "needs a Business/Enterprise workspace.</p>" +
+        '<div class="ec-actions"><button type="button" class="btn btn-secondary" id="ai-open-chatgpt">' +
+        "Open ChatGPT connectors</button></div>";
+      gptSteps.removeAttribute("hidden");
+      try { await tauri.core.invoke("copy_text", { text: mcpUrl }); } catch (_e) { /* non-fatal */ }
+      const openGpt = document.getElementById("ai-open-chatgpt");
+      if (openGpt) {
+        openGpt.addEventListener("click", async () => {
+          try {
+            await tauri.core.invoke("plugin:opener|open_url", { url: "https://chatgpt.com/#settings/Connectors" });
+          } catch (err) {
+            showToast({ kind: "failure", title: "Couldn't open ChatGPT", body: String(err) });
+          }
+        });
       }
     });
   }
