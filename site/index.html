@@ -175,13 +175,11 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
   padding:34px 38px;
 }
 .trust-card .section-lead{max-width:none;color:var(--text-secondary);font-size:17px}
-.trust-media{
-  margin-top:22px;
-  border:1px solid var(--border-subtle);
-  border-radius:var(--radius-md);
-  overflow:hidden;
-}
-.trust-media img{max-width:100%;height:auto;display:block}
+/* No-homework proof card — full content width (breaks out of the narrow
+   trust-card) so the question card reads at size. The card image carries its
+   own border, so no extra frame here. */
+.trust-media{margin:26px auto 0;max-width:100%}
+.trust-media img{max-width:100%;height:auto;display:block;border-radius:var(--radius-md)}
 
 /* ── CTA / waitlist ─────────────────────────────────────────────────── */
 .join{border-top:1px solid var(--border-subtle);text-align:center}
@@ -361,9 +359,9 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="trust-card">
       <div class="section-eyebrow">No homework</div>
       <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
-      <div class="trust-media">
-        <img src="assets/29-merge-ask.jpg" alt="The one small question: Threshold asks whether two similarly-named areas are the same piece of work — with the consequences of each answer spelled out, fully undoable." loading="lazy" width="1968" height="368">
-      </div>
+    </div>
+    <div class="trust-media">
+      <img src="assets/29-merge-ask.jpg" alt="The one small question: Threshold asks whether two similarly-named areas are the same piece of work — with the consequences of each answer spelled out, fully undoable." loading="lazy" width="1544" height="368">
     </div>
   </div>
 </section>
