@@ -936,10 +936,16 @@ async function renderEmailCapture() {
     '<div class="ec-address-row">' +
     '<code class="ec-address" id="ec-address">' + escapeHtml(activeAddr) + "</code>" +
     '<button type="button" class="btn btn-secondary ec-copy" id="ec-copy">Copy</button>' +
+    '<button type="button" class="btn btn-secondary ec-vcard" id="ec-vcard">Save as contact</button>' +
     "</div>";
+  // The address is a machine token by design (it routes + gates inbound mail) —
+  // the intended UX is save-it-once-as-a-contact, never read it again (Ross,
+  // 2026-07-08: "not very intuitive at all as an address").
   html +=
-    '<p class="field-help">BCC or forward any email to this address — Threshold files ' +
-    "what it finds and replies with a receipt. Only senders you approve below are accepted.</p>";
+    '<p class="field-help">This address isn’t meant to be memorized — save it as a ' +
+    "contact once (name it “Threshold”) and just type that when you forward. " +
+    "Threshold files what it finds and replies with a receipt. Only senders you " +
+    "approve below are accepted.</p>";
 
   // Rotate (behind a confirm).
   html +=
@@ -989,6 +995,41 @@ async function renderEmailCapture() {
         setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
       } catch (err) {
         showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
+      }
+    });
+  }
+
+  // "Save as contact" — a vCard via the native save dialog, so the token
+  // address lives in her address book as "Viktora Threshold" and she types
+  // that in the To: field instead of ever reading the token.
+  const vcardBtn = document.getElementById("ec-vcard");
+  if (vcardBtn) {
+    vcardBtn.addEventListener("click", async () => {
+      const vcf = [
+        "BEGIN:VCARD",
+        "VERSION:3.0",
+        "FN:Viktora Threshold",
+        "ORG:Viktora",
+        "EMAIL;TYPE=INTERNET:" + activeAddr,
+        "NOTE:Forward or BCC email here — Threshold files what it finds and replies with a receipt.",
+        "END:VCARD",
+        "",
+      ].join("\r\n");
+      try {
+        const saved = await tauri.core.invoke("save_text_file", {
+          defaultName: "Viktora Threshold.vcf",
+          content: vcf,
+        });
+        if (saved) {
+          showToast({
+            kind: "success",
+            title: "Contact saved",
+            body: "Import it into your mail app, then just type “Threshold” when forwarding.",
+          });
+        }
+      } catch (err) {
+        console.warn("[main] capture vcard save failed:", err);
+        showToast({ kind: "failure", title: "Couldn't save contact", body: "Try again." });
       }
     });
   }
