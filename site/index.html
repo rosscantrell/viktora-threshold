@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Threshold — the deadline was in the thread the whole time</title>
-<meta name="description" content="Threshold watches the work you give it and keeps the promises in front of you before they're due. Forward it an email — that's the whole workflow.">
+<meta name="description" content="Threshold watches the work you give it and keeps the promises in front of you before they're due. Forward an email, a note, a screenshot, a recording — that's the whole workflow.">
 <style>
 /* ─────────────────────────────────────────────────────────────────────────
    Design tokens lifted verbatim from the Threshold app (src/styles.css).
@@ -271,7 +271,7 @@ footer .dot{margin:0 8px;opacity:.5}
 <div class="wrap">
   <div class="hero">
     <h1>The deadline was in the thread the whole time.</h1>
-    <p class="lede">Someone on your team promised a client a date, three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. The client had to ask. Threshold exists so that never happens again.</p>
+    <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
     <a class="cta-btn" href="#join">Ask for a beta invite</a>
 
     <!-- HERO VIDEO: ~62s screencast — forward → receipt → Today fills →
@@ -293,7 +293,7 @@ footer .dot{margin:0 8px;opacity:.5}
 <section class="problem">
   <div class="wrap">
     <div class="section-eyebrow">The problem, plainly</div>
-    <p class="section-lead">You're accountable for work you don't personally do. The promises that sink you don't live in your task tracker — they live in side threads, forwarded decks, and meeting notes, phrased as "I should have something by the 30th." Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every system that could is homework: somebody has to file, tag, and groom it, forever — which is exactly the job nobody was doing the day the deadline slipped.</p>
+    <p class="section-lead">You're accountable for work you don't personally do. The promises that sink you don't live in your task tracker — they live in side threads, forwarded decks, and meeting notes. For example, someone says, "I should have something by the 30th." Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every system that could is homework: somebody has to file, tag, and groom it, forever — which is exactly the job nobody was doing the day the deadline slipped.</p>
   </div>
 </section>
 
@@ -307,8 +307,8 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">1</span>
-        <h3>Forward it an email. That's the whole workflow.</h3>
-        <p>Every workspace gets a private capture address. Forward or BCC a thread and Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt listing exactly what it captured. Nothing invented; if it found nothing, the receipt says so.</p>
+        <h3>Forward an email — or a note, a screenshot, a recording. That's the whole workflow.</h3>
+        <p>Every workspace gets a private capture address, and can connect the sources your work already lives in. Send Threshold the raw material and it files every commitment it finds — who promised what, by when, in their exact words — then replies with a receipt listing exactly what it captured. Nothing invented; if it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
@@ -367,8 +367,8 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="feature reverse">
       <div class="feature-copy">
         <span class="feature-num">4</span>
-        <h3>Warn the client before they ask.</h3>
-        <p>For anything drifting, one tap stages a short, no-blame heads-up note to the client. Nothing ever sends itself — drafts wait in your outbox for your judgment.</p>
+        <h3>Put out the fire before it starts.</h3>
+        <p>When something starts drifting, you see it early — while there's still time to reshuffle the plan, pull someone else in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note; nothing sends itself — every draft waits in your outbox for your judgment.</p>
       </div>
       <div class="feature-media">
         <img src="assets/27-coming-up-headsup.jpg" alt="A staged, no-blame heads-up note waiting in the outbox for your judgment." loading="lazy" width="1080">
@@ -382,7 +382,7 @@ footer .dot{margin:0 8px;opacity:.5}
   <div class="wrap">
     <div class="trust-card">
       <div class="section-eyebrow">No homework</div>
-      <p class="section-lead">There is nothing to maintain. No boards to groom, no tags to invent, no weekly cleanup. Forward what matters and Threshold does the filing — the emails, the meeting notes, the running log of decisions and commitments, organized and kept current on its own. When it isn't sure about something, it asks you one small question instead of handing you a system to manage.</p>
+      <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
     </div>
   </div>
 </section>
@@ -392,7 +392,7 @@ footer .dot{margin:0 8px;opacity:.5}
   <div class="wrap">
     <div class="trust-card">
       <div class="section-eyebrow">Trust, stated plainly</div>
-      <p class="section-lead">Threshold only sees what you forward or connect. Every claim it makes carries a receipt — the exact words, the source document, the date. When it can't see enough to judge, it says so instead of guessing. Absence claims are scoped: "no draft in the connected mail," never "no draft exists."</p>
+      <p class="section-lead">Threshold only sees what you forward or connect. Every claim it makes carries a receipt — the exact words, the source document, the date. When it can't see enough to judge, it says so instead of guessing.</p>
     </div>
   </div>
 </section>
@@ -468,6 +468,17 @@ footer .dot{margin:0 8px;opacity:.5}
     });
   }, { rootMargin: '200px 0px', threshold: 0.15 });
   clips.forEach(function(v){ io.observe(v); });
+})();
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Hero video: when it finishes, return to the poster frame instead of resting
+   on the last (dark) frame — otherwise a played-through hero reads as a blank
+   page. load() re-displays the poster because preload is 'none'.
+   ───────────────────────────────────────────────────────────────────────── */
+(function(){
+  var hero = document.querySelector('.hero-video video');
+  if (!hero) return;
+  hero.addEventListener('ended', function(){ try { hero.load(); } catch(e){} });
 })();
 
 /* ─────────────────────────────────────────────────────────────────────────

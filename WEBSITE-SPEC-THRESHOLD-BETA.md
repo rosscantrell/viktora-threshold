@@ -1,4 +1,4 @@
-# Threshold beta site — copy + build spec (draft 1, for Ross's adjudication)
+# Threshold beta site — copy + build spec (draft 3, post-Trisha-session 2026-07-08)
 
 Goal: out-of-stealth, recruit beta testers. One page, one CTA. Audience:
 people who run client work day-to-day — agency leads, program managers,
@@ -9,9 +9,9 @@ threads.
 
 ### Hero
 **The deadline was in the thread the whole time.**
-Someone on your team promised a client a date, three weeks ago, at the
-bottom of an email you were barely on. Nobody put it on a list. The client
-had to ask. Threshold exists so that never happens again.
+Someone on your team made a promise three weeks ago, at the bottom of an
+email you were barely on. Nobody put it on a list. Someone had to ask.
+Threshold exists so that never happens again.
 
 [screenshot: 02-today-wide — the full Today view]
 
@@ -20,8 +20,8 @@ CTA button: **Ask for a beta invite**
 ### The problem, plainly
 You're accountable for work you don't personally do. The promises that sink
 you don't live in your task tracker — they live in side threads, forwarded
-decks, and meeting notes, phrased as "I should have something by the 30th."
-Search can't find a date you don't know exists. A list can't hold a promise
+decks, and meeting notes. For example, someone says, "I should have
+something by the 30th." Search can't find a date you don't know exists. A list can't hold a promise
 nobody wrote down. And every system that could is homework: somebody has to
 file, tag, and groom it, forever — which is exactly the job nobody was doing
 the day the deadline slipped.
@@ -30,12 +30,13 @@ the day the deadline slipped.
 Threshold watches the work you give it and keeps the promises in front of
 you before they're due.
 
-1. **Forward it an email. That's the whole workflow.**
-   Every workspace gets a private capture address. Forward or BCC a thread
-   and Threshold files every commitment it finds — who promised what, by
-   when, in their exact words — and replies with a receipt listing exactly
-   what it captured. Nothing invented; if it found nothing, the receipt
-   says so.
+1. **Forward an email — or a note, a screenshot, a recording. That's the
+   whole workflow.**
+   Every workspace gets a private capture address, and can connect the
+   sources your work already lives in. Send Threshold the raw material and
+   it files every commitment it finds — who promised what, by when, in
+   their exact words — then replies with a receipt listing exactly what it
+   captured. Nothing invented; if it finds nothing, the receipt says so.
    [screenshot: 16-email-capture-address]
    [animation A: forward → receipt → items appear on Today]
 
@@ -57,24 +58,28 @@ you before they're due.
    [screenshot: 28-name-ask or 29-merge-ask]
    [animation C: move the date → bars, tags, and ordering ripple]
 
-4. **Warn the client before they ask.**
-   For anything drifting, one tap stages a short, no-blame heads-up note to
-   the client. Nothing ever sends itself — drafts wait in your outbox for
-   your judgment.
+4. **Put out the fire before it starts.**
+   When something starts drifting, you see it early — while there's still
+   time to reshuffle the plan, pull someone else in, or deliver part now and
+   buy room for the rest. If a heads-up is the right call, one tap stages a
+   short, no-blame note; nothing sends itself — every draft waits in your
+   outbox for your judgment.
    [screenshot: 27-coming-up-headsup]
 
 ### No homework
-There is nothing to maintain. No boards to groom, no tags to invent, no
-weekly cleanup. Forward what matters and Threshold does the filing — the
-emails, the meeting notes, the running log of decisions and commitments,
-organized and kept current on its own. When it isn't sure about something,
-it asks you one small question instead of handing you a system to manage.
+You've tried the boards, the Gantt charts, the color-coded lists with
+everyone's name tagged on them. You groom them for an hour and nobody looks
+again. Every one of them asks the same thing: that somebody keep it current,
+forever — the job that never gets done. Threshold doesn't ask. Forward what
+matters and it does the filing — the emails, the meeting notes, the running
+log of decisions and commitments — organized and kept current on its own.
+When it isn't sure, it asks you one small question instead of handing you a
+system to manage.
 
 ### Trust, stated plainly
 Threshold only sees what you forward or connect. Every claim it makes
 carries a receipt — the exact words, the source document, the date. When it
-can't see enough to judge, it says so instead of guessing. Absence claims
-are scoped: "no draft in the connected mail," never "no draft exists."
+can't see enough to judge, it says so instead of guessing.
 
 ### CTA (repeated, the only one)
 **Join the beta.** Threshold works for one person from day one — you don't
@@ -104,6 +109,20 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
   exposure loop analogous to Dropbox shared folders. A tasteful opt-in
   "Sent via Threshold" line is the lever; touching client-facing email is
   sensitive, so it's a decision, not a default.
+
+## Open from the Trisha session (visual pass, not copy — 2026-07-08)
+- **Hero poster frame**: current opening frame shows "the state of play,
+  nothing important" (Ross). Re-select a meaningful first frame (the Today
+  payoff or a receipt), or re-shoot.
+- **Hero video end-state**: FIXED — resets to the poster on `ended` instead
+  of resting on a dark final frame that read as a blank page.
+- **Hero video audio**: none currently. Intended, or add VO/captions?
+- **Section screenshots too dense** (Trisha): the example screens read as
+  overwhelming/unreadable. Crop or zoom to legible pieces — "even if you
+  don't know what it is, you should be able to read some of it."
+- **"Learn from you"** (Ross, open): consider whether the teach-it beat in
+  feature 3 needs its own surfacing. Currently covered by "your answers
+  organize your workspace — and teach it."
 
 ## Claims for Ross to adjudicate (skill rule: flag, don't decide)
 1. "in active pilot" in the footer — say it, soften it, or cut it?
