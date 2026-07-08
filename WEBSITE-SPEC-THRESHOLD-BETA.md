@@ -84,8 +84,13 @@ matters and it does the filing — the emails, the meeting notes, the running
 log of decisions and commitments — organized and kept current on its own.
 When it isn't sure, it asks you one small question instead of handing you a
 system to manage.
-[screenshot: 28-name-ask, inside the trust card — the literal "one small
-question" (moved here from feature 3, 2026-07-08)]
+[screenshot: 29-merge-ask, inside the trust card — the literal "one small
+question": "Are 'Vaccines Story Refresh' and 'Vaccine Confidence &
+Narrative Refresh' the same piece of work?" with Yes→consequences spelled
+out ("14 jobs move, 44 entries re-home… Fully undoable") and No→it stops
+suggesting. Ross picked this card over 28-name-ask (2026-07-08) — the
+consequence lines + "fully undoable" carry the calibration beat.
+Source: docs/user-guide-assets/29-merge-ask.png, header sliver cropped.]
 
 ### Trust, stated plainly
 Threshold only sees what you forward or connect. Every claim it makes
