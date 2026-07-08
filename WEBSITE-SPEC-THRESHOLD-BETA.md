@@ -147,12 +147,20 @@ served by a throwaway engine on :3030, re-captured via the shim harness.
 - **hero-outlook.jpg, 22-workback-seen.jpg, 23-plan-editor.jpg** — RE-SHOT
   clean and swapped in (Daniel / Maya; amber + seen states re-staged and
   reverted). Visually QA'd, zero real names.
-- **27-headsup-crop.jpg (feature 4) + 29-merge-ask.png (No homework)** —
-  PULLED. The heads-up card and the merge/alias question don't surface from
-  the scrubbed corpus (client-facing detection + a broken alias→job linkage),
-  and forcing it is out-of-scope corpus surgery (Ross: "don't do the whole
-  app"). Sections are copy-only pending Ross's call: reconstruct faithfully
-  from the anonymized text, capture a clean substitute, or leave copy-only.
+- **29-merge-ask.jpg (No homework)** — RESTORED as a faithful reconstruction.
+  The QE merge/alias question doesn't surface from the scrubbed corpus (the
+  scrubbed job names aren't similar enough to re-trigger alias detection), so
+  the card was rebuilt with the app's REAL render classes (rule-card
+  question-card, question-futures, etc. — copied from buildQuestionCard in
+  main.js) + the anonymized text from frame-questions/default.json ("Product
+  Story Refresh" / "Product Trust & Narrative Refresh"). Rendered against the
+  live app CSS and captured at 2x. Pixel-faithful to the original; 0 real info.
+  The prior 29-merge-ask.png (real "Vaccines Story Refresh" / "Vaccine
+  Confidence & Narrative Refresh" — client-confidential) is retired.
+- **27-headsup-crop.jpg (feature 4)** — still PULLED; feature 4 is copy-only.
+  The heads-up card ("no draft observed · Draft heads-up to client") doesn't
+  surface from the scrubbed corpus either. Options: same reconstruction
+  technique, a live "Coming up" card substitute, or leave copy-only.
 
 ## Open from the Trisha session (visual pass, not copy — 2026-07-08)
 - **Hero poster frame**: current opening frame shows "the state of play,
