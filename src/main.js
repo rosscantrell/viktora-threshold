@@ -714,8 +714,9 @@ function switchSettingsPanel(name) {
   if (name === "privacy") renderSovereignty();
   // Email-capture panel is lazy too — GET /api/email/capture on open (WP-EM1b).
   if (name === "email-capture") renderEmailCapture();
-  // Connected-AI panel is lazy too — GET /api/mcp/grants on open (WP-MCP-V2 C).
-  if (name === "ai-connections") renderAiConnections();
+  // The Integrations panel's AI-platforms section is lazy too — GET
+  // /api/mcp/grants on open (WP-MCP-V2 Phase C).
+  if (name === "integrations") renderAiConnections();
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
