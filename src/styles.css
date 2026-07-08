@@ -6598,3 +6598,41 @@ button.rec-source {
   text-underline-offset: 3px;
 }
 .today-outlook-seen-link:hover { color: var(--text-primary); }
+
+/* WP-FOCUS follow-up (Ross): This-week pairs with the outlook in the left
+   column (wide only — narrow keeps it in flow after the SoP); rows are
+   clickable and expand to the full item. */
+.today-thisweek { display: none; }
+@media (min-width: 1200px) {
+  #view-log:not([hidden]) #today-thisweek {
+    display: flex;
+    margin-top: 4px;
+    margin-bottom: 16px;
+  }
+  #view-log:not([hidden]) #today-thisweek[hidden] { display: none; }
+}
+@media (max-width: 1199.98px) {
+  #view-log:not([hidden]) #today-thisweek { display: flex; }
+  #view-log:not([hidden]) #today-thisweek[hidden] { display: none; }
+}
+.thisweek-row { cursor: pointer; border-radius: var(--radius-sm); }
+.thisweek-row:hover .thisweek-summary { color: var(--text-primary); }
+.thisweek-detail {
+  margin: 2px 0 8px 74px;
+  padding: 10px 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.thisweek-detail-summary { font-size: 12px; color: var(--text-primary); margin: 0; }
+.thisweek-detail-quote { font-size: 11px; font-style: italic; color: var(--glass-text-dim); margin: 0; }
+.thisweek-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.thisweek-detail-actions .btn-link { position: static; font-size: 11px; padding: 0; }

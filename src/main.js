@@ -5068,16 +5068,50 @@ function renderThisWeekList(rows, today) {
       const sum = document.createElement("span");
       sum.className = "thisweek-summary";
       sum.textContent = rec.summary || "";
-      sum.title = rec.summary || "";
+      sum.title = "Show the full item";
       row.appendChild(sum);
 
       const acts = document.createElement("span");
       acts.className = "thisweek-acts";
+      acts.addEventListener("click", (e) => e.stopPropagation());
       appendResolveSnoozeControls(acts, rec.recordId, row, rec.summary);
       appendDismissControl(acts, rec.recordId, row, rec.summary);
       row.appendChild(acts);
 
+      // Click the row → the full item expands in place (Ross, 2026-07-08:
+      // "something should happen when you click"): untruncated summary,
+      // the verbatim promise, source link, and the draft actions.
+      const detail = document.createElement("div");
+      detail.className = "thisweek-detail";
+      detail.hidden = true;
+      row.addEventListener("click", () => {
+        const open = detail.hidden;
+        if (open && !detail.childNodes.length) {
+          const full = document.createElement("p");
+          full.className = "thisweek-detail-summary";
+          full.textContent = rec.summary || "";
+          detail.appendChild(full);
+          if (rec.verbatim) {
+            const q = document.createElement("p");
+            q.className = "thisweek-detail-quote";
+            q.textContent = "“" + rec.verbatim + "”";
+            detail.appendChild(q);
+          }
+          const foot = document.createElement("div");
+          foot.className = "thisweek-detail-actions";
+          appendSourceBadge(foot, rec.documentId, rec.verbatim);
+          const readiness = it.readiness || rec.readiness || null;
+          if (readiness === "no-precursor" || readiness === "quiet") {
+            appendHeadsUpControl(foot, rec);
+          }
+          appendDraftFollowUpControl(foot, rec);
+          detail.appendChild(foot);
+        }
+        detail.hidden = !open;
+      });
+
       grp.appendChild(row);
+      grp.appendChild(detail);
     }
     box.appendChild(grp);
   }
