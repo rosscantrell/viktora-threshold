@@ -157,10 +157,15 @@ served by a throwaway engine on :3030, re-captured via the shim harness.
   live app CSS and captured at 2x. Pixel-faithful to the original; 0 real info.
   The prior 29-merge-ask.png (real "Vaccines Story Refresh" / "Vaccine
   Confidence & Narrative Refresh" — client-confidential) is retired.
-- **27-headsup-crop.jpg (feature 4)** — still PULLED; feature 4 is copy-only.
-  The heads-up card ("no draft observed · Draft heads-up to client") doesn't
-  surface from the scrubbed corpus either. Options: same reconstruction
-  technique, a live "Coming up" card substitute, or leave copy-only.
+- **27-headsup.jpg (feature 4)** — RESTORED as a faithful reconstruction
+  (same technique as the merge-ask). The corpus is all backlog (overdue), so
+  no clean "due soon · no draft observed · Draft heads-up to client" card
+  surfaces live — that's the exact state feature 4 needs ("before it's late").
+  Rebuilt with the app's REAL coming-up-row classes (from renderComingUpRow in
+  main.js) + scrubbed content: a client-facing commitment "due in 2 days · no
+  draft observed", Northwind Landing Page / Daniel Okafor, with the amber
+  "Draft heads-up to client" action. Rendered against live app CSS, 2x.
+  Retired the real-name 27-headsup-crop.jpg.
 
 ## Open from the Trisha session (visual pass, not copy — 2026-07-08)
 - **Hero poster frame**: current opening frame shows "the state of play,
