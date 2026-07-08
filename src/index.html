@@ -240,9 +240,6 @@
             <button type="button" class="settings-nav-item" data-panel="email-capture">
               Email capture
             </button>
-            <button type="button" class="settings-nav-item" data-panel="ai-connections">
-              Connected AI
-            </button>
             <button type="button" class="settings-nav-item" data-panel="privacy">
               Privacy
             </button>
@@ -433,6 +430,20 @@
                   sources are Windows-only and pause on Mac.
                 </span>
               </div>
+
+              <!-- AI platforms — WP-MCP-V2 Phase C. Grants list + connector URL
+                   + access-key mint, rendered by renderAiConnections() lazily
+                   on panel open (GET /api/mcp/grants). -->
+              <h3 class="settings-subhead">AI platforms</h3>
+              <div class="field">
+                <div id="ai-connections-body" class="email-capture-body">
+                  <p class="field-help">Loading…</p>
+                </div>
+                <span class="field-help">
+                  AI platforms you approve can read your knowledge field and file
+                  new captures. They can never edit records or see raw documents.
+                </span>
+              </div>
             </section>
 
             <!-- ── Privacy panel ──
@@ -457,17 +468,6 @@
               <span class="field-help">
                 BCC or forward email to your capture address and Threshold files
                 what it finds. Only senders you approve are accepted.
-              </span>
-            </section>
-
-            <section class="settings-panel" data-panel="ai-connections">
-              <h2 class="settings-panel-title">Connected AI platforms</h2>
-              <div id="ai-connections-body" class="email-capture-body">
-                <p class="field-help">Loading…</p>
-              </div>
-              <span class="field-help">
-                AI platforms you approve can read your knowledge field and file
-                new captures. They can never edit records or see raw documents.
               </span>
             </section>
 
