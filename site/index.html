@@ -278,8 +278,8 @@ footer .dot{margin:0 8px;opacity:.5}
 <!-- ── Hero ────────────────────────────────────────────────────────── -->
 <div class="wrap">
   <div class="hero">
-    <h1>The deadline was in the thread the whole time.</h1>
-    <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
+    <h1 id="hero-h1">The deadline was in the thread the whole time.</h1>
+    <p class="lede" id="hero-lede">Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
     <a class="cta-btn" href="#join">Ask for a beta invite</a>
 
     <!-- HERO: the Today view — State of Play digest over the two-week deadline
@@ -290,6 +290,59 @@ footer .dot{margin:0 8px;opacity:.5}
     </div>
   </div>
 </div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────────
+   Hero headline rotation — 5 copy variants on the same incident (an
+   unwritten promise surfacing at the worst moment), each testing a different
+   angle. True round-robin via localStorage: each visit/reload advances to
+   the next line, wrapping around — so repeat views (including review
+   reloads) cycle through all of them in order. Variant 0 is the flagship
+   line and is what's in the HTML for no-JS / crawlers / first paint; this
+   runs immediately after the hero markup, before heavier page weight, to
+   minimize any visible swap.
+   ───────────────────────────────────────────────────────────────────────── */
+(function () {
+  var VARIANTS = [
+    {
+      h: "The deadline was in the thread the whole time.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again."
+    },
+    {
+      h: "Someone asked. You didn’t have an answer.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list — so when someone asked, you found out live. Threshold exists so that never happens again."
+    },
+    {
+      h: "You own the deadline. You never saw the promise.",
+      l: "Someone on your team made it three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Threshold watches the work you give it, so the promise finds you before the deadline does."
+    },
+    {
+      h: "It wasn’t on your list. That’s how it slipped.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. A task tracker can’t hold a promise nobody wrote down. Threshold can."
+    },
+    {
+      h: "The warning sign was there. Nobody was watching.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list, so nobody saw it coming. Threshold watches so you do."
+    }
+  ];
+  var idx = 0;
+  try {
+    var KEY = "th-hero-variant";
+    var stored = parseInt(localStorage.getItem(KEY), 10);
+    idx = ((isNaN(stored) ? -1 : stored) + 1) % VARIANTS.length;
+    localStorage.setItem(KEY, String(idx));
+  } catch (e) {
+    idx = Math.floor(Math.random() * VARIANTS.length);
+  }
+  if (idx > 0) {
+    var v = VARIANTS[idx];
+    var h1 = document.getElementById("hero-h1");
+    var lede = document.getElementById("hero-lede");
+    if (h1) h1.textContent = v.h;
+    if (lede) lede.textContent = v.l;
+  }
+})();
+</script>
 
 <!-- ── The problem, plainly ────────────────────────────────────────── -->
 <section class="problem">

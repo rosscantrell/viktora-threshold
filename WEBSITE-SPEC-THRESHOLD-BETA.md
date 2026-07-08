@@ -7,11 +7,56 @@ threads.
 
 ## Page copy (in order)
 
-### Hero
+### Hero — ROTATING (5 variants, 2026-07-08)
+Ross asked for 3-4 alternate headlines cycling at the top, then to broaden
+them off "email" (meetings/chats/other places commitments get made), then
+"just cycle through all these at top." Implemented as a client-side
+round-robin (localStorage key `th-hero-variant`): each page load/reload
+advances to the next variant, wrapping after 5. Variant 0 is the flagship
+line and is what's in the static HTML (no-JS / crawlers / first paint see
+it; JS swaps in place immediately after, before the rest of the page loads,
+to minimize visible flash). All five keep the client-agnostic "someone had
+to ask" framing and the channel-agnostic "thread, a meeting, a chat" phrase
+— no re-litigating those calls.
+
+**0 — flagship (unchanged headline, broadened lede):**
 **The deadline was in the thread the whole time.**
-Someone on your team made a promise three weeks ago, at the bottom of an
-email you were barely on. Nobody put it on a list. Someone had to ask.
-Threshold exists so that never happens again.
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list. Someone
+had to ask. Threshold exists so that never happens again.
+
+**1 — the ask:**
+**Someone asked. You didn't have an answer.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list — so when
+someone asked, you found out live. Threshold exists so that never happens
+again.
+
+**2 — the ownership gap:**
+**You own the deadline. You never saw the promise.**
+Someone on your team made it three weeks ago — in a thread, a meeting, a
+chat you were barely part of. Nobody put it on a list. Threshold watches
+the work you give it, so the promise finds you before the deadline does.
+
+**3 — the list failure:**
+**It wasn't on your list. That's how it slipped.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. A task tracker can't hold a
+promise nobody wrote down. Threshold can.
+
+**4 — the early warning:**
+**The warning sign was there. Nobody was watching.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list, so
+nobody saw it coming. Threshold watches so you do.
+
+Verified: round-robin math cycles 0→1→2→3→4→0→1… correctly; DOM swap
+confirmed live (reload with stored=2 → rendered variant 3, exact text
+match); layout holds at both the shortest (variant 3, 2 lines) and longest
+(variant 2, wraps to 3 lines, still centered, no overflow) headline.
+Copy-verbatim source of truth for all 5 lives in the rotation script in
+site/index.html (search `th-hero-variant`) — edit BOTH if any variant's
+wording changes.
 
 [HERO IMAGE: hero-app.jpg — the Today view showing MORE OF THE APP (Ross):
 the State of Play digest (synthesized forest narrative + counts pills:
