@@ -45,9 +45,16 @@ you before they're due.
 2. **A two-week windshield, not a rear-view mirror.**
    Today opens with every promise due in the next two weeks and who owns
    it. The bigger ones get a worked-back plan — the latest date each step
-   can start and still make the deadline. When that date passes with
-   nothing seen, the item turns amber before it's late, not after.
-   [screenshot: 21-workback-crop — cropped to the expanded plan card]
+   can start and still make the deadline. Threshold watches your connected
+   sources: when a step's work shows up, it's checked off — seen — and the
+   plan recomputes. When a date passes with nothing seen, the item turns
+   amber before it's late, not after.
+   [screenshot: 22-workback-seen — the expanded plan with two steps ✓ seen
+   (green), two pending with latest-start dates, bar recomputed to
+   "on track". REAL capture from the Trisha-pass corpus via shim harness;
+   the seen states were staged with the product's own step-done gestures
+   and undone after (verified restored). The auto-observe lane
+   (workback-judge evidence match) produces this identical render.]
 
 3. **You stay the editor.**
    Every plan is correctable in place — mark a step done, rule it out,
