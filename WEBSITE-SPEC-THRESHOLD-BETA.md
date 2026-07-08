@@ -7,17 +7,36 @@ threads.
 
 ## Page copy (in order)
 
-### Hero — ROTATING (5 variants, 2026-07-08)
+### Hero — AUTO-ROTATING LIVE (5 variants, 2026-07-08)
 Ross asked for 3-4 alternate headlines cycling at the top, then to broaden
 them off "email" (meetings/chats/other places commitments get made), then
-"just cycle through all these at top." Implemented as a client-side
-round-robin (localStorage key `th-hero-variant`): each page load/reload
-advances to the next variant, wrapping after 5. Variant 0 is the flagship
-line and is what's in the static HTML (no-JS / crawlers / first paint see
-it; JS swaps in place immediately after, before the rest of the page loads,
-to minimize visible flash). All five keep the client-agnostic "someone had
-to ask" framing and the channel-agnostic "thread, a meeting, a chat" phrase
-— no re-litigating those calls.
+"cycle through all these at top" — clarified via explicit question to mean
+LIVE auto-rotation while a visitor sits on the page (not per-visit/reload,
+not random). Implemented as a client-side interval: every ~5.2s the
+headline+lede fade out (380ms), swap text, fade back in, looping through
+all 5 and wrapping to 0. Pauses via the Page Visibility API when the tab
+isn't visible (resumes on return — no wasted cycles, no catch-up jump).
+Honors `prefers-reduced-motion`: those visitors get the static flagship
+line with no rotation at all, same posture as the site's video handling.
+Variant 0 (flagship) is what's baked into the static HTML for no-JS /
+crawlers / first paint. All five keep the client-agnostic "someone had to
+ask" framing and the channel-agnostic "thread, a meeting, a chat" phrase —
+no re-litigating those calls.
+
+**Anti-layout-jump:** headline lengths vary 2-3 lines, lede lengths vary
+too — without a fix, the CTA button and hero image below would visibly
+shift on every rotation. Fixed with reserved `min-height` on both the h1
+(flex-centered so shorter variants sit centered, not top-aligned) and the
+lede, MEASURED empirically per breakpoint (not guessed) across all 5
+variants:
+  - Desktop (1280px): h1 max 3.42em / lede uniformly 4.5em across all
+    variants → reserved 3.6em / 4.8em.
+  - Mobile (≤760px): h1 same 3.42em max; lede uniformly 7.5em (wraps to 5
+    lines at this width, all variants tie) → desktop's 4.8em was
+    insufficient here, so a `@media (max-width:760px)` override bumps
+    lede min-height to 7.6em.
+  - Confirmed on real content: CTA button top position identical (467px)
+    whether the 2-line or 3-line headline variant is showing.
 
 **0 — flagship (unchanged headline, broadened lede):**
 **The deadline was in the thread the whole time.**
@@ -50,13 +69,14 @@ Someone on your team made a promise three weeks ago — in a thread, a
 meeting, a chat you were barely part of. Nobody put it on a list, so
 nobody saw it coming. Threshold watches so you do.
 
-Verified: round-robin math cycles 0→1→2→3→4→0→1… correctly; DOM swap
-confirmed live (reload with stored=2 → rendered variant 3, exact text
-match); layout holds at both the shortest (variant 3, 2 lines) and longest
-(variant 2, wraps to 3 lines, still centered, no overflow) headline.
-Copy-verbatim source of truth for all 5 lives in the rotation script in
-site/index.html (search `th-hero-variant`) — edit BOTH if any variant's
-wording changes.
+Verified: sequence cycles 0→1→2→3→4→0→1… correctly at the real ~5.2s
+cadence (measured with a self-contained in-page timer, immune to tool-call
+latency); confirmed stable within a 2s window (no premature/rapid firing)
+and advancing within longer windows. Layout holds with zero jump at both
+the shortest (2-line) and longest (3-line wrap) headline, desktop and
+mobile. Copy-verbatim source of truth for all 5 lives in the rotation
+script in site/index.html (search `VARIANTS` / the hero `<script>` block)
+— edit BOTH here and there if any variant's wording changes.
 
 [HERO IMAGE: hero-app.jpg — the Today view showing MORE OF THE APP (Ross):
 the State of Play digest (synthesized forest narrative + counts pills:
