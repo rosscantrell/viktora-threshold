@@ -113,7 +113,7 @@ Footer: **Viktora · Threshold · Privacy** — "in active pilot" CUT (Ross,
 2026-07-08): earliness is already carried by the beta CTAs + "small waves,"
 and "pilot" reads as a hedge / implies an unnamed customer. The Privacy link
 now resolves to a REAL one-line note (email used only for the invite + spot
-notice, never sold/shared, removal on request at beta@viktora.ai) instead of
+notice, never sold/shared, removal on request at ross@viktora.ai) instead of
 scrolling to the signup form.
 
 ## GTM notes (Dropbox strategy, Ross 2026-07-08)
