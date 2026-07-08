@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threshold — the deadline was in the thread the whole time</title>
+<meta name="description" content="Threshold watches the work you give it and keeps the promises in front of you before they're due. Forward an email, a note, a screenshot, a recording — that's the whole workflow.">
+<style>
+/* ─────────────────────────────────────────────────────────────────────────
+   Design tokens lifted verbatim from the Threshold app (src/styles.css).
+   Dark glass. Amber (--warn) is EARNED — reserved for urgency in the product
+   imagery and the "turns amber before it's late" moment. Never decorative.
+   ───────────────────────────────────────────────────────────────────────── */
+:root{
+  --bg-base:#15161d;
+  --bg-gradient:linear-gradient(165deg,#20212b 0%,#131319 100%);
+  --surface-1:rgba(255,255,255,0.05);
+  --surface-2:rgba(255,255,255,0.09);
+  --surface-raised:linear-gradient(168deg,rgba(48,50,64,0.9) 0%,rgba(26,27,36,0.9) 100%);
+  --surface-card:linear-gradient(180deg,rgba(255,255,255,0.08) 0%,rgba(255,255,255,0.025) 60%);
+  --surface-inset:rgba(0,0,0,0.24);
+  --edge-highlight:inset 0 1px 0 rgba(255,255,255,0.10);
+  --border-subtle:rgba(255,255,255,0.08);
+  --border-strong:rgba(255,255,255,0.16);
+  --text-primary:#f5f5f7;
+  --text-secondary:#9a9aa6;
+  --text-tertiary:#76767f;
+  --accent:#2f7ae5;
+  --accent-hover:#4a8ef0;
+  --accent-text:#ffffff;
+  --accent-soft:rgba(47,122,229,0.16);
+  --accent-ring:rgba(47,122,229,0.40);
+  --success:#34d058;
+  --success-text:#7ee79a;
+  --warn:#f5b544;
+  --warn-soft:rgba(245,181,68,0.14);
+  --warn-text:#f3c674;
+  --radius-sm:9px;
+  --radius-md:13px;
+  --radius-lg:16px;
+  --radius-pill:999px;
+  --shadow-card:var(--edge-highlight),0 10px 30px rgba(0,0,0,0.38);
+  --shadow-raised:var(--edge-highlight),0 22px 50px rgba(0,0,0,0.52);
+  --shadow-glow:0 8px 26px rgba(47,122,229,0.28);
+  --ease:cubic-bezier(0.22,0.61,0.36,1);
+  --font-ui:"Hind",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,monospace;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+
+html{scroll-behavior:smooth}
+
+body{
+  font-family:var(--font-ui);
+  background:var(--bg-base);
+  background-image:var(--bg-gradient);
+  background-attachment:fixed;
+  color:var(--text-primary);
+  min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  line-height:1.5;
+}
+
+img,video{max-width:100%;display:block}
+
+a{color:var(--accent-hover);text-decoration:none}
+a:hover{color:var(--accent)}
+
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+/* ── Top bar ────────────────────────────────────────────────────────── */
+.topbar{
+  position:sticky;top:0;z-index:20;
+  backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
+  background:rgba(21,22,29,0.72);
+  border-bottom:1px solid var(--border-subtle);
+}
+.topbar .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+.brand{font-weight:600;font-size:17px;letter-spacing:-0.01em}
+.brand .co{color:var(--text-tertiary);font-weight:400}
+.topbar .nav-cta{
+  font-size:14px;font-weight:600;color:var(--accent-text);
+  background:var(--accent);padding:9px 18px;border-radius:var(--radius-pill);
+  box-shadow:var(--shadow-glow);transition:background var(--ease) .18s;
+}
+.topbar .nav-cta:hover{background:var(--accent-hover);color:#fff}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+.hero{padding:76px 0 44px;text-align:center}
+.hero h1{
+  font-size:clamp(30px,5.2vw,52px);
+  line-height:1.14;font-weight:600;letter-spacing:-0.015em;
+  max-width:16ch;margin:0 auto;
+}
+.hero .lede{
+  margin:22px auto 0;max-width:60ch;
+  font-size:clamp(16px,2.2vw,19px);color:var(--text-secondary);
+}
+.cta-btn{
+  display:inline-block;margin-top:30px;
+  font-size:17px;font-weight:600;color:var(--accent-text);
+  background:var(--accent);padding:15px 34px;border-radius:var(--radius-pill);
+  box-shadow:var(--shadow-glow);transition:background var(--ease) .18s,transform .08s var(--ease);
+}
+.cta-btn:hover{background:var(--accent-hover);color:#fff;transform:translateY(-1px)}
+.cta-btn:active{transform:translateY(0)}
+
+/* ── Media cards (glass, frame-less) ────────────────────────────────── */
+.media-card{
+  margin:40px auto 0;max-width:1000px;
+  background:var(--surface-card);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-raised);
+  overflow:hidden;
+}
+.media-card video,.media-card img{width:100%;height:auto;display:block}
+
+.hero-video{position:relative;background:#0e0f14}
+
+/* ── Sections ───────────────────────────────────────────────────────── */
+section{padding:56px 0}
+.section-eyebrow{
+  font-size:13px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;
+  color:var(--accent-hover);margin-bottom:14px;
+}
+h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spacing:-0.01em}
+.section-lead{margin-top:16px;font-size:clamp(16px,2vw,18px);color:var(--text-secondary);max-width:64ch}
+
+.problem{border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
+.problem .section-lead{font-size:clamp(17px,2.2vw,20px);color:var(--text-primary);max-width:68ch}
+
+/* Numbered feature blocks */
+.feature{
+  display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start;
+  padding:44px 0;border-bottom:1px solid var(--border-subtle);
+}
+.feature-copy{padding-top:6px}
+.feature:last-of-type{border-bottom:none}
+.feature.reverse .feature-copy{order:2}
+.feature.reverse .feature-media{order:1}
+.feature-num{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:34px;border-radius:var(--radius-pill);
+  background:var(--accent-soft);color:var(--accent-hover);
+  font-weight:600;font-size:16px;margin-bottom:16px;
+  border:1px solid var(--accent-ring);
+}
+.feature h3{font-size:clamp(20px,2.6vw,24px);line-height:1.25;font-weight:600;letter-spacing:-0.01em}
+.feature p{margin-top:14px;color:var(--text-secondary);font-size:16px}
+.feature-media{
+  background:var(--surface-card);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card);
+  overflow:hidden;
+}
+.feature-media video,.feature-media img{width:100%;height:auto;display:block}
+.feature-media .stack > *{display:block;width:100%}
+.feature-media .stack > * + *{border-top:1px solid var(--border-subtle)}
+
+/* ── Trust ──────────────────────────────────────────────────────────── */
+.trust{
+  border-top:1px solid var(--border-subtle);
+  background:var(--surface-1);
+}
+.trust-card{
+  max-width:820px;margin:0 auto;
+  background:var(--surface-raised);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-card);
+  padding:34px 38px;
+}
+.trust-card .section-lead{max-width:none;color:var(--text-secondary);font-size:17px}
+
+/* ── CTA / waitlist ─────────────────────────────────────────────────── */
+.join{border-top:1px solid var(--border-subtle);text-align:center}
+.join .section-lead{margin-left:auto;margin-right:auto;text-align:center}
+.form-card{
+  max-width:520px;margin:34px auto 0;text-align:left;
+  background:var(--surface-raised);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-lg);
+  box-shadow:var(--shadow-raised);
+  padding:28px;
+}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:14px;color:var(--text-secondary);margin-bottom:7px}
+.field input{
+  width:100%;font-family:inherit;font-size:16px;color:var(--text-primary);
+  background:var(--surface-inset);
+  border:1px solid var(--border-subtle);
+  border-radius:var(--radius-sm);
+  padding:12px 14px;
+  transition:border-color .18s var(--ease),box-shadow .18s var(--ease);
+}
+.field input::placeholder{color:var(--text-tertiary)}
+.field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ring)}
+/* Honeypot — hidden from humans, tempting to bots */
+.hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+.form-card button[type=submit]{
+  width:100%;font-family:inherit;font-size:17px;font-weight:600;
+  color:var(--accent-text);background:var(--accent);
+  border:none;border-radius:var(--radius-pill);
+  padding:14px 20px;cursor:pointer;
+  box-shadow:var(--shadow-glow);
+  transition:background .18s var(--ease);
+}
+.form-card button[type=submit]:hover{background:var(--accent-hover)}
+.form-card button[type=submit]:disabled{opacity:.6;cursor:default}
+.form-note{margin-top:14px;font-size:13px;color:var(--text-tertiary);text-align:center}
+.form-note a{color:var(--text-secondary)}
+
+.form-status{margin-top:18px;font-size:15px;border-radius:var(--radius-md);padding:0;max-height:0;overflow:hidden;transition:max-height .3s var(--ease)}
+.form-status.show{max-height:400px}
+.form-status .ok{
+  background:var(--success-soft,rgba(52,208,88,0.14));
+  border:1px solid rgba(52,208,88,0.30);
+  border-radius:var(--radius-md);
+  padding:18px 20px;color:var(--text-primary);
+}
+.form-status .ok .headline{font-weight:600;color:var(--success-text)}
+.form-status .ok .referral{margin-top:10px;color:var(--text-secondary);font-size:14px}
+.form-status .err{
+  background:var(--warn-soft);
+  border:1px solid rgba(245,181,68,0.30);
+  border-radius:var(--radius-md);
+  padding:16px 18px;color:var(--warn-text);font-size:14px;
+}
+.form-status .err a{color:var(--warn-text);text-decoration:underline}
+
+/* ── Footer ─────────────────────────────────────────────────────────── */
+footer{
+  border-top:1px solid var(--border-subtle);
+  padding:32px 0 48px;text-align:center;
+  color:var(--text-tertiary);font-size:14px;
+}
+footer .dot{margin:0 8px;opacity:.5}
+
+/* ── Responsive ─────────────────────────────────────────────────────── */
+@media (max-width:760px){
+  .feature{grid-template-columns:1fr;gap:24px}
+  .feature.reverse .feature-copy{order:1}
+  .feature.reverse .feature-media{order:2}
+  .hero{padding:52px 0 32px}
+  section{padding:44px 0}
+}
+@media (max-width:400px){
+  .wrap{padding:0 18px}
+  .form-card{padding:22px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  video{animation:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ─────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="wrap">
+    <div class="brand">Threshold <span class="co">· Viktora</span></div>
+    <a class="nav-cta" href="#join">Ask for a beta invite</a>
+  </div>
+</header>
+
+<!-- ── Hero ────────────────────────────────────────────────────────── -->
+<div class="wrap">
+  <div class="hero">
+    <h1>The deadline was in the thread the whole time.</h1>
+    <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
+    <a class="cta-btn" href="#join">Ask for a beta invite</a>
+
+    <!-- HERO VIDEO: ~62s screencast — forward → receipt → Today fills →
+         plan unfolds → date-move ripple → close. Poster shown until play. -->
+    <div class="media-card hero-video">
+      <video
+        controls playsinline preload="none"
+        poster="assets/hero-poster.jpg"
+        title="Threshold hero screencast: forward an email, get a receipt, Today fills with promises, a worked-back plan unfolds, and moving a date ripples through the plan.">
+        <source src="assets/hero.webm" type="video/webm">
+        <source src="assets/hero.mp4" type="video/mp4">
+        <img src="assets/02-today-wide.jpg" alt="The Threshold Today view — the full two-week deadline outlook." loading="lazy">
+      </video>
+    </div>
+  </div>
+</div>
+
+<!-- ── The problem, plainly ────────────────────────────────────────── -->
+<section class="problem">
+  <div class="wrap">
+    <div class="section-eyebrow">The problem, plainly</div>
+    <p class="section-lead">You're accountable for work you don't personally do. The promises that sink you don't live in your task tracker — they live in side threads, forwarded decks, and meeting notes. For example, someone says, "I should have something by the 30th." Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every system that could is homework: somebody has to file, tag, and groom it, forever — which is exactly the job nobody was doing the day the deadline slipped.</p>
+  </div>
+</section>
+
+<!-- ── What Threshold does ─────────────────────────────────────────── -->
+<section>
+  <div class="wrap">
+    <div class="section-eyebrow">What Threshold does</div>
+    <h2>Threshold watches the work you give it and keeps the promises in front of you before they're due.</h2>
+
+    <!-- 1 -->
+    <div class="feature">
+      <div class="feature-copy">
+        <span class="feature-num">1</span>
+        <h3>Forward an email — or a note, a screenshot, a recording. That's the whole workflow.</h3>
+        <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
+      </div>
+      <div class="feature-media">
+        <div class="stack">
+          <img src="assets/16-capture-crop.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
+          <!-- animation A: forward → receipt → items appear on Today -->
+          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-a-poster.jpg"
+                 title="Today loads and populates with captured promises.">
+            <source src="assets/clip-a.webm" type="video/webm">
+            <source src="assets/clip-a.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="feature reverse">
+      <div class="feature-copy">
+        <span class="feature-num">2</span>
+        <h3>A two-week windshield, not a rear-view mirror.</h3>
+        <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
+      </div>
+      <div class="feature-media">
+        <div class="stack">
+          <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
+          <!-- animation B: click a swimlane → the plan unfolds -->
+          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-b-poster.jpg"
+                 title="Clicking a swimlane unfolds the worked-back plan.">
+            <source src="assets/clip-b.webm" type="video/webm">
+            <source src="assets/clip-b.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="feature">
+      <div class="feature-copy">
+        <span class="feature-num">3</span>
+        <h3>You stay the editor.</h3>
+        <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
+      </div>
+      <div class="feature-media">
+        <div class="stack">
+          <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096">
+          <!-- animation C: move the date → bars, tags, and ordering ripple -->
+          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-c-poster.jpg"
+                 title="Moving the date ripples through the bars, tags, and ordering; then undo restores it.">
+            <source src="assets/clip-c.webm" type="video/webm">
+            <source src="assets/clip-c.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="feature reverse">
+      <div class="feature-copy">
+        <span class="feature-num">4</span>
+        <h3>Put out the fire before it starts.</h3>
+        <p>When something starts drifting, you see it early — while there's still time to reshuffle, pull someone in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note that waits in your outbox. Nothing sends itself.</p>
+      </div>
+      <div class="feature-media">
+        <img src="assets/27-headsup-crop.jpg" alt="A drifting item — due in two days, no draft observed — with a staged heads-up one tap away." loading="lazy" width="666" height="200">
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── No homework ─────────────────────────────────────────────────── -->
+<section class="trust">
+  <div class="wrap">
+    <div class="trust-card">
+      <div class="section-eyebrow">No homework</div>
+      <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Trust, stated plainly ───────────────────────────────────────── -->
+<section class="trust">
+  <div class="wrap">
+    <div class="trust-card">
+      <div class="section-eyebrow">Trust, stated plainly</div>
+      <p class="section-lead">Threshold only sees what you forward or connect. Every claim it makes carries a receipt — the exact words, the source document, the date. When it can't see enough to judge, it says so instead of guessing.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── CTA (repeated, the only one) ────────────────────────────────── -->
+<section class="join" id="join">
+  <div class="wrap">
+    <h2>Join the beta.</h2>
+    <p class="section-lead">Threshold works for one person from day one — you don't need your team, your IT department, or anyone's permission to start. We're letting people in in small waves.</p>
+
+    <form class="form-card" id="waitlist-form"
+          method="POST" action="/api/waitlist"
+          novalidate>
+      <!-- Honeypot: humans never fill this; bots do. -->
+      <div class="hp" aria-hidden="true">
+        <label for="wl-company">Company</label>
+        <input type="text" id="wl-company" name="company" tabindex="-1" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="wl-name">Name</label>
+        <input type="text" id="wl-name" name="name" placeholder="Your name" autocomplete="name" required>
+      </div>
+      <div class="field">
+        <label for="wl-email">Work email</label>
+        <input type="email" id="wl-email" name="email" placeholder="you@company.com" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="wl-role">One line about what you run</label>
+        <input type="text" id="wl-role" name="role" placeholder="e.g. agency lead, program manager, chief of staff" autocomplete="off">
+      </div>
+      <button type="submit" id="wl-submit">Join the beta</button>
+      <p class="form-note">
+        No password, no download to try. Prefer email?
+        <a href="mailto:beta@viktora.ai?subject=Threshold%20beta%20invite&amp;body=Name%3A%20%0AWork%20email%3A%20%0AOne%20line%20about%20what%20I%20run%3A%20">Ask for an invite by email</a>.
+      </p>
+      <div class="form-status" id="form-status" role="status" aria-live="polite"></div>
+    </form>
+  </div>
+</section>
+
+<!-- ── Footer ──────────────────────────────────────────────────────── -->
+<footer>
+  <div class="wrap">
+    Viktora <span class="dot">·</span> Threshold is in active pilot <span class="dot">·</span> <a href="#join">privacy note</a>
+  </div>
+</footer>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────────
+   Lazy media. The below-fold section-accent clips only fetch + play once they
+   scroll near the viewport (keeps the initial load light / Lighthouse-minded),
+   and pause when scrolled away. The poster frame shows until then. Reduced-
+   motion users keep the poster and never autoplay.
+   ───────────────────────────────────────────────────────────────────────── */
+(function(){
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var clips = Array.prototype.slice.call(document.querySelectorAll('video.loopclip'));
+  if (reduce || !clips.length) return;
+  if (!('IntersectionObserver' in window)) {
+    // No IO — just let the browser handle autoplay from markup.
+    clips.forEach(function(v){ try { v.load(); v.play().catch(function(){}); } catch(e){} });
+    return;
+  }
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){
+      var v = en.target;
+      if (en.isIntersecting) {
+        if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
+        v.play().catch(function(){});
+      } else {
+        v.pause();
+      }
+    });
+  }, { rootMargin: '200px 0px', threshold: 0.15 });
+  clips.forEach(function(v){ io.observe(v); });
+})();
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Hero video: when it finishes, return to the poster frame instead of resting
+   on the last (dark) frame — otherwise a played-through hero reads as a blank
+   page. load() re-displays the poster because preload is 'none'.
+   ───────────────────────────────────────────────────────────────────────── */
+(function(){
+  var hero = document.querySelector('.hero-video video');
+  if (!hero) return;
+  hero.addEventListener('ended', function(){ try { hero.load(); } catch(e){} });
+})();
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Progressive enhancement. With JS off (or the endpoint down), the form is a
+   plain POST to /api/waitlist and the mailto: fallback is always visible.
+   With JS on, we POST via fetch and show the referral line on success, or the
+   mailto fallback on failure — the form never becomes a dead end.
+   ───────────────────────────────────────────────────────────────────────── */
+(function(){
+  var form = document.getElementById('waitlist-form');
+  var statusEl = document.getElementById('form-status');
+  var submitBtn = document.getElementById('wl-submit');
+  if (!form) return;
+
+  var REFERRAL = "Know someone else who's accountable for other people's promises? Invites move you both up the list.";
+  var MAILTO = 'mailto:beta@viktora.ai?subject=Threshold%20beta%20invite';
+
+  function showOk(){
+    statusEl.innerHTML =
+      '<div class="ok">' +
+        '<div class="headline">You’re on the list.</div>' +
+        '<div class="referral">' + REFERRAL + '</div>' +
+      '</div>';
+    statusEl.classList.add('show');
+    form.querySelectorAll('input').forEach(function(i){ i.disabled = true; });
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Requested';
+  }
+  function showErr(){
+    statusEl.innerHTML =
+      '<div class="err">Couldn’t reach the waitlist just now. ' +
+      '<a href="' + MAILTO + '">Ask for an invite by email</a> and we’ll add you.</div>';
+    statusEl.classList.add('show');
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Join the beta';
+  }
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    // Honeypot tripped → pretend success, drop silently.
+    if (form.company && form.company.value){ showOk(); return; }
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Sending…';
+    var payload = {
+      name: (form.name.value||'').trim(),
+      email: (form.email.value||'').trim(),
+      role: (form.role.value||'').trim(),
+      company: (form.company.value||'')
+    };
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function(res){
+      if (res.ok) { showOk(); } else { showErr(); }
+    }).catch(function(){ showErr(); });
+  });
+})();
+</script>
+</body>
+</html>
