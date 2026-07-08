@@ -32,39 +32,36 @@ you before they're due.
 
 1. **Forward an email — or a note, a screenshot, a recording. That's the
    whole workflow.**
-   Every workspace gets a private capture address, and can connect the
-   sources your work already lives in. Send Threshold the raw material and
-   it files every commitment it finds — who promised what, by when, in
-   their exact words — then replies with a receipt listing exactly what it
-   captured. Nothing invented; if it finds nothing, the receipt says so.
-   [screenshot: 16-email-capture-address]
+   Every workspace gets a private capture address, and connects to the
+   sources your work already lives in. Threshold files every commitment it
+   finds — who promised what, by when, in their exact words — and replies
+   with a receipt. Nothing invented; if it finds nothing, the receipt
+   says so.
+   [screenshot: 16-capture-crop — cropped to the address strip + receipt line]
    [animation A: forward → receipt → items appear on Today]
 
 2. **A two-week windshield, not a rear-view mirror.**
-   Today opens with what's coming: every promise due in the next two weeks,
-   who owns it, and — for the bigger ones — a worked-back plan: what has to
-   happen first, and the latest date each step can start and still make the
-   deadline. When that date passes with nothing seen, the item turns amber
-   before it's late, not after.
-   [screenshot: 21-workback-expanded — the Brian-style plan]
+   Today opens with every promise due in the next two weeks and who owns
+   it. The bigger ones get a worked-back plan — the latest date each step
+   can start and still make the deadline. When that date passes with
+   nothing seen, the item turns amber before it's late, not after.
+   [screenshot: 21-workback-crop — cropped to the expanded plan card]
    [animation B: click a swimlane → the plan unfolds]
 
 3. **You stay the editor.**
-   Every plan is correctable in place — mark a step done, rule it out, move
-   the date and watch everything recompute, undo any of it. Threshold also
-   asks instead of guessing: "what should this workstream be called?",
-   "are these two the same piece of work?" Your answers organize your
-   workspace — and teach it.
-   [screenshot: 28-name-ask or 29-merge-ask]
+   Every plan is correctable in place — mark a step done, rule it out,
+   move the date, undo any of it. When Threshold isn't sure, it asks
+   instead of guessing — and your answers teach it.
+   [screenshot: 28-name-ask — already card-tight; the ask examples live in
+   the image now, not the copy]
    [animation C: move the date → bars, tags, and ordering ripple]
 
 4. **Put out the fire before it starts.**
    When something starts drifting, you see it early — while there's still
-   time to reshuffle the plan, pull someone else in, or deliver part now and
-   buy room for the rest. If a heads-up is the right call, one tap stages a
-   short, no-blame note; nothing sends itself — every draft waits in your
-   outbox for your judgment.
-   [screenshot: 27-coming-up-headsup]
+   time to reshuffle, pull someone in, or deliver part now and buy room
+   for the rest. If a heads-up is the right call, one tap stages a short,
+   no-blame note that waits in your outbox. Nothing sends itself.
+   [screenshot: 27-headsup-crop — cropped to the single drifting-item card]
 
 ### No homework
 You've tried the boards, the Gantt charts, the color-coded lists with
@@ -117,9 +114,11 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
 - **Hero video end-state**: FIXED — resets to the poster on `ended` instead
   of resting on a dark final frame that read as a blank page.
 - **Hero video audio**: none currently. Intended, or add VO/captions?
-- **Section screenshots too dense** (Trisha): the example screens read as
-  overwhelming/unreadable. Crop or zoom to legible pieces — "even if you
-  don't know what it is, you should be able to read some of it."
+- **Section screenshots too dense** (Trisha): ADDRESSED for statics
+  (2026-07-08 pass) — features 1/2/4 now use tight crops (capture strip,
+  expanded plan card, single drifting-item card); feature copy trimmed
+  ~60→~45 words; feature grid top-aligned (numbers align). Still open:
+  the three loop CLIPS are full-app captures (re-shoot zoomed if needed).
 - **"Learn from you"** (Ross, open): consider whether the teach-it beat in
   feature 3 needs its own surfacing. Currently covered by "your answers
   organize your workspace — and teach it."

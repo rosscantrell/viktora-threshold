@@ -134,9 +134,10 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 
 /* Numbered feature blocks */
 .feature{
-  display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:center;
+  display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start;
   padding:44px 0;border-bottom:1px solid var(--border-subtle);
 }
+.feature-copy{padding-top:6px}
 .feature:last-of-type{border-bottom:none}
 .feature.reverse .feature-copy{order:2}
 .feature.reverse .feature-media{order:1}
@@ -308,11 +309,11 @@ footer .dot{margin:0 8px;opacity:.5}
       <div class="feature-copy">
         <span class="feature-num">1</span>
         <h3>Forward an email — or a note, a screenshot, a recording. That's the whole workflow.</h3>
-        <p>Every workspace gets a private capture address, and can connect the sources your work already lives in. Send Threshold the raw material and it files every commitment it finds — who promised what, by when, in their exact words — then replies with a receipt listing exactly what it captured. Nothing invented; if it finds nothing, the receipt says so.</p>
+        <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
-          <img src="assets/16-email-capture-address.jpg" alt="The private email capture address in Threshold settings." loading="lazy" width="1600" height="1044">
+          <img src="assets/16-capture-crop.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
           <!-- animation A: forward → receipt → items appear on Today -->
           <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-a-poster.jpg"
                  title="Today loads and populates with captured promises.">
@@ -328,11 +329,11 @@ footer .dot{margin:0 8px;opacity:.5}
       <div class="feature-copy">
         <span class="feature-num">2</span>
         <h3>A two-week windshield, not a rear-view mirror.</h3>
-        <p>Today opens with what's coming: every promise due in the next two weeks, who owns it, and — for the bigger ones — a worked-back plan: what has to happen first, and the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
+        <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
-          <img src="assets/21-workback-expanded.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1400" height="368">
+          <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
           <!-- animation B: click a swimlane → the plan unfolds -->
           <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-b-poster.jpg"
                  title="Clicking a swimlane unfolds the worked-back plan.">
@@ -348,7 +349,7 @@ footer .dot{margin:0 8px;opacity:.5}
       <div class="feature-copy">
         <span class="feature-num">3</span>
         <h3>You stay the editor.</h3>
-        <p>Every plan is correctable in place — mark a step done, rule it out, move the date and watch everything recompute, undo any of it. Threshold also asks instead of guessing: "what should this workstream be called?", "are these two the same piece of work?" Your answers organize your workspace — and teach it.</p>
+        <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
@@ -368,10 +369,10 @@ footer .dot{margin:0 8px;opacity:.5}
       <div class="feature-copy">
         <span class="feature-num">4</span>
         <h3>Put out the fire before it starts.</h3>
-        <p>When something starts drifting, you see it early — while there's still time to reshuffle the plan, pull someone else in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note; nothing sends itself — every draft waits in your outbox for your judgment.</p>
+        <p>When something starts drifting, you see it early — while there's still time to reshuffle, pull someone in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note that waits in your outbox. Nothing sends itself.</p>
       </div>
       <div class="feature-media">
-        <img src="assets/27-coming-up-headsup.jpg" alt="A staged, no-blame heads-up note waiting in the outbox for your judgment." loading="lazy" width="1080">
+        <img src="assets/27-headsup-crop.jpg" alt="A drifting item — due in two days, no draft observed — with a staged heads-up one tap away." loading="lazy" width="666" height="200">
       </div>
     </div>
   </div>
