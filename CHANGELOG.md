@@ -9,6 +9,34 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-07-08
+
+The focus release — same-day fixes from live pilot use.
+
+### Added
+- **"This week"** — short-fuse items (due within a week of being promised)
+  leave the swimlanes and cards for a dense burn-down list beside the
+  Deadline outlook: one row per item, grouped by owner with a single
+  group-level follow-up that chases a person's whole pile; rows click-expand
+  to the full item with its verbatim promise, source, and draft actions.
+- **Seen steps are inspectable** — a matched workback step opens the source
+  panel on the document the matcher saw, with "that's the one" (a positive
+  confirm) beside "not this."
+- **Save as contact** — one click downloads the capture address as a vCard
+  ("Viktora Threshold"), so forwarding is a name in the To: field, never a
+  40-character token.
+
+### Changed
+- **Deadline outlook is plans-only** — swimlanes render only for items with
+  a worked-back plan; expansions are one-at-a-time.
+- **"Mine" includes what you captured** — items you forwarded in count as
+  yours, not just items you own.
+
+### Fixed
+- **OneNote "isn't open" while it visibly was** — the COM probe could attach
+  to a ghost instance; it now retries and reports three truthful states with
+  a next step in each.
+
 ## [0.10.0] — 2026-07-07
 
 The deadline release — Today learns to look ahead. A two-week Deadline
