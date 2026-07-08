@@ -158,8 +158,6 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
   overflow:hidden;
 }
 .feature-media video,.feature-media img{width:100%;height:auto;display:block}
-.feature-media .stack > *{display:block;width:100%}
-.feature-media .stack > * + *{border-top:1px solid var(--border-subtle)}
 
 /* ── Trust ──────────────────────────────────────────────────────────── */
 .trust{
@@ -312,15 +310,8 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/16-capture-crop.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
-          <!-- animation A: forward → receipt → items appear on Today -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-a-poster.jpg"
-                 title="Today loads and populates with captured promises.">
-            <source src="assets/clip-a.webm" type="video/webm">
-            <source src="assets/clip-a.mp4" type="video/mp4">
-          </video>
-        </div>
+        <!-- Address token blurred — it's a private capture address; redaction is the honest render. -->
+        <img src="assets/16-capture-crop-blur.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
       </div>
     </div>
 
@@ -332,15 +323,7 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
-          <!-- animation B: click a swimlane → the plan unfolds -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-b-poster.jpg"
-                 title="Clicking a swimlane unfolds the worked-back plan.">
-            <source src="assets/clip-b.webm" type="video/webm">
-            <source src="assets/clip-b.mp4" type="video/mp4">
-          </video>
-        </div>
+        <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
       </div>
     </div>
 
@@ -352,15 +335,7 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096">
-          <!-- animation C: move the date → bars, tags, and ordering ripple -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-c-poster.jpg"
-                 title="Moving the date ripples through the bars, tags, and ordering; then undo restores it.">
-            <source src="assets/clip-c.webm" type="video/webm">
-            <source src="assets/clip-c.mp4" type="video/mp4">
-          </video>
-        </div>
+        <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096" height="426">
       </div>
     </div>
 
@@ -442,35 +417,6 @@ footer .dot{margin:0 8px;opacity:.5}
 </footer>
 
 <script>
-/* ─────────────────────────────────────────────────────────────────────────
-   Lazy media. The below-fold section-accent clips only fetch + play once they
-   scroll near the viewport (keeps the initial load light / Lighthouse-minded),
-   and pause when scrolled away. The poster frame shows until then. Reduced-
-   motion users keep the poster and never autoplay.
-   ───────────────────────────────────────────────────────────────────────── */
-(function(){
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var clips = Array.prototype.slice.call(document.querySelectorAll('video.loopclip'));
-  if (reduce || !clips.length) return;
-  if (!('IntersectionObserver' in window)) {
-    // No IO — just let the browser handle autoplay from markup.
-    clips.forEach(function(v){ try { v.load(); v.play().catch(function(){}); } catch(e){} });
-    return;
-  }
-  var io = new IntersectionObserver(function(entries){
-    entries.forEach(function(en){
-      var v = en.target;
-      if (en.isIntersecting) {
-        if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
-        v.play().catch(function(){});
-      } else {
-        v.pause();
-      }
-    });
-  }, { rootMargin: '200px 0px', threshold: 0.15 });
-  clips.forEach(function(v){ io.observe(v); });
-})();
-
 /* ─────────────────────────────────────────────────────────────────────────
    Hero video: when it finishes, return to the poster frame instead of resting
    on the last (dark) frame — otherwise a played-through hero reads as a blank

@@ -37,8 +37,9 @@ you before they're due.
    finds — who promised what, by when, in their exact words — and replies
    with a receipt. Nothing invented; if it finds nothing, the receipt
    says so.
-   [screenshot: 16-capture-crop — cropped to the address strip + receipt line]
-   [animation A: forward → receipt → items appear on Today]
+   [screenshot: 16-capture-crop-blur — address strip + receipt line; the
+   random token is BLURRED (it's a private address — redaction is the honest
+   render; any real address is an unreadable 30+ char token)]
 
 2. **A two-week windshield, not a rear-view mirror.**
    Today opens with every promise due in the next two weeks and who owns
@@ -46,7 +47,6 @@ you before they're due.
    can start and still make the deadline. When that date passes with
    nothing seen, the item turns amber before it's late, not after.
    [screenshot: 21-workback-crop — cropped to the expanded plan card]
-   [animation B: click a swimlane → the plan unfolds]
 
 3. **You stay the editor.**
    Every plan is correctable in place — mark a step done, rule it out,
@@ -54,7 +54,6 @@ you before they're due.
    instead of guessing — and your answers teach it.
    [screenshot: 28-name-ask — already card-tight; the ask examples live in
    the image now, not the copy]
-   [animation C: move the date → bars, tags, and ordering ripple]
 
 4. **Put out the fire before it starts.**
    When something starts drifting, you see it early — while there's still
@@ -117,8 +116,16 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
 - **Section screenshots too dense** (Trisha): ADDRESSED for statics
   (2026-07-08 pass) — features 1/2/4 now use tight crops (capture strip,
   expanded plan card, single drifting-item card); feature copy trimmed
-  ~60→~45 words; feature grid top-aligned (numbers align). Still open:
-  the three loop CLIPS are full-app captures (re-shoot zoomed if needed).
+  ~60→~45 words; feature grid top-aligned (numbers align).
+- **Section loop clips REMOVED** (Ross, big-screen review: "can't see
+  anything", "click-throughs really fast") — the three full-app clips are
+  off the page pending zoomed re-shoots. Re-shoot spec: zoom to the acting
+  region (not full app), SLOW the interaction pacing (his complaint), ≤2MB,
+  same shim-harness recipe. Hero video unaffected.
+- **Capture address token blurred** (Ross: "the really bad email address")
+  — the raw 30+ char token is off-putting; blur keeps `cap-` +
+  `@in.viktora.ai` legible and reads as privacy. Asset:
+  16-capture-crop-blur.jpg (unblurred crop + original kept in assets/).
 - **"Learn from you"** (Ross, open): consider whether the teach-it beat in
   feature 3 needs its own surfacing. Currently covered by "your answers
   organize your workspace — and teach it."
