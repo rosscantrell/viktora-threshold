@@ -137,12 +137,13 @@ automatically. Then click **Create my capture address**.
 
 ![Email capture — address and approved senders](docs/user-guide-assets/16-email-capture-address.png)
 
-You now have a generated address like `cap-7fq2m9x4@in.viktora.ai`. Click
-**Copy** to put it on your clipboard.
-
-> **Tip:** save the address as a contact in your mail app named something like
-> **"Threshold Capture."** Then forwarding is one autocomplete away, and you
-> never have to remember the random string.
+You now have a generated address like `cap-7fq2m9x4@in.viktora.ai`. The
+random string is deliberate — it's part of what keeps the address private —
+and it isn't meant to be memorized. Click **Save as contact** to download a
+contact card named **"Viktora Threshold"**, import it into your mail app
+once, and from then on forwarding is one autocomplete away: just type
+"Threshold" in the To: field. (**Copy** is there too if you'd rather paste
+it somewhere yourself.)
 
 **Approved senders.** Only senders you approve are accepted — email from anyone
 else is ignored. Add senders as either:
