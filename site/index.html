@@ -132,15 +132,14 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 .problem{border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
 .problem .section-lead{font-size:clamp(17px,2.2vw,20px);color:var(--text-primary);max-width:68ch}
 
-/* Numbered feature blocks */
+/* Numbered feature blocks — copy above, screenshot below at full content
+   width so the app text stays READABLE (the two-column grid halved every
+   screenshot; nothing survived that). */
 .feature{
-  display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start;
   padding:44px 0;border-bottom:1px solid var(--border-subtle);
 }
-.feature-copy{padding-top:6px}
 .feature:last-of-type{border-bottom:none}
-.feature.reverse .feature-copy{order:2}
-.feature.reverse .feature-media{order:1}
+.feature-copy{max-width:66ch}
 .feature-num{
   display:inline-flex;align-items:center;justify-content:center;
   width:34px;height:34px;border-radius:var(--radius-pill);
@@ -151,13 +150,16 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 .feature h3{font-size:clamp(20px,2.6vw,24px);line-height:1.25;font-weight:600;letter-spacing:-0.01em}
 .feature p{margin-top:14px;color:var(--text-secondary);font-size:16px}
 .feature-media{
+  margin-top:26px;
+  width:fit-content;max-width:100%;
   background:var(--surface-card);
   border:1px solid var(--border-subtle);
   border-radius:var(--radius-lg);
   box-shadow:var(--shadow-card);
   overflow:hidden;
 }
-.feature-media video,.feature-media img{width:100%;height:auto;display:block}
+/* Natural size, capped at content width — never upscale a screenshot. */
+.feature-media video,.feature-media img{max-width:100%;height:auto;display:block}
 
 /* ── Trust ──────────────────────────────────────────────────────────── */
 .trust{
@@ -240,9 +242,6 @@ footer .dot{margin:0 8px;opacity:.5}
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
 @media (max-width:760px){
-  .feature{grid-template-columns:1fr;gap:24px}
-  .feature.reverse .feature-copy{order:1}
-  .feature.reverse .feature-media{order:2}
   .hero{padding:52px 0 32px}
   section{padding:44px 0}
 }
@@ -310,13 +309,13 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
-        <!-- Address token blurred — it's a private capture address; redaction is the honest render. -->
-        <img src="assets/16-capture-crop-blur.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
+        <!-- Address token shown as password dots — it's a private capture address; the real one is a long random token. -->
+        <img src="assets/16-capture-crop-dots.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
       </div>
     </div>
 
     <!-- 2 -->
-    <div class="feature reverse">
+    <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">2</span>
         <h3>A two-week windshield, not a rear-view mirror.</h3>
@@ -340,7 +339,7 @@ footer .dot{margin:0 8px;opacity:.5}
     </div>
 
     <!-- 4 -->
-    <div class="feature reverse">
+    <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">4</span>
         <h3>Put out the fire before it starts.</h3>

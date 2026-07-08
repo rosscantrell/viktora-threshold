@@ -37,9 +37,10 @@ you before they're due.
    finds — who promised what, by when, in their exact words — and replies
    with a receipt. Nothing invented; if it finds nothing, the receipt
    says so.
-   [screenshot: 16-capture-crop-blur — address strip + receipt line; the
-   random token is BLURRED (it's a private address — redaction is the honest
-   render; any real address is an unreadable 30+ char token)]
+   [screenshot: 16-capture-crop-dots — address strip + receipt line; the
+   random token renders as PASSWORD DOTS (`cap-` + dots + `@in.viktora.ai`)
+   — it's a private address and any real one is an unreadable 30+ char
+   token; blur was tried and looked smudgy (Ross)]
 
 2. **A two-week windshield, not a rear-view mirror.**
    Today opens with every promise due in the next two weeks and who owns
@@ -122,10 +123,15 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
   off the page pending zoomed re-shoots. Re-shoot spec: zoom to the acting
   region (not full app), SLOW the interaction pacing (his complaint), ≤2MB,
   same shim-harness recipe. Hero video unaffected.
-- **Capture address token blurred** (Ross: "the really bad email address")
-  — the raw 30+ char token is off-putting; blur keeps `cap-` +
-  `@in.viktora.ai` legible and reads as privacy. Asset:
-  16-capture-crop-blur.jpg (unblurred crop + original kept in assets/).
+- **Capture address token redacted** (Ross: "the really bad email address")
+  — the raw 30+ char token is off-putting. v1 blur looked smudgy (Ross);
+  v2 = password dots (`cap-` + • • • + `@in.viktora.ai`), crisp and reads
+  as "private secret". Asset: 16-capture-crop-dots.jpg (unblurred crop +
+  original kept in assets/).
+- **Feature layout restacked full-width** (Ross, big-screen: "still cannot
+  see the pictures easily") — the 2-col grid rendered every screenshot at
+  ~490px (36% scale for the plan card). Now copy-above, media-below at
+  natural size capped at content width (~1030px); never upscaled.
 - **"Learn from you"** (Ross, open): consider whether the teach-it beat in
   feature 3 needs its own surfacing. Currently covered by "your answers
   organize your workspace — and teach it."
