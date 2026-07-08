@@ -714,6 +714,8 @@ function switchSettingsPanel(name) {
   if (name === "privacy") renderSovereignty();
   // Email-capture panel is lazy too — GET /api/email/capture on open (WP-EM1b).
   if (name === "email-capture") renderEmailCapture();
+  // Connected-AI panel is lazy too — GET /api/mcp/grants on open (WP-MCP-V2 C).
+  if (name === "ai-connections") renderAiConnections();
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
@@ -1162,6 +1164,253 @@ function confirmRotateCapture(currentAddr) {
     } catch (err) {
       pgClose(overlay);
       showToast({ kind: "failure", title: "Couldn't rotate", body: String(err) });
+    }
+  });
+  actions.appendChild(cancel);
+  actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+// ───────── Connected AI platforms (WP-MCP-V2 Phase C) ─────────
+// Renders into #ai-connections-body, lazily on panel open. Every AI platform
+// or CLI tool holding access is a GRANT row (scoped token server-side); this
+// card lists them, mints new access keys, and revokes — the one place all
+// connections are visible and severable. Token values appear exactly once, at
+// mint. Calm states mirror the email-capture card: not-available explainer on
+// older engines, re-GET after every mutation, no optimistic state.
+
+/** "3d ago" / "just now" for a grant's lastUsedAt; "" when absent. */
+function grantLastUsed(iso) {
+  if (!iso) return "never used";
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const mins = Math.floor(ms / 60000);
+  if (mins < 2) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + "h ago";
+  return Math.floor(hours / 24) + "d ago";
+}
+
+async function renderAiConnections() {
+  const body = document.getElementById("ai-connections-body");
+  if (!body) return;
+  body.innerHTML = '<p class="field-help">Loading…</p>';
+
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_mcp_grants");
+  } catch (err) {
+    body.innerHTML =
+      '<p class="field-help ec-error">Couldn\'t reach your workspace: ' +
+      escapeHtml(String(err)) +
+      '</p><div class="ec-actions"><button type="button" class="btn btn-secondary" id="ai-retry">Try again</button></div>';
+    const retry = document.getElementById("ai-retry");
+    if (retry) retry.addEventListener("click", () => renderAiConnections());
+    return;
+  }
+
+  if (!data || data.available === false || data.enabled !== true) {
+    body.innerHTML =
+      '<p class="field-help">AI platform connections aren\'t available on this workspace yet.</p>';
+    return;
+  }
+
+  const grants = Array.isArray(data.grants) ? data.grants : [];
+  const active = grants.filter((g) => g && !g.revokedAt);
+  const revoked = grants.filter((g) => g && g.revokedAt);
+
+  // The connector URL any MCP-compliant platform can be pointed at.
+  const baseUrl = (document.getElementById("config-base-url").value || "").trim();
+  const mcpUrl = baseUrl ? baseUrl.replace(/\/+$/, "") + "/mcp" : "";
+
+  let html = "";
+  if (mcpUrl) {
+    html +=
+      '<div class="ec-address-row">' +
+      '<code class="ec-address" id="ai-mcp-url">' + escapeHtml(mcpUrl) + "</code>" +
+      '<button type="button" class="btn btn-secondary ec-copy" id="ai-copy-url">Copy</button>' +
+      "</div>" +
+      '<p class="field-help">Add this as a custom connector in any AI platform (claude.ai, ChatGPT, …). ' +
+      "You approve access once, on this workspace's consent screen.</p>";
+  }
+
+  if (active.length) {
+    html += '<h3 class="settings-subhead ec-senders-head">Active connections</h3>';
+    html += '<ul class="ec-senders">';
+    for (const g of active) {
+      const kind = g.kind === "oauth" ? "Connector" : "Access key";
+      const label = g.label && g.label.startsWith("oauth:") ? g.label.slice(6) : g.label || "(unlabeled)";
+      html +=
+        '<li class="ec-sender-row"><div class="ai-grant-main">' +
+        '<span class="ec-sender">' + escapeHtml(label) + "</span>" +
+        '<span class="ai-grant-meta">' + kind +
+        " · " + escapeHtml((g.scopes || []).join(" + ")) +
+        " · " + escapeHtml(grantLastUsed(g.lastUsedAt)) + "</span>" +
+        "</div>" +
+        '<button type="button" class="ec-sender-remove" data-grant-id="' + escapeHtml(g.id) +
+        '" data-grant-label="' + escapeHtml(label) + '" aria-label="Revoke ' + escapeHtml(label) + '">Revoke</button></li>';
+    }
+    html += "</ul>";
+  } else {
+    html +=
+      '<p class="field-help">No AI platforms connected yet. Add the connector URL above in the ' +
+      "platform's settings, or create an access key below for command-line tools.</p>";
+  }
+
+  if (revoked.length) {
+    const revokedName = (g) => {
+      const l = g.label || g.id;
+      return l.startsWith("oauth:") ? l.slice(6) : l;
+    };
+    html +=
+      '<p class="field-help ec-history">Revoked: ' +
+      revoked.map((g) => "<code>" + escapeHtml(revokedName(g)) + "</code>").join(", ") +
+      "</p>";
+  }
+
+  // Mint an access key (bearer lane, for CLI clients like Claude Code). Owner
+  // resolves from the signed-in identity; the identity-less bearer lane gets an
+  // inline email field — same convention as the capture-address card.
+  let viewerEmail = null;
+  try { viewerEmail = await getViewerEmail(); } catch (_e) { /* optional */ }
+
+  html += '<h3 class="settings-subhead ec-senders-head">Create an access key</h3>';
+  if (!viewerEmail) {
+    html +=
+      '<div class="ec-add-sender">' +
+      '<input type="email" class="ec-sender-input" id="ai-mint-owner" ' +
+      'placeholder="you@company.com — the key\'s owner" autocomplete="email" spellcheck="false" />' +
+      "</div>";
+  }
+  html +=
+    '<div class="ec-add-sender">' +
+    '<input type="text" class="ec-sender-input" id="ai-mint-label" ' +
+    'placeholder="What will use this key? e.g. Claude Code — laptop" autocomplete="off" spellcheck="false" />' +
+    '<button type="button" class="btn btn-secondary" id="ai-mint">Create</button>' +
+    "</div>";
+  html += '<p class="field-help ec-sender-error" id="ai-mint-error" hidden></p>';
+  html += '<div id="ai-mint-result"></div>';
+
+  body.innerHTML = html;
+
+  const copyBtn = document.getElementById("ai-copy-url");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await tauri.core.invoke("copy_text", { text: mcpUrl });
+        copyBtn.textContent = "Copied ✓";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+      } catch (err) {
+        showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
+      }
+    });
+  }
+
+  for (const rm of document.querySelectorAll("#ai-connections-body .ec-sender-remove")) {
+    rm.addEventListener("click", () => confirmRevokeGrant(rm.dataset.grantId, rm.dataset.grantLabel));
+  }
+
+  const mintBtn = document.getElementById("ai-mint");
+  const mintLabel = document.getElementById("ai-mint-label");
+  if (mintBtn && mintLabel) {
+    const doMint = () => mintAiGrant(mintLabel.value, viewerEmail);
+    mintBtn.addEventListener("click", doMint);
+    mintLabel.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doMint(); } });
+  }
+}
+
+async function mintAiGrant(rawLabel, viewerEmail) {
+  const errEl = document.getElementById("ai-mint-error");
+  const label = (rawLabel || "").trim();
+  if (!label) {
+    if (errEl) {
+      errEl.textContent = "Give the key a label so you can recognize it later.";
+      errEl.removeAttribute("hidden");
+    }
+    return;
+  }
+  // Owner: the signed-in identity when present; on the identity-less bearer
+  // lane, the inline #ai-mint-owner field (must be a bare email — captures made
+  // with this key are attributed to it).
+  let ownerEmail = viewerEmail || null;
+  if (!ownerEmail) {
+    const ownerInput = document.getElementById("ai-mint-owner");
+    const value = normalizeCaptureSender(ownerInput ? ownerInput.value : "");
+    if (!value || value.startsWith("@")) {
+      if (errEl) {
+        errEl.textContent = "Enter the owner's email address (name@company.com).";
+        errEl.removeAttribute("hidden");
+      }
+      return;
+    }
+    ownerEmail = value;
+  }
+  if (errEl) errEl.setAttribute("hidden", "");
+  try {
+    const result = await tauri.core.invoke("mcp_mint_grant", { ownerEmail, label });
+    const token = result && result.token ? String(result.token) : "";
+    const holder = document.getElementById("ai-mint-result");
+    if (holder && token) {
+      // The one and only surfacing of the token value. Not persisted client-side.
+      holder.innerHTML =
+        '<div class="ec-address-row">' +
+        '<code class="ec-address">' + escapeHtml(token) + "</code>" +
+        '<button type="button" class="btn btn-secondary ec-copy" id="ai-token-copy">Copy</button>' +
+        "</div>" +
+        '<p class="privacy-caveat">⚠ Copy this key now — it won\'t be shown again.</p>';
+      const tc = document.getElementById("ai-token-copy");
+      if (tc) {
+        tc.addEventListener("click", async () => {
+          try {
+            await tauri.core.invoke("copy_text", { text: token });
+            tc.textContent = "Copied ✓";
+            setTimeout(() => { tc.textContent = "Copy"; }, 1600);
+          } catch (err) {
+            showToast({ kind: "failure", title: "Couldn't copy", body: String(err) });
+          }
+        });
+      }
+    }
+  } catch (err) {
+    showToast({ kind: "failure", title: "Couldn't create key", body: String(err) });
+  }
+}
+
+function confirmRevokeGrant(id, label) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Revoke this connection?";
+  pane.appendChild(title);
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "pg-confirm-body";
+  bodyEl.textContent = `“${label}” loses access immediately. This can't be undone — reconnecting means approving it again.`;
+  pane.appendChild(bodyEl);
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "pg-btn pg-btn-primary";
+  go.textContent = "Revoke";
+  go.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("mcp_revoke_grant", { id });
+      pgClose(overlay);
+      await renderAiConnections(); // re-GET
+      showToast({ kind: "success", title: "Connection revoked", body: `“${label}” no longer has access.` });
+    } catch (err) {
+      pgClose(overlay);
+      showToast({ kind: "failure", title: "Couldn't revoke", body: String(err) });
     }
   });
   actions.appendChild(cancel);

@@ -2960,6 +2960,82 @@ async fn email_capture_remove_sender(
     email_capture_post(&cfg, &url, serde_json::json!({ "sender": sender })).await
 }
 
+// ── WP-MCP-V2 Phase C — connected-AI grants admin client ──
+// Proxies the schema-browser /api/mcp/grants[...] admin routes (bearer auth,
+// same posture as the email-capture admin client above): 404/503 (older engine
+// without the routes) → {available:false} for the calm not-enabled state; the
+// engine's structured {error} surfaces on mutations. Token values only ever
+// appear in the mint response — the grants list never carries them.
+
+/// GET /api/mcp/grants → every AI-platform grant (bearer + OAuth) plus the
+/// OAuth client registry. 404/503 (older engine) → {available:false}.
+#[tauri::command]
+async fn fetch_mcp_grants(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/mcp/grants", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(capture_admin_error(http_status, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_mcp_grants: parse response failed: {e}"))
+}
+
+/// POST /api/mcp/grants/mint — mint a bearer grant (e.g. for a CLI client).
+/// Returns { token, grant }; the token value appears here ONCE and nowhere else.
+#[tauri::command]
+async fn mcp_mint_grant(
+    state: tauri::State<'_, AppState>,
+    owner_email: String,
+    label: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/mcp/grants/mint",
+        cfg.base_url.trim_end_matches('/')
+    );
+    email_capture_post(
+        &cfg,
+        &url,
+        serde_json::json!({ "ownerEmail": owner_email, "label": label }),
+    )
+    .await
+}
+
+/// POST /api/mcp/grants/{id}/revoke — sever a grant immediately. 404 if the id
+/// is unknown or already revoked.
+#[tauri::command]
+async fn mcp_revoke_grant(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/mcp/grants/{}/revoke",
+        cfg.base_url.trim_end_matches('/'),
+        id
+    );
+    email_capture_post(&cfg, &url, serde_json::json!({})).await
+}
+
 /// Shared POST helper for the capture-admin mutations: bearer auth, JSON body,
 /// engine `{error}` surfaced on non-2xx.
 async fn email_capture_post(
@@ -7753,6 +7829,9 @@ pub fn run() {
             email_capture_rotate_address,
             email_capture_add_sender,
             email_capture_remove_sender,
+            fetch_mcp_grants,
+            mcp_mint_grant,
+            mcp_revoke_grant,
             // WP-Threshold-Grouping-Canonicalization — project-grouping canon (Combine/Split/Rename)
             fetch_project_canon,
             project_canon_merge,
