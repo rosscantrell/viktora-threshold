@@ -1,6 +1,6 @@
 [package]
 name = "viktora-threshold"
-version = "0.10.1"
+version = "0.10.2"
 description = "Viktora Threshold — Mac + Windows desktop capture app for Apolla workspaces (WP-OCR-12 + WP-OCR-13)"
 authors = ["Ross Cantrell"]
 edition = "2021"

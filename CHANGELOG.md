@@ -9,6 +9,30 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-07-09
+
+Follow-on fixes from Trisha's live pilot use — the frontend half of the
+2026-07-08 UAT report (the engine half shipped to her droplet separately).
+
+### Added
+- **Review before you decide** — every question card (name-ask, merge-ask)
+  now shows a collapsed "Show N items →" list of the actual items it grouped,
+  each openable in the source panel. A "Combine?" you can't inspect is a
+  rubber-stamp; the merge-ask card lists both sides so you compare before
+  combining.
+- **Deadline-aware overview** — the state-of-play overview carries a plain,
+  quiet line on what's due ("22 due in the next two weeks, 21 this week, 4 at
+  risk. Next: … — due Jul 9."), so the summary reflects real deadlines even
+  though the forest narrative is commitment-blind by construction.
+
+### Fixed
+- **"Tag a doc" did nothing / mangled deadline rail** — the tag-a-doc picker
+  was permanently visible (its toggle a no-op) and its width squeezed the step
+  text into a one-word-per-line strip. One `[hidden]` guard restores the toggle
+  and the layout; the acts row now wraps below the text instead of crushing it.
+- **Text overflow in the source panel** — arbitrary tokens (capture ids, long
+  subjects) now break instead of overflowing at narrow panel widths.
+
 ## [0.10.1] — 2026-07-08
 
 The focus release — same-day fixes from live pilot use.
