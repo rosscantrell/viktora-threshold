@@ -2523,7 +2523,7 @@ code {
 .today-outlook-steps {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
 }
 .today-outlook-step {
   font-size: 11px;
@@ -2531,32 +2531,30 @@ code {
   margin: 0;
   display: flex;
   gap: 7px;
-  align-items: center;
-  /* When the acts row is wide (e.g. the tag-a-doc picker open) or the view is
-     narrowed by an open source panel, let the acts wrap BELOW the text instead
-     of squeezing it — never collapse the step text into a one-word-per-line strip. */
-  flex-wrap: wrap;
+  align-items: flex-start;
 }
 .today-outlook-step-text {
   flex: 1 1 auto;
-  /* hold a readable floor so a wide acts row pushes acts to the next line
-     rather than shrinking the text toward zero width. */
-  min-width: 150px;
+  min-width: 0;
 }
 .today-outlook-step-acts {
-  /* The step's HITL pills sit on their OWN line under the text and start at one
-     consistent left column, so they line up across every step regardless of how
-     many pills it has (2 on a seen step, 3 on an unseen one). Right-aligning them
-     (margin-left:auto) made rows with fewer pills start further right — staggered
-     left edges that read as misaligned. */
-  flex: 0 0 100%;
-  padding-left: 17px;
-  margin-top: 1px;
+  /* Each step carries ONE compact "⋯" dropdown trigger (not a row of pills), so
+     the control is the same width on every row and margin-left:auto lines them
+     all up in a single right-hand column. */
+  flex: none;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 4px;
+}
+/* The step's action-menu trigger — a compact "⋯" pill that opens the themed
+   dropdown (.record-edit-menu) with this step's HITL actions. */
+.today-outlook-step-menu {
+  min-width: 22px;
+  padding-left: 6px;
+  padding-right: 6px;
+  line-height: 1;
+  letter-spacing: 1px;
+  text-align: center;
 }
 .today-outlook-docselect {
   font-size: 10px;
