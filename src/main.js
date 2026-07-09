@@ -3943,6 +3943,90 @@ async function loadTodayQueueNameAsks(settle) {
   settle("nameAsks", appended > 0);
 }
 
+// WP-QCARD-REVIEW — the shared reviewable-items affordance for every engine→user
+// question card: a collapsed "Show N items →" toggle that reveals a clickable
+// list of {item summary + source badge}, each badge opening the item's source
+// document in the source pane. This is the load-bearing HITL affordance (a
+// decision the user can't inspect is a rubber-stamp) — the name-ask card proved
+// it, and the merge-ask card reuses it once per side so the user compares before
+// combining.
+//
+// `records` is the capped member list the engine ships ({recordId, documentId,
+// summary}[]). Returns a wrap element, or null when there's nothing to review.
+// Options:
+//   showLabel   — the collapsed toggle text (e.g. "Show 5 items →" or a per-side
+//                 "Show LAA's 5 items →"). Defaults to "Show N items →".
+//   totalCount  — the TRUE open count (may exceed records.length because the
+//                 engine caps the carried sample); drives the "+K more" row so a
+//                 truncated list still tells the user how many items exist.
+//   cap         — max rows rendered from `records` (default 6, matching the
+//                 name-ask card's original inline cap).
+//
+// Landmines respected (documented, already bitten): the toggle is `.btn-link`,
+// which is `position:absolute` globally — `.nameask-items-toggle` resets it to
+// `position:static`. The list is a `[hidden]` collapsible whose `display:flex`
+// would out-rank `[hidden]`, so `.nameask-items[hidden]{display:none}` guards it.
+function buildQcardReviewList(records, opts) {
+  const recs = Array.isArray(records) ? records : [];
+  if (!recs.length) return null;
+  const options = opts || {};
+  const CAP = typeof options.cap === "number" ? options.cap : 6;
+  const shown = recs.length; // records is already the capped sample from the engine
+  const total = typeof options.totalCount === "number" && options.totalCount > shown
+    ? options.totalCount : shown;
+  const showLabel = options.showLabel ||
+    ("Show " + shown + " item" + (shown === 1 ? "" : "s") + " →");
+
+  const wrap = document.createElement("div");
+  wrap.className = "nameask-items-wrap";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "btn btn-link nameask-items-toggle";
+  toggle.textContent = showLabel;
+  const list = document.createElement("div");
+  list.className = "nameask-items";
+  list.hidden = true;
+
+  const buildRows = () => {
+    list.textContent = "";
+    for (const r of recs.slice(0, CAP)) {
+      const row = document.createElement("div");
+      row.className = "nameask-item";
+      const t = document.createElement("span");
+      t.className = "nameask-item-label";
+      t.textContent = (r && r.summary) || prettySlug(String((r && r.recordId) || "")) || "(item)";
+      row.appendChild(t);
+      const badge = renderSourceBadge(r && r.documentId, (r && r.summary) || null);
+      if (badge) row.appendChild(badge);
+      list.appendChild(row);
+    }
+    // "+K more" = every item beyond what's rendered — the rows past the render
+    // cap PLUS any records the engine capped out of the payload (total > shown).
+    const more = total - Math.min(CAP, shown);
+    if (more > 0) {
+      const moreEl = document.createElement("div");
+      moreEl.className = "nameask-item-more";
+      moreEl.textContent = "+ " + more + " more";
+      list.appendChild(moreEl);
+    }
+  };
+
+  let open = false;
+  toggle.addEventListener("click", () => {
+    open = !open;
+    toggle.textContent = open ? "Hide items ↑" : showLabel;
+    if (open) {
+      loadDocsMap().then(() => { buildRows(); list.hidden = false; })
+        .catch(() => { buildRows(); list.hidden = false; });
+    } else {
+      list.hidden = true;
+    }
+  });
+  wrap.appendChild(toggle);
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function renderNameAskCard(ask) {
   // Presented in the ONE question-card grammar (rule-card question-card) —
   // the same shape every engine→user question wears: the QUESTION is the
@@ -3988,6 +4072,16 @@ function renderNameAskCard(ask) {
     }
     el.appendChild(hints);
   }
+
+  // Covered items — clickable source list. Align the question-family cards with
+  // the commitment cards' receipts: show WHAT was grouped (each openable), not a
+  // bare count. The shared helper renders the proven "Show N items →" idiom.
+  const nameItems = buildQcardReviewList(ask.records, {
+    showLabel: "Show " + (Array.isArray(ask.records) ? ask.records.length : 0) +
+      " item" + ((Array.isArray(ask.records) ? ask.records.length : 0) === 1 ? "" : "s") + " →",
+    totalCount: typeof ask.openCount === "number" ? ask.openCount : undefined,
+  });
+  if (nameItems) el.appendChild(nameItems);
 
   const rowEl = document.createElement("div");
   rowEl.className = "nameask-input-row";
@@ -4147,6 +4241,23 @@ function renderMergeAskCard(ask) {
     (nA + nB) + " open items are split between " + a + " (" + nA + ") and " +
     b + " (" + nB + ") — they look like the same project filed two ways.";
   el.appendChild(why);
+
+  // WP-QCARD-REVIEW — TWO reviewable lists, one per side, so the user inspects
+  // each group's actual items (each openable in the source pane) before deciding
+  // to combine them. A wrong "Combine" corrupts the forest, so this review is the
+  // load-bearing HITL affordance. Same "Show N items →" idiom as the name-ask
+  // card, labelled per side with the real display name. Invisible-by-absence when
+  // an older engine sends no recordsA/recordsB (flag-off / pre-WP posture).
+  const sideA = buildQcardReviewList(ask.recordsA, {
+    showLabel: "Show " + a + "’s " + nA + " item" + (nA === 1 ? "" : "s") + " →",
+    totalCount: nA,
+  });
+  if (sideA) el.appendChild(sideA);
+  const sideB = buildQcardReviewList(ask.recordsB, {
+    showLabel: "Show " + b + "’s " + nB + " item" + (nB === 1 ? "" : "s") + " →",
+    totalCount: nB,
+  });
+  if (sideB) el.appendChild(sideB);
 
   // Answer affordance: the surviving name (prefilled with the engine's
   // suggestion — the busier key's label) + one Combine action.
@@ -6632,18 +6743,80 @@ function renderSoPProse(container, data, opts) {
 // stalled frames, cross-frame conflicts), scoped to the viewer via the person
 // lens when an identity is known. Same panel slot + copy/edit affordances as the
 // old corpus altitude; maturity-aware now that the backend gates by frame.
+// WP-SOP-DEADLINE (light-touch, Ross 2026-07-09). The forest SoP narrative is
+// blind to commitments/deadlines by construction (the engine assembles it from
+// the work-forest only). Rather than rewire the substrate, the overview carries
+// a deterministic, plain-language deadline line computed from the SAME
+// decision-log Coming-up uses — so the state of play reflects what's actually
+// due and at risk. Pure + deterministic; returns null when nothing is due.
+function computeDeadlineDigest(records, nowMs) {
+  const today = new Date(nowMs);
+  today.setHours(0, 0, 0, 0);
+  const t0 = today.getTime();
+  const horizon = t0 + 14 * 86400000;
+  const weekEnd = t0 + 7 * 86400000;
+  const up = [];
+  for (const it of Array.isArray(records) ? records : []) {
+    const rec = (it && it.record) || {};
+    if ((it.state || "open") !== "open") continue;
+    if (rec.type && rec.type !== "commitment") continue;
+    // effectiveDue (workback overlay) wins over the raw due — same precedence
+    // as loadTodayComingUp; inlined here since effDueOf is local to that fn.
+    const d = parseDueDate((it && it.effectiveDue) || rec.due);
+    if (!d) continue;
+    const t = d.getTime();
+    if (t < t0 || t > horizon) continue;
+    const readiness = it.readiness || rec.readiness || null;
+    const wb = it.workbackShadow || rec.workbackShadow || null;
+    const proj = wb && (wb.projection || wb);
+    const atRisk = readiness === "no-precursor" || !!(proj && proj.fire === true) || it.noDraft === true;
+    up.push({ rec, t, d, atRisk });
+  }
+  if (!up.length) return null;
+  up.sort((a, b) => a.t - b.t);
+  const thisWeek = up.filter((u) => u.t <= weekEnd).length;
+  const atRiskN = up.filter((u) => u.atRisk).length;
+  const next = up[0];
+  const shortDate = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const parts = [`${up.length} due in the next two weeks`];
+  if (thisWeek) parts.push(`${thisWeek} this week`);
+  if (atRiskN) parts.push(`${atRiskN} at risk`);
+  const summary = (next.rec.summary || "").trim();
+  const nextClause = summary
+    ? ` Next: ${summary.length > 64 ? summary.slice(0, 61) + "…" : summary} — due ${shortDate(next.d)}.`
+    : "";
+  return `On deadlines: ${parts.join(", ")}.${nextClause}`;
+}
+
 async function loadCorpusStateOfPlay(panel) {
   panel.classList.remove("sop-quiet");
   panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
   const data = await loadSoP("forest", null, personLens(_todayCtx && _todayCtx.viewerSlug));
+  // WP-SOP-DEADLINE — compute the deadline line from the decision-log (best
+  // effort; never blocks or fails the overview).
+  let deadlineLine = null;
+  try {
+    const dl = await tauri.core.invoke("fetch_decision_log_full");
+    const recs = withoutDismissed(Array.isArray(dl && dl.records) ? dl.records : []);
+    deadlineLine = computeDeadlineDigest(recs, Date.now());
+  } catch (_e) { /* best effort — the overview still renders */ }
   if (!data) {
     // Quiet report (WP-TODAY-READ-ACT): the unavailable state is a calm line,
     // not a boxed callout — .sop-quiet strips the panel chrome.
     panel.classList.add("sop-quiet");
     panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
-    return;
+  } else {
+    renderCorpusPanel(panel, data);
   }
-  renderCorpusPanel(panel, data);
+  // The deadline line rides BELOW the narrative (or the quiet fallback) so the
+  // state of play always reflects what's due — even when the forest overview is
+  // absent on this server.
+  if (deadlineLine) {
+    const p = document.createElement("p");
+    p.className = "sop-deadline";
+    p.textContent = deadlineLine;
+    panel.appendChild(p);
+  }
 }
 function renderCorpusPanel(panel, data) {
   panel.classList.remove("sop-quiet");

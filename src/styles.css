@@ -2532,16 +2532,23 @@ code {
   display: flex;
   gap: 7px;
   align-items: center;
+  /* When the acts row is wide (e.g. the tag-a-doc picker open) or the view is
+     narrowed by an open source panel, let the acts wrap BELOW the text instead
+     of squeezing it — never collapse the step text into a one-word-per-line strip. */
+  flex-wrap: wrap;
 }
 .today-outlook-step-text {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  /* hold a readable floor so a wide acts row pushes acts to the next line
+     rather than shrinking the text toward zero width. */
+  min-width: 150px;
 }
 .today-outlook-step-acts {
   flex: none;
   margin-left: auto;
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
 }
 .today-outlook-docselect {
@@ -2607,6 +2614,13 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+/* display:inline-flex outranks the [hidden] attribute — without this guard the
+   tag-a-doc picker is permanently visible (so "tag a doc" appears to do nothing)
+   AND its 220px select widens the acts column, collapsing the step text into a
+   one-word-per-line strip. Explicit guard restores toggle + prevents the squeeze. */
+.today-outlook-datewrap[hidden] {
+  display: none;
 }
 .today-outlook-dateinput,
 .today-outlook-addlabel,
@@ -2766,6 +2780,45 @@ code {
 .nameask-hints-label {
   font-size: 11px;
   color: var(--glass-text-faint);
+}
+/* Covered-items list — the clickable receipts on the name-ask card (parity with
+   the commitment cards). Collapsed by default behind a "Show N items" toggle. */
+.nameask-items-wrap {
+  margin-top: 8px;
+}
+.nameask-items-toggle {
+  /* .btn-link is position:absolute;top:4px;right:0 globally — reset to inline. */
+  position: static;
+  font-size: 12px;
+  padding: 0;
+}
+.nameask-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.nameask-items[hidden] {
+  display: none;
+}
+.nameask-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--glass-text);
+}
+.nameask-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nameask-item-more {
+  font-size: 11px;
+  color: var(--glass-text-faint);
+  padding-top: 2px;
 }
 .nameask-input-row {
   display: flex;
@@ -5595,6 +5648,9 @@ body.source-open .view:not([hidden]) { margin-right: var(--source-panel-w); }
   margin: 4px 0 0;
   font-size: 11.5px;
   color: var(--text-tertiary);
+  /* meta holds arbitrary tokens (capture ids, long subjects) — break, don't overflow. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .source-panel-close {
   flex: none;
@@ -6387,6 +6443,16 @@ button.rec-source {
    ══════════════════════════════════════════════════════════════════════════ */
 .sop-prose,
 .sop-section-body {
+  max-width: 72ch;
+}
+
+/* WP-SOP-DEADLINE — the deterministic deadline line under the overview. Plain,
+   quiet, deadline-aware; keeps the state of play honest about what's due. */
+.sop-deadline {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
   max-width: 72ch;
 }
 
