@@ -2544,10 +2544,17 @@ code {
   min-width: 150px;
 }
 .today-outlook-step-acts {
-  flex: none;
-  margin-left: auto;
+  /* The step's HITL pills sit on their OWN line under the text and start at one
+     consistent left column, so they line up across every step regardless of how
+     many pills it has (2 on a seen step, 3 on an unseen one). Right-aligning them
+     (margin-left:auto) made rows with fewer pills start further right — staggered
+     left edges that read as misaligned. */
+  flex: 0 0 100%;
+  padding-left: 17px;
+  margin-top: 1px;
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 4px;
 }
