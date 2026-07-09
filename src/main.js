@@ -5753,69 +5753,61 @@ function renderOutlookDetails(box, entry, rec, wb, proj) {
       text.className = "today-outlook-step-text";
       text.textContent = (s.label || s.kind || "step") + when;
       line.appendChild(text);
-      // The HITL gestures — right-aligned as one column so the pills line up
-      // across rows. Every tap lands in the correction stream AND recomputes
-      // the dates in place (the refetch re-renders all surfaces).
+      // The HITL gestures live behind ONE compact dropdown per step (Ross,
+      // 2026-07-09) — a single "⋯" trigger opens the themed menu
+      // (openRecordEditMenu / .record-edit-menu) listing the step's actions,
+      // instead of a row of pills. Every pick lands in the correction stream AND
+      // recomputes the dates in place (the refetch re-renders all surfaces).
       const acts = document.createElement("span");
       acts.className = "today-outlook-step-acts";
+      const actOptions = [];
       if (!seen) {
-        acts.appendChild(
-          miniBtn("done", "This already happened — mark it seen", () =>
-            gesture({ gesture: "step-done", stepIndex: i, stepKind: s.kind })),
-        );
-        acts.appendChild(
-          miniBtn("doesn't apply", "This step isn't part of this deliverable", () =>
-            gesture({ gesture: "step-not-applicable", stepIndex: i, stepKind: s.kind })),
-        );
-        // Tag the doc that IS this step's artifact — the human override for
-        // the matcher (renders only when the window has candidate docs).
-        const cands = (wb && wb.candidates) || [];
-        if (cands.length) {
-          const tagBtn = miniBtn("tag a doc", "Point at the document that shows this happened", () => {
-            picker.hidden = !picker.hidden;
+        actOptions.push({ label: "Mark as done", run: () =>
+          gesture({ gesture: "step-done", stepIndex: i, stepKind: s.kind }) });
+        actOptions.push({ label: "Doesn't apply here", run: () =>
+          gesture({ gesture: "step-not-applicable", stepIndex: i, stepKind: s.kind }) });
+        // Tag the doc that IS this step's artifact — the human override for the
+        // matcher: each candidate document is its own menu item (no inline
+        // picker to widen the row).
+        for (const c of (wb && wb.candidates) || []) {
+          actOptions.push({
+            label: `Tag: ${c.title || c.docId}${c.date ? " · " + c.date : ""}`,
+            run: () => gesture({ gesture: "evidence-attach", stepIndex: i, docId: c.docId }),
           });
-          const picker = document.createElement("span");
-          picker.hidden = true;
-          picker.className = "today-outlook-datewrap";
-          const sel = document.createElement("select");
-          sel.className = "today-outlook-docselect";
-          for (const c of cands) {
-            const o = document.createElement("option");
-            o.value = c.docId;
-            o.textContent = `${c.title || c.docId} · ${c.date || ""}`;
-            sel.appendChild(o);
-          }
-          picker.appendChild(sel);
-          picker.appendChild(
-            miniBtn("tag", "", () =>
-              gesture({ gesture: "evidence-attach", stepIndex: i, docId: sel.value })),
-          );
-          acts.appendChild(tagBtn);
-          acts.appendChild(picker);
         }
       } else if (v && v.evidenceDocId) {
-        // WP-FOCUS task #5 (Ross, 2026-07-08): a "seen" verdict is the
-        // matcher's CLAIM — make it inspectable. The step text opens the
-        // standard source panel on the matched doc; "that's the one" is the
-        // positive confirm the calibration stream never got before.
+        // WP-FOCUS task #5 (Ross, 2026-07-08): a "seen" verdict is the matcher's
+        // CLAIM — make it inspectable. The step text opens the source panel on
+        // the matched doc; the menu carries the confirm / reject calibration.
         text.classList.add("today-outlook-seen-link");
         text.title = "See the document this was matched to";
         text.addEventListener("click", (e) => {
           e.stopPropagation();
           openSourcePanel(v.evidenceDocId, s.label || null);
         });
-        acts.appendChild(
-          miniBtn("that's the one", "Confirm this document is the right evidence", () =>
-            gesture({ gesture: "evidence-confirm", stepIndex: i, docId: v.evidenceDocId })),
-        );
-        acts.appendChild(
-          miniBtn("not this", "That document isn't evidence of this step", () =>
-            gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId })),
-        );
+        actOptions.push({ label: "That's the one", run: () =>
+          gesture({ gesture: "evidence-confirm", stepIndex: i, docId: v.evidenceDocId }) });
+        actOptions.push({ label: "Not the right doc", run: () =>
+          gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId }) });
       }
-      // Always append the acts cell (even empty) — the steps render in a shared
-      // 3-column grid (.today-outlook-steps), so a missing acts cell would shift
-      // the following step's columns. An empty cell renders nothing.
+      if (actOptions.length) {
+        const trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.className = "today-outlook-mini today-outlook-step-menu";
+        trigger.textContent = "⋯";
+        trigger.setAttribute("aria-label", "Update this step");
+        trigger.title = "Update this step";
+        trigger.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openRecordEditMenu(
+            trigger,
+            actOptions.map((o, idx) => ({ value: String(idx), label: o.label })),
+            null,
+            (val) => { const o = actOptions[Number(val)]; if (o) o.run(); },
+          );
+        });
+        acts.appendChild(trigger);
+      }
       line.appendChild(acts);
       list.appendChild(line);
     });
