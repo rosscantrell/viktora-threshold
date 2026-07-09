@@ -5813,7 +5813,10 @@ function renderOutlookDetails(box, entry, rec, wb, proj) {
             gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId })),
         );
       }
-      if (acts.childNodes.length) line.appendChild(acts);
+      // Always append the acts cell (even empty) — the steps render in a shared
+      // 3-column grid (.today-outlook-steps), so a missing acts cell would shift
+      // the following step's columns. An empty cell renders nothing.
+      line.appendChild(acts);
       list.appendChild(line);
     });
     box.appendChild(list);

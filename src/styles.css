@@ -2520,41 +2520,36 @@ code {
   margin: 0;
   font-style: italic;
 }
+/* The step list is a 3-column grid — [mark] [text] [actions] — shared across
+   every step so the mark, the label, and the HITL pills each line up in their
+   own column. (A per-step flex row gave each step its own independent layout,
+   so the pills right-aligned to staggered positions depending on pill count.)
+   `.today-outlook-step` is display:contents so its mark/text/acts drop straight
+   into the shared grid tracks; renderOutlookDetails always emits an acts cell
+   (empty when a step has no pills) so the columns never shift. */
 .today-outlook-steps {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  row-gap: 5px;
+  column-gap: 7px;
 }
 .today-outlook-step {
   font-size: 11px;
   color: var(--glass-text);
   margin: 0;
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  /* When the acts row is wide (e.g. the tag-a-doc picker open) or the view is
-     narrowed by an open source panel, let the acts wrap BELOW the text instead
-     of squeezing it — never collapse the step text into a one-word-per-line strip. */
-  flex-wrap: wrap;
+  display: contents;
 }
 .today-outlook-step-text {
-  flex: 1 1 auto;
-  /* hold a readable floor so a wide acts row pushes acts to the next line
-     rather than shrinking the text toward zero width. */
-  min-width: 150px;
+  min-width: 0;
 }
 .today-outlook-step-acts {
-  /* The step's HITL pills sit on their OWN line under the text and start at one
-     consistent left column, so they line up across every step regardless of how
-     many pills it has (2 on a seen step, 3 on an unseen one). Right-aligning them
-     (margin-left:auto) made rows with fewer pills start further right — staggered
-     left edges that read as misaligned. */
-  flex: 0 0 100%;
-  padding-left: 17px;
-  margin-top: 1px;
+  /* One shared right-hand column: pills line up across every step, with their
+     left edges aligned (the widest set — the 3-pill unseen step — sets the
+     column width; shorter sets align to the same left edge). */
+  justify-self: start;
   display: inline-flex;
   align-items: center;
-  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 4px;
 }
