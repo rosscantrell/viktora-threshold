@@ -112,6 +112,19 @@ body {
 .brief-empty { color: var(--text-tertiary); font-size: 11.5px; padding: 3px 5px; font-style: italic; }
 .brief-tail { color: var(--text-tertiary); font-size: 11px; padding: 4px 5px 0; }
 
+/* Standup — run this check-in with the AI companion (WP-CHECKIN-STANDUP).
+   Quiet chip in the header: tertiary at rest, primary on hover — no accent
+   spend (amber stays reserved for "on fire"). */
+#brief-standup {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px;
+  background: var(--panel); border: 0.5px solid var(--line); border-radius: 6px;
+  color: var(--text-secondary); font: inherit; font-size: 11px;
+  padding: 2px 8px; cursor: pointer; white-space: nowrap;
+}
+#brief-standup:hover { color: var(--text-primary); border-color: rgba(255, 255, 255, 0.16); }
+#brief-standup ~ #brief-collapse { margin-left: 6px; } /* standup owns the auto push */
+
 /* Footer ------------------------------------------------------------------ */
 #brief-foot { padding: 8px 12px; border-top: 0.5px solid var(--line); }
 .brief-link {

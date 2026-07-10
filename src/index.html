@@ -444,6 +444,25 @@
                   new captures. They can never edit records or see raw documents.
                 </span>
               </div>
+
+              <!-- AI companion — WP-CHECKIN-STANDUP. Where the check-in brief's
+                   Standup button opens your AI surface. A client preference
+                   (localStorage, persists on change), not server config. -->
+              <h3 class="settings-subhead">AI companion</h3>
+              <label class="field">
+                <span class="field-label">Companion chat URL</span>
+                <input
+                  type="text"
+                  id="config-companion-url"
+                  placeholder="https://claude.ai/new"
+                  aria-label="URL the check-in Standup button opens"
+                />
+                <span class="field-help">
+                  The check-in brief's ✦ Standup button opens this surface — any AI
+                  platform connected above works. Leave empty for claude.ai, where
+                  the standup prompt is pre-filled for you.
+                </span>
+              </label>
             </section>
 
             <!-- ── Privacy panel ──
