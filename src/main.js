@@ -347,8 +347,17 @@ async function bootstrap() {
 
     // WP-THRESHOLD-LOG-UX — widget_expand("log") (the "Today" menu item or the
     // ambient badge) navigates here with #log. Render the live decision log.
-    if (window.location.hash === "#log") {
+    if (window.location.hash.startsWith("#log")) {
       enterLogView();
+      // Deep-link from the check-in brief: #log?doc=<id> opens the record's source
+      // in the right pane, so Today lands on the item WITH its source alongside
+      // (Ross UAT 2026-07-10). openSourcePanel fetches the doc itself; fired after
+      // the view begins painting.
+      const _qi = window.location.hash.indexOf("?");
+      if (_qi >= 0) {
+        const _doc = new URLSearchParams(window.location.hash.slice(_qi + 1)).get("doc");
+        if (_doc) setTimeout(() => { try { openSourcePanel(_doc, null); } catch (_e) { console.warn("[main] deep-link source:", _e); } }, 0);
+      }
       return;
     }
 
