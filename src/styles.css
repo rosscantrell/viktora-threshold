@@ -6741,3 +6741,42 @@ button.rec-source {
   flex-wrap: wrap;
 }
 .thisweek-detail-actions .btn-link { position: static; font-size: 11px; padding: 0; }
+
+/* WP-DAY-DIGEST (Ross UAT 2026-07-10) — deterministic top-of-Today digest.
+   Fires first (the ONE amber accent, canon 8), then due-today / rest-of-week /
+   coming-up. Each band's summary line is a button that expands a capped item list. */
+.day-digest { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.day-digest-head {
+  font-size: 12px; font-weight: 500; color: var(--text-primary);
+  letter-spacing: 0.01em; margin-bottom: 2px;
+}
+.day-digest-band {
+  border: 0.5px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px; background: rgba(255, 255, 255, 0.02); overflow: hidden;
+}
+.day-digest-band.tone-fire { border-left: 2px solid var(--warn); background: var(--warn-soft); }
+.day-digest-line {
+  display: flex; align-items: baseline; gap: 10px; width: 100%;
+  padding: 7px 11px; background: none; border: 0; cursor: pointer;
+  font: inherit; text-align: left; color: var(--text-secondary);
+}
+.day-digest-line:disabled { cursor: default; opacity: 0.9; }
+.day-digest-label { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+.day-digest-count { font-size: 11.5px; color: var(--text-secondary); margin-left: auto; }
+.day-digest-band.tone-fire .day-digest-count { color: var(--warn-text); }
+.day-digest-items { display: flex; flex-direction: column; gap: 1px; padding: 0 8px 9px 11px; }
+.day-digest-item {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11.5px; color: var(--text-secondary); line-height: 1.5;
+  border-radius: 5px; padding: 1px 3px;
+}
+.day-digest-item:hover { background: rgba(255, 255, 255, 0.03); }
+.day-digest-item-text {
+  flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.day-digest-item-link { cursor: pointer; }
+.day-digest-item-link:hover { color: var(--text-primary); text-decoration: underline; text-underline-offset: 2px; }
+.day-digest-item-acts { flex: 0 0 auto; opacity: 0; transition: opacity 0.1s; }
+.day-digest-item:hover .day-digest-item-acts { opacity: 1; }
+.day-digest-more { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; padding-left: 3px; }

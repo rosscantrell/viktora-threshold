@@ -1657,6 +1657,11 @@ async function handleSave(e) {
 
 async function enterMainView(cfg) {
   state.inWizard = false;
+  // Returning to the capture home must restore the full-width view: the source
+  // reader is a Log/detail affordance, and back-nav (goHome) previously left it
+  // open with stale document data (the right pane wouldn't re-collapse — Trisha
+  // UAT 2026-07-09). closeSourcePanel is a pure state reset; safe if already closed.
+  closeSourcePanel();
   showView("view-main");
   setNav([{ label: "Home" }], { active: "main", back: null });
 
@@ -1874,6 +1879,10 @@ const DISMISS_REASONS = [
   { slug: "not-salient", label: "Not salient" },
   { slug: "already-known", label: "Already knew this" },
   { slug: "closing-out", label: "Closing out" },
+  // Deprioritized (Ross UAT 2026-07-10) — the overdue-cleanup motive: it didn't get
+  // done because priorities moved, not because it was wrong. Server-side contract
+  // must accept this slug too (VALID_REASONS in the engine's index.ts + RecordHitlReason).
+  { slug: "deprioritized", label: "Deprioritized" },
 ];
 
 /** Append a subtle "Dismiss" (✕) control to an actions row. Clicking opens a
@@ -1897,7 +1906,7 @@ function appendDraftFollowUpControl(actionsEl, rec) {
   actionsEl.appendChild(btn);
 }
 
-function appendDismissControl(actionsEl, recordId, cardEl, summary) {
+function appendDismissControl(actionsEl, recordId, cardEl, summary, onDismissed) {
   if (!recordId) return;
   const btn = document.createElement("button");
   btn.type = "button";
@@ -1907,7 +1916,7 @@ function appendDismissControl(actionsEl, recordId, cardEl, summary) {
   btn.textContent = "✕";
   btn.addEventListener("click", (e) => {
     e.stopPropagation(); // don't toggle a group header / open receipts
-    openDismissReasonMenu(btn, recordId, cardEl, summary);
+    openDismissReasonMenu(btn, recordId, cardEl, summary, onDismissed);
   });
   actionsEl.appendChild(btn);
 }
@@ -1940,7 +1949,7 @@ function _onReasonMenuKeydown(e) {
 
 /** Open the inline reason picker anchored under the ✕ button. The menu is a
  *  small glass popover with one button per closed-set reason. */
-function openDismissReasonMenu(anchorBtn, recordId, cardEl, summary) {
+function openDismissReasonMenu(anchorBtn, recordId, cardEl, summary, onDismissed) {
   // Toggle: a second click on the same trigger closes it.
   const wasOpen = !!_openReasonMenu;
   closeDismissReasonMenu();
@@ -1964,7 +1973,7 @@ function openDismissReasonMenu(anchorBtn, recordId, cardEl, summary) {
     item.addEventListener("click", (e) => {
       e.stopPropagation();
       closeDismissReasonMenu();
-      dismissRecord(recordId, cardEl, summary, slug);
+      dismissRecord(recordId, cardEl, summary, slug, onDismissed);
     });
     menu.appendChild(item);
   }
@@ -2087,7 +2096,7 @@ function openSnoozeMenu(anchorBtn, recordId, cardEl, summary) {
  *      signal). On failure we KEEP the local hide and just log — the item is
  *      still suppressed locally; the server simply didn't hear about it.
  */
-async function dismissRecord(recordId, cardEl, summary, reason) {
+async function dismissRecord(recordId, cardEl, summary, reason, onDismissed) {
   if (!recordId || !cardEl) return;
   const parent = cardEl.parentNode;
   const next = cardEl.nextSibling;
@@ -2109,6 +2118,11 @@ async function dismissRecord(recordId, cardEl, summary, reason) {
     });
     return;
   }
+
+  // Local hide is durable now — let callers react (e.g. the day digest decrements
+  // its band count live). Fired here, not on the optimistic remove above, so a
+  // failed local write (which re-inserts the card) never leaves a stale count.
+  if (typeof onDismissed === "function") onDismissed(recordId);
 
   // (3) Server-side disposition — best-effort. The local hide already stands.
   let serverOk = true;
@@ -5789,6 +5803,20 @@ function renderOutlookDetails(box, entry, rec, wb, proj) {
           gesture({ gesture: "evidence-confirm", stepIndex: i, docId: v.evidenceDocId }) });
         actOptions.push({ label: "Not the right doc", run: () =>
           gesture({ gesture: "evidence-deselect", stepIndex: i, docId: v.evidenceDocId }) });
+      } else if (seen && rec.documentId) {
+        // Seen, but the matcher recorded NO evidenceDocId — it observed a precursor
+        // without pinning the document. WP-FOCUS #5 only linkified evidence-backed
+        // seen steps, which left THIS case a dead, unclickable line — Trisha/Ross
+        // couldn't open the item to inspect it (UAT 2026-07-10). Keep the claim
+        // inspectable (fail-closed-but-VISIBLE): open the item's OWN source, and the
+        // title names the gap so it doesn't read as a confirmed match. (The matcher
+        // failing to record which doc it saw is a separate engine-side gap.)
+        text.classList.add("today-outlook-seen-link");
+        text.title = "Seen, but no source document was recorded — open this item's source to inspect";
+        text.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openSourcePanel(rec.documentId, s.label || null);
+        });
       }
       if (actOptions.length) {
         const trigger = document.createElement("button");
@@ -6783,35 +6811,200 @@ function computeDeadlineDigest(records, nowMs) {
   return `On deadlines: ${parts.join(", ")}.${nextClause}`;
 }
 
+// WP-DAY-DIGEST (Ross UAT 2026-07-10): "19 due this week" is a dead number — it
+// hid the 93 overdue (forward-only) and swept next week's Mon items into "this
+// week" (rolling-7). This replaces that one-liner with a deterministic, scannable
+// day digest built from the SAME decision-log: fires first (overdue + at-risk),
+// then what's due today, then the rest of the WORK week, then coming up. Pure +
+// deterministic; no dependency on the (often-absent) forest narrative. "Done
+// yesterday" is intentionally omitted — the log carries no per-item completion
+// timestamp yet (that needs the deferred completion-capture), so we don't fake it.
+function computeDayDigest(records, nowMs) {
+  const today = new Date(nowMs);
+  today.setHours(0, 0, 0, 0);
+  const t0 = today.getTime();
+  const dayMs = 86400000;
+  // Friday of the current work-week; on Sat/Sun roll to the UPCOMING Friday
+  // (Ross ruling 2026-07-10: "this week" = the work week, default upcoming).
+  const dow = today.getDay(); // 0 Sun … 6 Sat
+  const addToFri = dow === 0 ? 5 : dow === 6 ? 6 : 5 - dow;
+  const weekEnd = new Date(t0);
+  weekEnd.setDate(weekEnd.getDate() + addToFri);
+  weekEnd.setHours(23, 59, 59, 999);
+  const weekEndMs = weekEnd.getTime();
+  const horizonMs = t0 + 14 * dayMs;
+
+  const overdue = [], dueToday = [], thisWeek = [], comingUp = [];
+  let atRiskN = 0;
+  for (const it of Array.isArray(records) ? records : []) {
+    const rec = (it && it.record) || {};
+    if ((it.state || "open") !== "open") continue;
+    if (rec.type && rec.type !== "commitment") continue;
+    const d = parseDueDate((it && it.effectiveDue) || rec.due);
+    if (!d) continue;
+    const t = d.getTime();
+    const readiness = it.readiness || rec.readiness || null;
+    const wb = it.workbackShadow || rec.workbackShadow || null;
+    const proj = wb && (wb.projection || wb);
+    const atRisk = readiness === "no-precursor" || !!(proj && proj.fire === true) || it.noDraft === true;
+    if (atRisk) atRiskN++;
+    const entry = { rec, d, t, atRisk, owner: rec.owner || "", summary: (rec.summary || "").trim() };
+    if (t < t0) overdue.push(entry);
+    else if (t < t0 + dayMs) dueToday.push(entry);
+    else if (t <= weekEndMs) thisWeek.push(entry);
+    else if (t <= horizonMs) comingUp.push(entry);
+  }
+  if (!(overdue.length + dueToday.length + thisWeek.length + comingUp.length)) return null;
+  const byDue = (a, b) => a.t - b.t;
+  overdue.sort(byDue); dueToday.sort(byDue); thisWeek.sort(byDue); comingUp.sort(byDue);
+  return {
+    today, overdue, dueToday, thisWeek, comingUp, atRiskN,
+    oldestOverdue: overdue.length ? overdue[0].d : null,
+  };
+}
+
+function renderDayDigest(panel, dg) {
+  const shortDate = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const wrap = document.createElement("div");
+  wrap.className = "day-digest";
+
+  const head = document.createElement("div");
+  head.className = "day-digest-head";
+  head.textContent = "Today · " + dg.today.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  wrap.appendChild(head);
+
+  // One band: a summary line (label + count/summary), optionally expandable to a
+  // capped item list. tone="fire" spends the ONE amber accent (canon 8) on the
+  // overdue/at-risk band only.
+  const band = (label, items, opts) => {
+    opts = opts || {};
+    let total = opts.count != null ? opts.count : (items ? items.length : 0);
+    const countFn = opts.countFn || ((n) => String(n));
+    const b = document.createElement("div");
+    b.className = "day-digest-band" + (opts.tone ? " tone-" + opts.tone : "");
+    const line = document.createElement("button");
+    line.type = "button";
+    line.className = "day-digest-line";
+    const lbl = document.createElement("span");
+    lbl.className = "day-digest-label";
+    lbl.textContent = label;
+    const cnt = document.createElement("span");
+    cnt.className = "day-digest-count";
+    cnt.textContent = countFn(total);
+    line.appendChild(lbl);
+    line.appendChild(cnt);
+    b.appendChild(line);
+    const expandable = items && items.length;
+    if (expandable) {
+      const list = document.createElement("div");
+      list.className = "day-digest-items";
+      list.hidden = !opts.open;
+      const cap = opts.cap || 6;
+      // Live count: clearing a VISIBLE row drops total AND the shown rows by one, so
+      // "+N more" stays correct — only the band count needs re-rendering (Ross 2026-07-10).
+      const onCleared = () => { total = Math.max(0, total - 1); cnt.textContent = countFn(total); };
+      items.slice(0, cap).forEach((e) => {
+        const r = document.createElement("div");
+        r.className = "day-digest-item";
+        // Single-line headline (collapsed; full text on hover). Click opens the
+        // source doc to inspect (Ross UAT 2026-07-10).
+        const txt = document.createElement("span");
+        txt.className = "day-digest-item-text";
+        const full = (e.owner ? prettySlug(e.owner) + " · " : "") + (e.summary || "(no summary)") + " · due " + shortDate(e.d);
+        txt.textContent = full;
+        txt.title = full;
+        const docId = e.rec && e.rec.documentId;
+        if (docId) {
+          txt.classList.add("day-digest-item-link");
+          txt.title = full + "  —  open source";
+          txt.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            openSourcePanel(docId, e.summary || null);
+          });
+        }
+        r.appendChild(txt);
+        // Clear (Dismiss verb canon): prune overdue items that went stale / slipped
+        // when priorities moved. Global client-side suppression — the digest recomputes
+        // via withoutDismissed, and the item stays reviewable elsewhere (fail-closed-VISIBLE).
+        const acts = document.createElement("span");
+        acts.className = "day-digest-item-acts";
+        if (e.rec && e.rec.recordId) appendDismissControl(acts, e.rec.recordId, r, e.summary, onCleared);
+        r.appendChild(acts);
+        list.appendChild(r);
+      });
+      if (items.length > cap) {
+        const more = document.createElement("div");
+        more.className = "day-digest-more";
+        more.textContent = "+" + (items.length - cap) + " more";
+        list.appendChild(more);
+      }
+      b.appendChild(list);
+      line.setAttribute("aria-expanded", opts.open ? "true" : "false");
+      line.addEventListener("click", () => {
+        list.hidden = !list.hidden;
+        line.setAttribute("aria-expanded", list.hidden ? "false" : "true");
+      });
+    } else {
+      line.disabled = true;
+    }
+    wrap.appendChild(b);
+  };
+
+  // Fires first — the overdue tail the old line never mentioned, plus at-risk.
+  // The oldest/at-risk suffix stays fixed as the count decrements live; a Refresh
+  // recomputes both exactly (cheap honesty over re-deriving on every clear).
+  if (dg.overdue.length) {
+    const suffix = (dg.oldestOverdue ? " · oldest " + shortDate(dg.oldestOverdue) : "")
+      + (dg.atRiskN ? " · " + dg.atRiskN + " at risk" : "");
+    band("Overdue", dg.overdue, { tone: "fire", cap: 8, countFn: (n) => (n > 0 ? n + suffix : "cleared") });
+  } else if (dg.atRiskN) {
+    band("At risk", [], { tone: "fire", count: dg.atRiskN, countFn: (n) => n + " at risk" });
+  }
+  band("Due today", dg.dueToday, {
+    open: dg.dueToday.length > 0,
+    cap: 10,
+    countFn: (n) => (n > 0 ? String(n) : "nothing due"),
+  });
+  band("Rest of this week", dg.thisWeek, {
+    cap: 10,
+    countFn: (n) => (n > 0 ? n + " due through Fri" : "nothing more due"),
+  });
+  if (dg.comingUp.length) {
+    band("Coming up", dg.comingUp, { cap: 10, countFn: (n) => n + " in the next two weeks" });
+  }
+
+  panel.appendChild(wrap);
+}
+
 async function loadCorpusStateOfPlay(panel) {
   panel.classList.remove("sop-quiet");
   panel.innerHTML = '<div class="sop-status">Composing the overview…</div>';
   const data = await loadSoP("forest", null, personLens(_todayCtx && _todayCtx.viewerSlug));
-  // WP-SOP-DEADLINE — compute the deadline line from the decision-log (best
-  // effort; never blocks or fails the overview).
-  let deadlineLine = null;
+  // WP-DAY-DIGEST — compute the deterministic day digest from the decision-log
+  // (best effort; never blocks or fails the overview).
+  let digest = null;
   try {
     const dl = await tauri.core.invoke("fetch_decision_log_full");
     const recs = withoutDismissed(Array.isArray(dl && dl.records) ? dl.records : []);
-    deadlineLine = computeDeadlineDigest(recs, Date.now());
+    digest = computeDayDigest(recs, Date.now());
   } catch (_e) { /* best effort — the overview still renders */ }
   if (!data) {
-    // Quiet report (WP-TODAY-READ-ACT): the unavailable state is a calm line,
-    // not a boxed callout — .sop-quiet strips the panel chrome.
+    // Forest narrative absent on this server (common on eval corpora). Rather than
+    // a bare "unavailable" line as the top-of-Today content, the deterministic day
+    // digest carries the slot — it's derived from the log we DO have (Ross UAT
+    // 2026-07-10). Only when there's nothing at all to say do we fall to the quiet line.
     panel.classList.add("sop-quiet");
-    panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
+    panel.innerHTML = "";
+    if (!digest) {
+      panel.innerHTML = '<div class="sop-status">Overview isn\'t available on this server yet.</div>';
+    }
   } else {
     renderCorpusPanel(panel, data);
   }
-  // The deadline line rides BELOW the narrative (or the quiet fallback) so the
-  // state of play always reflects what's due — even when the forest overview is
-  // absent on this server.
-  if (deadlineLine) {
-    const p = document.createElement("p");
-    p.className = "sop-deadline";
-    p.textContent = deadlineLine;
-    panel.appendChild(p);
-  }
+  // The day digest leads (narrative absent) or rides below the narrative (present),
+  // so the state of play always reflects what's overdue / due / coming — even when
+  // the forest overview is absent on this server.
+  if (digest) renderDayDigest(panel, digest);
 }
 function renderCorpusPanel(panel, data) {
   panel.classList.remove("sop-quiet");
@@ -6886,7 +7079,12 @@ function renderPersonLensSoP(container, data, lens) {
   container.appendChild(head);
   const body = document.createElement("div");
   body.className = "sop-lens-body";
-  renderSoPProse(body, data, {});
+  // Lean by default, extended on demand (Ross ruling, Trisha UAT 2026-07-09): the
+  // top-of-Today SoP led with the full multi-paragraph narrative — "6 lines to say
+  // nothing's urgent." Digest mode clamps the lead to ~4 lines behind Show more and
+  // pulls the "Do this first" line out front, matching the corpus panel (mockup 2,
+  // rubric line 53). Same data; the full narrative is one tap away.
+  renderSoPProse(body, data, { digest: true });
   container.appendChild(body);
 }
 
