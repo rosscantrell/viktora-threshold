@@ -577,4 +577,160 @@ async function maybeFireCheckins() {
 maybeFireCheckins();
 setInterval(maybeFireCheckins, 60 * 1000);
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE T1 — shared app-side channel tick (30 min + on-launch pass).
+// ───────────────────────────────────────────────────────────────────────────
+//
+// ONE recurring timer serving every passive app-side channel, so we don't grow
+// a forest of independent poll loops. The widget is the app's always-resident
+// context (the main window is a SINGLE window that navigates between
+// widget.html — collapsed, default — and index.html — expanded; main.js only
+// runs while expanded). So the tick lives HERE, mirroring the maybeFireCheckins
+// precedent above: it runs the whole time the app runs, which is exactly the
+// "channels run only while the app runs" contract (WP-INTAKE decision 3).
+//
+// Each tick pushes a FRESH FULL snapshot per callee, so catch-up is inherent:
+// the app being closed all morning simply means the next launch pass (and every
+// tick after) sends current state — no per-channel watermark is needed for the
+// calendar push. (Watermark-based sweeps, e.g. OneNote, self-heal the same way.)
+//
+// The registry is a plain array of async callees. The tick awaits each in turn
+// (sequential — these are light and we don't want two subprocess-spawning reads
+// racing), and every callee is individually try/caught so one dead channel can
+// never abort the others or throw to the UI (fail-closed-but-VISIBLE is the
+// callee's job via its own logging; the tick just keeps going).
+
+const CHANNEL_TICK_MS = 30 * 60 * 1000; // 30-min cadence (WP-CALENDAR addendum).
+// On-launch pass runs after a startup-settle delay so we don't compete with app
+// boot (config load, widget shim, badge fetches). 75s sits between the widget's
+// 60s checkin tick and the 90s ceiling the brief names.
+const CHANNEL_LAUNCH_SETTLE_MS = 75 * 1000;
+
+// The callee registry. Each entry: { name, run }. `run` is async, returns
+// nothing meaningful, and MUST NOT throw (the tick guards anyway).
+const channelCallees = [];
+
+function registerChannelCallee(name, run) {
+  channelCallees.push({ name, run });
+}
+
+async function runChannelTick(reason) {
+  for (const callee of channelCallees) {
+    try {
+      await callee.run();
+    } catch (err) {
+      // A callee should handle its own failures calmly; this is the last-line
+      // guard so a throw in one channel can't starve the rest or the timer.
+      console.warn(`[channel-tick] callee '${callee.name}' failed (${reason}):`, err);
+    }
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-CALENDAR piece B — availability push (registered as the first callee).
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Reads the local calendar (14-day window per brief) via the Rust
+// `calendar_read_window` command, maps the normalized events to the engine's
+// POST /api/availability body, and hands that body to the Rust
+// `push_availability` command (which attaches the per-user bearer + base URL —
+// the bearer never leaves Rust, matching every other engine call in the app).
+//
+// Privacy default (WP-CALENDAR rule 2): busy-windows only. `includeTitles` is
+// false, so we DON'T put titles/organizers on the wire even though the local
+// read returns them. (A future local-detail setting can flip this per-push.)
+
+const AVAILABILITY_WINDOW_DAYS = 14;
+
+/**
+ * Pure mapping: normalized calendar events → the POST /api/availability body.
+ * Kept side-effect-free (no invoke, no clock beyond the passed `updatedAt`) so
+ * it's unit-testable in isolation and the body shape is auditable. Drops rows
+ * whose start/end aren't both present (the engine's normalizePushWindows drops
+ * them too, but keeping the wire clean is cheaper). `includeTitles` controls
+ * whether title/organizer are carried; default false (busy-windows only).
+ *
+ * Exported on `globalThis.__wpCalendar` for a node --check-able smoke without a
+ * bundler; it's a no-op attachment in the browser.
+ */
+function buildAvailabilityBody(events, { includeTitles = false, updatedAt } = {}) {
+  const windows = [];
+  for (const ev of events || []) {
+    if (!ev || !ev.start || !ev.end) continue;
+    const w = { start: ev.start, end: ev.end, busy: ev.busy === true };
+    if (includeTitles) {
+      if (ev.title != null) w.title = ev.title;
+      if (ev.organizer != null) w.organizer = ev.organizer;
+    }
+    windows.push(w);
+  }
+  const body = { windows, includeTitles };
+  if (updatedAt) body.updatedAt = updatedAt;
+  return body;
+}
+
+/**
+ * The availability push callee. Reads the calendar, maps to the busy-only body,
+ * and pushes. Every failure is swallowed with a quiet log (the read command
+ * already surfaces a plain-product "calendar unavailable" message via its
+ * error; here we just don't let it reach the UI). Never throws.
+ */
+async function pushAvailability() {
+  let result;
+  try {
+    result = await invoke("calendar_read_window", { days: AVAILABILITY_WINDOW_DAYS });
+  } catch (err) {
+    // Read failed (permission denied / timeout / platform unsupported). The Rust
+    // command returned its plain-product user_message as the error string. Log
+    // and skip — the next tick retries a fresh full snapshot.
+    console.warn("[availability] calendar read unavailable:", err);
+    return;
+  }
+  const events = (result && result.events) || [];
+  // Busy-windows only by default (privacy default). We still push an EMPTY
+  // snapshot (0 windows) so the engine's freshness cursor advances — an honest
+  // "read succeeded, nothing on the calendar" is different from "never pushed".
+  const body = buildAvailabilityBody(events, {
+    includeTitles: false,
+    updatedAt: new Date().toISOString(),
+  });
+  try {
+    const pushResult = await invoke("push_availability", { body });
+    // pushResult: { pushed, enabled, note }. {enabled:false} = lane flag off
+    // server-side = a CALM no-op, not an error.
+    if (pushResult && pushResult.pushed) {
+      console.log(`[availability] ${pushResult.note || "pushed"} (source=${result.source})`);
+    } else {
+      console.log(`[availability] not stored: ${pushResult && pushResult.note ? pushResult.note : "no-op"}`);
+    }
+  } catch (err) {
+    console.warn("[availability] push failed:", err);
+  }
+}
+
+// Register the calendar push FIRST (WP-CALENDAR piece B).
+registerChannelCallee("availability", pushAvailability);
+
+// WP-INTAKE T1 OneNote sweep plugs in here — a LATER, separate PR. It will
+// `registerChannelCallee("onenote", onenoteSweep)` where onenoteSweep diffs
+// each configured notebook against its per-source watermark, exports new/changed
+// pages via the existing ingest_files path, and advances the watermark. The
+// Windows COM plumbing + console-flash suppression already exist
+// (src-tauri/src/onenote_windows.rs, spawn_ps_script with CREATE_NO_WINDOW).
+// Nothing else in this tick needs to change when it lands — it just joins the
+// registry.
+
+// Expose the pure mapper for a bundler-free smoke (node --check target); no-op
+// side effect in the browser.
+if (typeof globalThis !== "undefined") {
+  globalThis.__wpCalendar = { buildAvailabilityBody };
+}
+
+// On-launch pass after startup settle, then every 30 min. Both go through the
+// shared tick so the calendar push (and future OneNote sweep) share one timer.
+setTimeout(() => {
+  runChannelTick("launch");
+  setInterval(() => runChannelTick("interval"), CHANNEL_TICK_MS);
+}, CHANNEL_LAUNCH_SETTLE_MS);
+
 init();

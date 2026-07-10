@@ -30,6 +30,13 @@ mod pdf_extract;
 // returning `OneNoteError::PlatformUnsupported` from every function.
 mod onenote_windows;
 
+// WP-CALENDAR piece A — local calendar reader (macOS osascript/JXA against
+// Calendar.app with an Outlook-for-Mac fallback; Windows Outlook COM via
+// PowerShell, mirroring onenote_windows). Cross-platform compile: a stub for
+// other targets returns `CalendarError::PlatformUnsupported`. Calendar events
+// are their OWN lane (never substrate, no LLM) per the WP-CALENDAR brief.
+mod calendar_read;
+
 // WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
 // Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
 // PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
@@ -5603,6 +5610,139 @@ async fn run_onenote_send_inline(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-CALENDAR piece A + B — local calendar read + availability push
+// ───────────────────────────────────────────────────────────────────────────
+//
+//   - `calendar_read_window(days)` — reads the local calendar (Calendar.app /
+//     Outlook on Mac; Outlook COM on Windows) via `calendar_read`. Returns the
+//     normalized `CalendarReadResult` on success. On failure it returns
+//     `Err(String)` carrying the plain-product `user_message()` so the caller
+//     can render "calendar unavailable" (fail-closed-but-VISIBLE) — never a
+//     silent empty read.
+//   - `push_availability(body)` — the app-side of the availability lane. The JS
+//     push layer builds the engine body (the `{windows,includeTitles,updatedAt}`
+//     shape POST /api/availability expects) and passes it here; this command
+//     attaches the per-user bearer + base URL from AppConfig (the same plumbing
+//     every other engine call uses — the bearer never leaves Rust) and POSTs.
+//     Mirrors `outbox_propose`. Calm failure: a flag-off `{enabled:false}`
+//     response and any network error are returned as structured, non-throwing
+//     results so the 30-min tick never surfaces an error to the UI.
+
+/// `calendar_read_window` — read the next `days` days of calendar events.
+/// Blocking COM/osascript work runs on `spawn_blocking` so the IPC executor
+/// isn't stalled while the reader subprocess launches. On the read error path
+/// we surface `user_message()` (plain product language) rather than the raw
+/// Display, so a caller can show it verbatim.
+#[tauri::command]
+async fn calendar_read_window(days: u32) -> Result<calendar_read::CalendarReadResult, String> {
+    tauri::async_runtime::spawn_blocking(move || calendar_read::read_window(days))
+        .await
+        .map_err(|e| format!("join error: {}", e))?
+        .map_err(|e| e.user_message().to_string())
+}
+
+/// Structured outcome of an availability push. `pushed` = the engine accepted a
+/// snapshot; `enabled = false` = the lane flag is OFF server-side (a CALM
+/// success per the brief — not an error). Returned to JS so the tick can log
+/// quietly; nothing here ever throws to the UI.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailabilityPushResult {
+    /// True when the engine stored the snapshot (`{ok:true}`).
+    pub pushed: bool,
+    /// True when the lane flag is ON server-side. False ⇒ `{enabled:false}`
+    /// (calm no-op) OR the push simply didn't reach an enabled lane.
+    pub enabled: bool,
+    /// Optional human-readable note (window count on success, or a terse
+    /// failure reason) for the log line. Never surfaced as a toast.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// `push_availability` — POST the JS-built availability body to
+/// `/api/availability`. `body` is the `{windows,includeTitles,updatedAt}` object
+/// the push layer assembled (validated server-side by `AvailabilityPushSchema`).
+/// Bearer + base URL come from AppConfig here (never from JS). This function is
+/// deliberately non-throwing on the "expected" failure modes (flag-off,
+/// unreachable engine, rejected token): those are folded into the structured
+/// result so the shared tick logs quietly and moves on.
+#[tauri::command]
+async fn push_availability(
+    state: tauri::State<'_, AppState>,
+    body: serde_json::Value,
+) -> Result<AvailabilityPushResult, String> {
+    // Not configured ⇒ nothing to push; calm no-op (a fresh install before
+    // sign-in). Return rather than erroring so the tick stays quiet.
+    let cfg = match current_config(&state) {
+        Ok(c) => c,
+        Err(_) => {
+            return Ok(AvailabilityPushResult {
+                pushed: false,
+                enabled: false,
+                note: Some("not configured".into()),
+            });
+        }
+    };
+
+    let url = format!("{}/api/availability", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        // Engine unreachable / timeout ⇒ calm skip; the next tick pushes a
+        // fresh full snapshot (catch-up is inherent — no watermark needed).
+        Err(e) => {
+            return Ok(AvailabilityPushResult {
+                pushed: false,
+                enabled: false,
+                note: Some(format!("engine unreachable: {e}")),
+            });
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        // Non-2xx (401 bad token / 400 bad body / 500): don't throw — report.
+        let body_text = resp.text().await.unwrap_or_default();
+        return Ok(AvailabilityPushResult {
+            pushed: false,
+            enabled: false,
+            note: Some(format!("HTTP {}: {}", status.as_u16(), body_text.trim())),
+        });
+    }
+
+    // 2xx. Distinguish {enabled:false} (flag off — calm) from {ok:true}.
+    let parsed: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if parsed.get("enabled") == Some(&serde_json::Value::Bool(false)) {
+        return Ok(AvailabilityPushResult {
+            pushed: false,
+            enabled: false,
+            note: Some("availability lane disabled server-side".into()),
+        });
+    }
+    let window_count = parsed
+        .get("windowCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    Ok(AvailabilityPushResult {
+        pushed: true,
+        enabled: true,
+        note: Some(format!("pushed {window_count} window(s)")),
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-AUTO-IMPORT — designated-source background auto-import
 // ───────────────────────────────────────────────────────────────────────────
 //
@@ -7931,6 +8071,9 @@ pub fn run() {
             get_auto_import_config,
             set_auto_import_config,
             auto_import_available_sources,
+            // WP-CALENDAR — local calendar read + availability push
+            calendar_read_window,
+            push_availability,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
