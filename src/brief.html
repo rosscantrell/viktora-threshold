@@ -21,6 +21,12 @@
         <div class="brief-head-row">
           <span id="brief-title">Today</span>
           <span id="brief-date"></span>
+          <!-- WP-CHECKIN-STANDUP: run this check-in WITH the AI companion — opens
+               the configured AI surface (Settings → Integrations → AI companion);
+               the Apolla MCP standup prompt carries the ritual from there. -->
+          <button id="brief-standup" type="button" title="Run this check-in with your AI companion">
+            <span aria-hidden="true">✦</span> <span id="brief-standup-label">Standup</span>
+          </button>
           <button id="brief-collapse" type="button" title="Back to the widget" aria-label="Back to the widget">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

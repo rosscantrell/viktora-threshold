@@ -49,6 +49,35 @@ function currentLens(now) {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Standup — run this check-in WITH the AI companion (WP-CHECKIN-STANDUP).
+// Opens the configured AI surface (Settings → Integrations → AI companion,
+// localStorage — same window, so the store is shared). The Apolla MCP standup
+// prompt carries the ritual + the packet; the ?q= prefill is a claude.ai
+// nicety, not the mechanism.
+// ───────────────────────────────────────────────────────────────────────────
+const COMPANION_URL_KEY = "threshold.companionUrl";
+const COMPANION_DEFAULT_URL = "https://claude.ai/new";
+const STANDUP = {
+  morning: { label: "Standup", prompt: "Run my morning standup" },
+  midday: { label: "Check-in", prompt: "Run my mid-day check-in" },
+  evening: { label: "Debrief", prompt: "Run my end-of-day debrief" },
+};
+let _lens = null; // current lens; renderLens keeps it + the button label in sync
+
+async function openStandup() {
+  const st = STANDUP[_lens] || STANDUP.morning;
+  let url = (localStorage.getItem(COMPANION_URL_KEY) || COMPANION_DEFAULT_URL).trim();
+  if (/^https:\/\/(www\.)?claude\.ai\/new\/?$/.test(url)) {
+    url += "?q=" + encodeURIComponent(st.prompt);
+  }
+  try {
+    await invoke("plugin:opener|open_url", { url });
+  } catch (e) {
+    console.warn("[brief] standup open failed:", e);
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Compute — bucket open commitments by calendar (mirrors the day digest).
 // ───────────────────────────────────────────────────────────────────────────
 function parseDue(s) {
@@ -240,6 +269,8 @@ function renderLens(lensKey, buckets, now) {
   const t0 = new Date(now); t0.setHours(0, 0, 0, 0);
   const t0ms = t0.getTime();
   const lens = LENSES[lensKey];
+  _lens = lensKey;
+  document.getElementById("brief-standup-label").textContent = (STANDUP[lensKey] || STANDUP.morning).label;
   document.getElementById("brief-tagline").textContent = lens.tagline;
   for (const tab of document.querySelectorAll(".brief-tab")) {
     tab.setAttribute("aria-selected", tab.dataset.lens === lensKey ? "true" : "false");
@@ -304,5 +335,7 @@ document.getElementById("brief-collapse").addEventListener("click", async () => 
 });
 
 document.getElementById("brief-open-full").addEventListener("click", openFull);
+
+document.getElementById("brief-standup").addEventListener("click", openStandup);
 
 load();

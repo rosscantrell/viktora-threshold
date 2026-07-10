@@ -1182,6 +1182,23 @@ function confirmRotateCapture(currentAddr) {
 // mint. Calm states mirror the email-capture card: not-available explainer on
 // older engines, re-GET after every mutation, no optimistic state.
 
+// ── AI companion (WP-CHECKIN-STANDUP) ──────────────────────────────────────
+// Where the check-in brief's Standup button opens the AI surface. A client
+// preference (localStorage, like the debug-views toggle) — the brief runs in
+// this same window, so the store is shared. Empty ⇒ brief.js falls back to
+// claude.ai. Persists on change; no global-Save dependency.
+const COMPANION_URL_KEY = "threshold.companionUrl";
+(function initCompanionUrlField() {
+  const input = document.getElementById("config-companion-url");
+  if (!input) return;
+  input.value = localStorage.getItem(COMPANION_URL_KEY) || "";
+  input.addEventListener("change", () => {
+    const v = input.value.trim();
+    if (v) localStorage.setItem(COMPANION_URL_KEY, v);
+    else localStorage.removeItem(COMPANION_URL_KEY);
+  });
+})();
+
 /** "3d ago" / "just now" for a grant's lastUsedAt; "" when absent. */
 function grantLastUsed(iso) {
   if (!iso) return "never used";
