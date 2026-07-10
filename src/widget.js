@@ -185,6 +185,22 @@ expandBtn.addEventListener("click", async (e) => {
   }
 });
 
+// WP-CHECKIN-BRIEF — bottom-center chevron pulls down the check-in glance
+// (morning / mid-day / evening) instead of the full Today surface. Same
+// drag-vs-click guard as the other buttons.
+const briefBtn = document.getElementById("brief-btn");
+if (briefBtn) {
+  briefBtn.addEventListener("click", async (e) => {
+    if (dragInitiated) return;
+    e.stopPropagation();
+    try {
+      await invoke("widget_show_brief");
+    } catch (err) {
+      console.warn("[widget] show brief failed:", err);
+    }
+  });
+}
+
 // Right-click context menu (D-CUX-15, Phase 2D).
 // The Rust IPC builds + popups the native menu. menu_event dispatcher in
 // the Tauri builder handles the chosen item. Bind on the WHOLE widget,

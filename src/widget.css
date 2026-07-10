@@ -217,6 +217,46 @@ html, body {
 
 #expand-btn:active { transform: scale(0.9); }
 
+/* WP-CHECKIN-BRIEF — bottom-center "pull down" chevron for the check-in glance. */
+#brief-btn {
+  position: absolute;
+  bottom: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 18px;
+  border-radius: 7px;
+  background: transparent;
+  border: 0.5px solid transparent;
+  color: var(--w-text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.65;
+  transition: opacity 0.14s var(--w-ease),
+              background 0.14s var(--w-ease),
+              border-color 0.14s var(--w-ease),
+              color 0.14s var(--w-ease),
+              transform 0.12s var(--w-ease);
+  z-index: 2;
+}
+#brief-btn:hover {
+  opacity: 1;
+  background: var(--w-surface-hi-h);
+  border-color: var(--w-hairline);
+  color: var(--w-text);
+  transform: translateX(-50%) translateY(1px);
+}
+#brief-btn:active { transform: translateX(-50%) scale(0.92); }
+#brief-btn:focus { outline: none; }
+#brief-btn:focus-visible {
+  outline: none;
+  opacity: 1;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16);
+}
+
 #expand-btn:focus { outline: none; }
 #expand-btn:focus-visible {
   outline: none;
