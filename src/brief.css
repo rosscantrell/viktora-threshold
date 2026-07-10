@@ -32,7 +32,9 @@ body {
 }
 
 /* Header ------------------------------------------------------------------ */
-#brief-head { padding: 12px 13px 8px; border-bottom: 0.5px solid var(--line); }
+#brief-head { padding: 12px 13px 8px; border-bottom: 0.5px solid var(--line); cursor: move; }
+/* Interactive header controls keep their own cursor (the header itself is the drag handle). */
+#brief-head button { cursor: pointer; }
 .brief-head-row { display: flex; align-items: baseline; gap: 8px; }
 #brief-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
 #brief-date { color: var(--text-tertiary); font-size: 11.5px; }

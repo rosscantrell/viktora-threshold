@@ -524,4 +524,57 @@ async function refreshProxyBadge() {
 refreshProxyBadge();
 setInterval(refreshProxyBadge, LOG_BADGE_REFRESH_MS);
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-CHECKIN-BRIEF — gentle morning / mid-day / evening check-in pings.
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The widget is always resident, so a light per-minute clock check fires ONE
+// native notification at each check-in time (once per day), pulses the pill, and
+// nudges the user to pull down the brief. State is kept in localStorage so a
+// relaunch mid-day marks earlier check-ins seen instead of dumping a backlog of
+// pings. Trisha's "I get so many pings" → deliberately at most one per check-in.
+// (Notification-click → open-brief is best-effort on Tauri 2; the pill pulse +
+// the always-works chevron are the reliable path, mirroring the tidbit badge.)
+const CHECKINS = [
+  { key: "morning", hour: 9, title: "Morning check-in", body: "Here's your day — what you're on the hook for." },
+  { key: "midday", hour: 12, title: "Mid-day check-in", body: "What's slipping — half the day's gone." },
+  { key: "evening", hour: 17, title: "Evening check-in", body: "Close out and tee up tomorrow." },
+];
+
+function checkinSeenKey(d, key) {
+  return `checkin-pinged-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}-${key}`;
+}
+
+function pulseWidget() {
+  const el = document.getElementById("widget");
+  if (!el) return;
+  el.classList.remove("tidbit-pulse");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("tidbit-pulse");
+  setTimeout(() => el.classList.remove("tidbit-pulse"), 2200);
+}
+
+async function maybeFireCheckins() {
+  const now = new Date();
+  const due = CHECKINS.filter((c) => now.getHours() >= c.hour);
+  if (!due.length) return;
+  const current = due[due.length - 1]; // the latest check-in whose time has come
+  // Mark earlier due check-ins seen (no backlog ping) so only the current one fires.
+  for (const c of due) {
+    if (c !== current) localStorage.setItem(checkinSeenKey(now, c.key), "1");
+  }
+  const ck = checkinSeenKey(now, current.key);
+  if (localStorage.getItem(ck)) return; // current check-in already pinged today
+  localStorage.setItem(ck, "1");
+  try {
+    await maybeShowNotification({ title: current.title, body: current.body });
+    pulseWidget();
+  } catch (err) {
+    console.warn("[widget] check-in ping failed:", err);
+  }
+}
+
+maybeFireCheckins();
+setInterval(maybeFireCheckins, 60 * 1000);
+
 init();

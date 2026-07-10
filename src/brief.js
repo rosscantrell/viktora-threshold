@@ -27,25 +27,51 @@ const CORE_SECTIONS = [
   { key: "comingUp", label: "Coming up" },
 ];
 
-// Each time lens: tagline + which buckets open by default + an optional leading
-// callout (mid-day's "gone quiet" is the buildable-now proxy for "what am I
-// missing"). The buckets themselves never change — only emphasis (keep it simple).
+// Each time lens: tagline + which buckets open by default + optional leading
+// callout. The buckets never change — only emphasis (keep it simple).
+//
+// CHECK-IN CONTENT SPEC (Trisha discovery 2026-07-10) — what each alert should
+// include. [built] = wired from current data; [pending] = needs data/state noted.
+//   Morning — "here's your day / what am I on the hook for today":
+//     [built]   everything due today
+//     [built]   the handful on fire (overdue + at-risk), NOT all 93
+//     [pending] heads-up worth sending before it's late (readiness no-precursor/quiet)
+//     [pending] snoozed / "remind me today" — needs snooze-until-date surfaced
+//   Mid-day — "what's slipping, half the day's gone, 5pm is too late":
+//     [built]   due-today still open
+//     [built]   gone quiet (silentDays >= SILENT_DAYS)
+//     [built]   what's come in since you last looked — the localStorage snapshot delta
+//   Evening — "close out + tee up tomorrow, nothing surprises at 9am":
+//     [built]   still open from today
+//     [built]   due tomorrow / imminent
+// NOT in any check-in: "what got done" (Trisha: "not in a pop-up") — and there's
+// no completion timestamp in the data anyway.
 const LENSES = {
   morning: { label: "Morning", tagline: "Here's your day", open: ["dueToday", "overdue"] },
   midday: {
     label: "Mid-day",
     tagline: "What's slipping — half the day's gone",
     open: ["dueToday", "overdue"],
+    newFlag: true, // "what's come in since morning" — the state-layer delta
     callout: { key: "silent", label: "Gone quiet", tone: "fire" },
   },
-  evening: { label: "Evening", tagline: "Close out & tee up tomorrow", open: ["dueToday", "restOfWeek"] },
+  evening: { label: "Evening", tagline: "Close out & tee up tomorrow", open: ["dueToday", "restOfWeek"], newFlag: true },
 };
 
-function currentLens(now) {
+// Time-gating (Ross UAT 2026-07-10): a check-in tab doesn't appear until its time
+// has come today — so the morning never shows mid-day/evening lists it can't yet
+// know. Tabs ACCUMULATE through the day; the brief opens on the latest available.
+const LENS_ORDER = ["morning", "midday", "evening"];
+const LENS_AVAILABLE_FROM = { morning: 0, midday: 12, evening: 17 }; // hour of day
+
+function availableLenses(now) {
   const h = now.getHours();
-  if (h < 12) return "morning";
-  if (h < 17) return "midday";
-  return "evening";
+  return LENS_ORDER.filter((k) => h >= LENS_AVAILABLE_FROM[k]);
+}
+
+function currentLens(now) {
+  const avail = availableLenses(now);
+  return avail[avail.length - 1] || "morning";
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -62,7 +88,7 @@ function prettySlug(slug) {
   return slug.split(/[-_]/).map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
-function computeBuckets(records, now) {
+function computeBuckets(records, now, prevSet) {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
   const t0 = today.getTime();
@@ -73,6 +99,7 @@ function computeBuckets(records, now) {
   const horizonMs = t0 + 14 * dayMs;
 
   const b = { overdue: [], dueToday: [], restOfWeek: [], comingUp: [], silent: [] };
+  const seenIds = [];
   for (const it of Array.isArray(records) ? records : []) {
     const rec = (it && it.record) || {};
     if ((it.state || "open") !== "open") continue;
@@ -86,7 +113,11 @@ function computeBuckets(records, now) {
     const atRisk = readiness === "no-precursor" || !!(proj && proj.fire === true) || it.noDraft === true;
     const lc = it.lifecycle || {};
     const silentDays = typeof lc.silentDays === "number" ? lc.silentDays : null;
-    const e = { rec, d, t, atRisk, silentDays, owner: rec.owner || "", summary: (rec.summary || "").trim(), documentId: rec.documentId };
+    if (rec.recordId) seenIds.push(rec.recordId);
+    // "New since you last looked": present now, absent from the previous check-in's
+    // snapshot (Ross 2026-07-10 state layer). null prevSet ⇒ first look, nothing "new".
+    const isNew = prevSet ? !!rec.recordId && !prevSet.has(rec.recordId) : false;
+    const e = { rec, d, t, atRisk, silentDays, isNew, owner: rec.owner || "", summary: (rec.summary || "").trim(), documentId: rec.documentId };
 
     if (t < t0) b.overdue.push(e);
     else if (t < t0 + dayMs) b.dueToday.push(e);
@@ -100,6 +131,9 @@ function computeBuckets(records, now) {
   b.overdue.sort((x, y) => (y.atRisk - x.atRisk) || (x.t - y.t));
   ["dueToday", "restOfWeek", "comingUp", "silent"].forEach((k) => b[k].sort((x, y) => x.t - y.t));
   b.overdueAtRiskN = b.overdue.filter((e) => e.atRisk).length;
+  b.newSinceLast = [...b.overdue, ...b.dueToday, ...b.restOfWeek, ...b.comingUp]
+    .filter((e) => e.isNew).sort((x, y) => x.t - y.t);
+  b.seenIds = seenIds;
   return b;
 }
 
@@ -180,7 +214,7 @@ function buildDetail(box, e) {
   open.type = "button";
   open.className = "brief-detail-open";
   open.textContent = "Open in Today →";
-  open.addEventListener("click", (ev) => { ev.stopPropagation(); openFull(); });
+  open.addEventListener("click", (ev) => { ev.stopPropagation(); openFull(e); });
   box.appendChild(open);
 }
 
@@ -247,6 +281,12 @@ function renderLens(lensKey, buckets, now) {
   const host = document.getElementById("brief-sections");
   host.innerHTML = "";
 
+  // "New since you last looked" — the state-layer delta (mid-day / evening). Leads,
+  // since "what's come in since I last checked" is what she's looking for here.
+  if (lens.newFlag && buckets.newSinceLast && buckets.newSinceLast.length) {
+    renderSection(host, { key: "newSinceLast", label: "New since you last looked" }, buckets.newSinceLast, buckets, true, t0ms);
+  }
+
   // Leading callout (mid-day "gone quiet") — the "what am I missing" proxy, up top.
   if (lens.callout && buckets[lens.callout.key] && buckets[lens.callout.key].length) {
     renderSection(host, lens.callout, buckets[lens.callout.key], buckets, true, t0ms);
@@ -265,6 +305,23 @@ function renderLens(lensKey, buckets, now) {
 // ───────────────────────────────────────────────────────────────────────────
 let _buckets = null;
 
+// Per-check-in snapshot (localStorage): the item set seen at the last brief open,
+// so this open can surface "new since you last looked" (Ross 2026-07-10 state layer).
+// Only a RECENT snapshot (~last 20h) counts as "last look" — an older one means we
+// don't claim a delta (avoids "everything is new" after days away).
+const SNAP_KEY = "brief-snapshot-v1";
+function loadSnapshot() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SNAP_KEY) || "null");
+    if (!s || !Array.isArray(s.ids)) return null;
+    if (Date.now() - (s.ts || 0) > 20 * 3600 * 1000) return null;
+    return new Set(s.ids);
+  } catch { return null; }
+}
+function saveSnapshot(ids) {
+  try { localStorage.setItem(SNAP_KEY, JSON.stringify({ ts: Date.now(), ids: ids || [] })); } catch { /* ignore */ }
+}
+
 async function load() {
   const now = new Date();
   document.getElementById("brief-date").textContent =
@@ -277,8 +334,15 @@ async function load() {
     const dropped = new Set(Array.isArray(dismissed) ? dismissed : []);
     const records = (Array.isArray(dl && dl.records) ? dl.records : [])
       .filter((it) => !dropped.has(((it && it.record) || {}).recordId));
-    _buckets = computeBuckets(records, now);
+    const prevSet = loadSnapshot();
+    _buckets = computeBuckets(records, now, prevSet);
+    saveSnapshot(_buckets.seenIds); // stamp AFTER the diff, so next open compares to now
     document.getElementById("brief-status").hidden = true;
+    // Reveal only the check-in tabs whose time has come today.
+    const avail = new Set(availableLenses(now));
+    for (const tab of document.querySelectorAll(".brief-tab")) {
+      tab.hidden = !avail.has(tab.dataset.lens);
+    }
     renderLens(currentLens(now), _buckets, now);
   } catch (err) {
     console.warn("[brief] load failed:", err);
@@ -287,8 +351,13 @@ async function load() {
   }
 }
 
-async function openFull() {
-  try { await invoke("widget_expand", { targetTab: null }); } catch (e) { console.warn("[brief] open full:", e); }
+async function openFull(e) {
+  // Deep-link into Today: land on the Log/Today view (NOT the capture home), and
+  // when we have the record's source doc, open it in the right pane so the item
+  // shows with its source alongside (Ross UAT 2026-07-10). No doc ⇒ plain Today.
+  const docId = e && e.documentId;
+  const target = docId ? "log?doc=" + encodeURIComponent(docId) : "log";
+  try { await invoke("widget_expand", { targetTab: target }); } catch (err) { console.warn("[brief] open full:", err); }
 }
 
 document.getElementById("brief-tabs").addEventListener("click", (ev) => {
@@ -304,5 +373,28 @@ document.getElementById("brief-collapse").addEventListener("click", async () => 
 });
 
 document.getElementById("brief-open-full").addEventListener("click", openFull);
+
+// Drag-to-move (Ross UAT 2026-07-10): the brief is the same window as the pill,
+// so it reuses widget_start_drag. The HEADER is the handle — a mousedown there
+// that moves past a small threshold starts a native window drag; mousedowns on a
+// button (tabs / collapse) are ignored so those clicks still work. Mirrors the
+// widget's click-vs-drag heuristic (S-CUX-05).
+const DRAG_THRESHOLD_PX = 4;
+let _dragDownAt = null;
+const briefHead = document.getElementById("brief-head");
+if (briefHead) {
+  briefHead.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || e.target.closest("button")) return; // left only; not on tabs/collapse
+    _dragDownAt = { x: e.screenX, y: e.screenY };
+  });
+}
+document.addEventListener("mousemove", async (e) => {
+  if (!_dragDownAt) return;
+  if (Math.hypot(e.screenX - _dragDownAt.x, e.screenY - _dragDownAt.y) > DRAG_THRESHOLD_PX) {
+    _dragDownAt = null;
+    try { await invoke("widget_start_drag"); } catch (err) { console.warn("[brief] drag failed:", err); }
+  }
+});
+document.addEventListener("mouseup", () => { _dragDownAt = null; });
 
 load();
