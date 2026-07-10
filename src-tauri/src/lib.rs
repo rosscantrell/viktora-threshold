@@ -6957,6 +6957,46 @@ fn widget_expand(
     Ok(())
 }
 
+/// Grow the pill into the compact CHECK-IN BRIEF panel (WP-CHECKIN-BRIEF, Ross
+/// UAT 2026-07-10) — the intermediate tier between the pill and the full Today.
+/// Deliberately simpler than widget_expand: this is a floating GLANCE, not the
+/// workspace app, so NONE of the persona flip / fullscreen / min-size / taskbar
+/// dance applies. The window keeps its floating-panel chrome (already set on the
+/// pill); we only save the pill position (so widget_collapse returns there),
+/// resize to the panel, and navigate to brief.html. Back-to-pill reuses
+/// widget_collapse (the brief is never fullscreen).
+#[tauri::command]
+fn widget_show_brief(
+    state: tauri::State<AppState>,
+    webview_window: tauri::WebviewWindow,
+) -> Result<(), String> {
+    let window = &webview_window;
+    // Save pill position before growing, so collapse can return the pill there
+    // (mirror of widget_expand step 1).
+    if let Ok(pos) = window.outer_position() {
+        let mut cfg_guard = state.config.lock().expect("config mutex poisoned");
+        let mut cfg = cfg_guard.clone().unwrap_or_default();
+        cfg.widget_x = Some(pos.x);
+        cfg.widget_y = Some(pos.y);
+        let _ = save_config_to_disk(&cfg);
+        *cfg_guard = Some(cfg);
+    }
+    // Grow down/right from the pill's top-left anchor into the panel. Chrome is
+    // left untouched (floating: no decorations, always-on-top, skip-taskbar).
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 360.0,
+            height: 460.0,
+        }))
+        .map_err(|e| format!("set_size failed: {e}"))?;
+    window
+        .eval("window.location.replace('brief.html');")
+        .map_err(|e| format!("eval(navigate) failed: {e}"))?;
+    let _ = window.set_focus();
+    log::info!("widget → check-in brief");
+    Ok(())
+}
+
 /// Read the window's real AppKit styleMask from a worker thread (main-thread
 /// dispatch + channel). None on dispatch/timeout failure — callers treat that
 /// as "assume unsafe".
@@ -7779,6 +7819,7 @@ pub fn run() {
             show_widget_menu,
             widget_expand,
             widget_collapse,
+            widget_show_brief,
             // WP-Threshold-Tidbit-Return Phase B
             get_pending_tidbit,
             clear_pending_tidbit,

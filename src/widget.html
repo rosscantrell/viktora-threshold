@@ -156,6 +156,26 @@
           <line x1="3" y1="21" x2="10" y2="14"></line>
         </svg>
       </button>
+
+      <!--
+        WP-CHECKIN-BRIEF (Ross UAT 2026-07-10) — the intermediate "check-in"
+        glance. Bottom-center chevron: click pulls DOWN a small brief panel
+        (morning / mid-day / evening curated lists) via widget_show_brief,
+        instead of dumping the user into the full Today surface. The full app
+        is still one tap away from inside the brief.
+      -->
+      <button
+        id="brief-btn"
+        type="button"
+        title="Check-in — what needs a look right now"
+        aria-label="Open the check-in brief"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+             stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      </button>
     </div>
   </body>
 </html>

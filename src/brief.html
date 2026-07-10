@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="brief.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Threshold — check-in</title>
+    <script type="module" src="/brief.js" defer></script>
+  </head>
+  <body>
+    <!--
+      Threshold check-in brief (WP-CHECKIN-BRIEF, Ross UAT 2026-07-10).
+      The intermediate tier Trisha asked for: a small drop-down from the widget
+      that answers "what do I need to look at right now" for the current
+      check-in (morning / mid-day / evening) — WITHOUT opening the heavy Today
+      surface. Curated + collapsible one-liners; click a row to drill to source;
+      the long tail stays behind "open full Today".
+    -->
+    <div id="brief">
+      <header id="brief-head">
+        <div class="brief-head-row">
+          <span id="brief-title">Today</span>
+          <span id="brief-date"></span>
+          <button id="brief-collapse" type="button" title="Back to the widget" aria-label="Back to the widget">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="4 14 10 14 10 20"></polyline>
+              <polyline points="20 10 14 10 14 4"></polyline>
+              <line x1="14" y1="10" x2="21" y2="3"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </button>
+        </div>
+        <!-- Time-of-day lenses. brief.js marks the current one active on open. -->
+        <div id="brief-tabs" role="tablist">
+          <button class="brief-tab" data-lens="morning" role="tab" type="button">Morning</button>
+          <button class="brief-tab" data-lens="midday" role="tab" type="button">Mid-day</button>
+          <button class="brief-tab" data-lens="evening" role="tab" type="button">Evening</button>
+        </div>
+        <p id="brief-tagline"></p>
+      </header>
+
+      <main id="brief-body">
+        <div id="brief-status" class="brief-status">Composing your check-in…</div>
+        <div id="brief-sections"></div>
+      </main>
+
+      <footer id="brief-foot">
+        <button id="brief-open-full" type="button" class="brief-link">Open full Today →</button>
+      </footer>
+    </div>
+  </body>
+</html>

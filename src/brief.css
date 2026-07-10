@@ -1,0 +1,121 @@
+/* Threshold check-in brief (WP-CHECKIN-BRIEF, Ross UAT 2026-07-10).
+   Self-contained compact panel — mirrors the glass token values from styles.css
+   (kept local so the tiny panel doesn't pull the full stylesheet). Amber is the
+   ONE accent (canon 8), spent only on the "on fire" band. */
+:root {
+  --bg: #14151a;
+  --panel: rgba(255, 255, 255, 0.02);
+  --line: rgba(255, 255, 255, 0.08);
+  --text-primary: #f5f5f7;
+  --text-secondary: #9a9aa6;
+  --text-tertiary: #76767f;
+  --warn: #f5b544;
+  --warn-soft: rgba(245, 181, 68, 0.14);
+  --warn-text: #f3c674;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--text-secondary);
+  -webkit-font-smoothing: antialiased;
+}
+
+#brief {
+  display: flex; flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  border: 0.5px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Header ------------------------------------------------------------------ */
+#brief-head { padding: 12px 13px 8px; border-bottom: 0.5px solid var(--line); }
+.brief-head-row { display: flex; align-items: baseline; gap: 8px; }
+#brief-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+#brief-date { color: var(--text-tertiary); font-size: 11.5px; }
+#brief-collapse {
+  margin-left: auto; background: none; border: 0; color: var(--text-tertiary);
+  cursor: pointer; padding: 3px; border-radius: 6px; display: inline-flex;
+}
+#brief-collapse:hover { color: var(--text-primary); background: rgba(255,255,255,0.05); }
+
+#brief-tabs { display: flex; gap: 4px; margin-top: 10px; }
+.brief-tab {
+  flex: 1; padding: 5px 6px; font-size: 11.5px; font: inherit; font-size: 11.5px;
+  color: var(--text-secondary); background: var(--panel);
+  border: 0.5px solid var(--line); border-radius: 7px; cursor: pointer;
+}
+.brief-tab:hover { color: var(--text-primary); }
+.brief-tab[aria-selected="true"] {
+  color: var(--text-primary); background: rgba(255,255,255,0.06);
+  border-color: rgba(255,255,255,0.16);
+}
+#brief-tagline { margin: 8px 1px 0; font-size: 11px; color: var(--text-tertiary); }
+
+/* Body -------------------------------------------------------------------- */
+#brief-body { flex: 1; overflow-y: auto; padding: 8px 10px; }
+.brief-status { color: var(--text-tertiary); font-size: 12px; padding: 10px 4px; }
+
+.brief-section { margin-bottom: 8px; }
+.brief-section-head {
+  display: flex; align-items: baseline; gap: 7px; width: 100%;
+  padding: 4px 4px; background: none; border: 0; cursor: pointer;
+  font: inherit; text-align: left; color: var(--text-secondary);
+  border-radius: 6px;
+}
+.brief-section-head:hover { background: rgba(255,255,255,0.03); }
+.brief-caret { color: var(--text-tertiary); font-size: 9px; width: 9px; flex: 0 0 auto; }
+.brief-section-label { color: var(--text-primary); font-size: 12px; font-weight: 500; }
+.brief-section-count { color: var(--text-secondary); font-size: 11px; margin-left: auto; }
+.brief-section.tone-fire .brief-section-label,
+.brief-section.tone-fire .brief-section-count { color: var(--warn-text); }
+.brief-items { padding: 1px 3px 2px; }
+.brief-more {
+  background: none; border: 0; color: var(--text-tertiary); font: inherit;
+  font-size: 11px; cursor: pointer; padding: 3px 5px 1px;
+}
+.brief-more:hover { color: var(--text-primary); }
+
+.brief-item {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11.5px; color: var(--text-secondary); line-height: 1.5;
+  padding: 3px 5px; border-radius: 6px;
+}
+.brief-item:hover { background: rgba(255,255,255,0.03); }
+.brief-item-text {
+  flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer;
+}
+.brief-item-text:hover { color: var(--text-primary); }
+.brief-item-due { flex: 0 0 auto; color: var(--text-tertiary); font-size: 11px; }
+.brief-section.tone-fire .brief-item-due { color: var(--warn-text); }
+
+/* Light inline expand — a little detail in place, not the whole record. */
+.brief-row.open > .brief-item { background: rgba(255,255,255,0.05); }
+.brief-detail {
+  margin: 1px 0 6px 8px; padding: 5px 9px 6px 10px;
+  border-left: 2px solid var(--line);
+}
+.brief-detail-summary { margin: 0 0 5px; font-size: 11.5px; color: var(--text-primary); line-height: 1.5; }
+.brief-detail-quote { margin: 0 0 5px; font-size: 11px; color: var(--text-secondary); font-style: italic; line-height: 1.45; }
+.brief-detail-meta { margin: 0 0 6px; font-size: 11px; color: var(--text-tertiary); }
+.brief-detail-open {
+  background: none; border: 0; color: var(--text-secondary); font: inherit;
+  font-size: 11px; cursor: pointer; padding: 0;
+}
+.brief-detail-open:hover { color: var(--text-primary); }
+
+.brief-empty { color: var(--text-tertiary); font-size: 11.5px; padding: 3px 5px; font-style: italic; }
+.brief-tail { color: var(--text-tertiary); font-size: 11px; padding: 4px 5px 0; }
+
+/* Footer ------------------------------------------------------------------ */
+#brief-foot { padding: 8px 12px; border-top: 0.5px solid var(--line); }
+.brief-link {
+  background: none; border: 0; color: var(--text-secondary); font: inherit;
+  font-size: 11.5px; cursor: pointer; padding: 0;
+}
+.brief-link:hover { color: var(--text-primary); }
