@@ -60,6 +60,13 @@ mod onedrive_mail_sweep;
 // here). Pure classifiers are `pub` + unit-tested cross-platform.
 mod integration_doctor;
 
+// WP-INTAKE (ONBOARD) — Power Automate flow-package generator. Data-driven
+// emission of the two OneDrive-mail flows (Inbox + Sent) as flow-definition
+// JSONs + a paste-ready recipe (the tested fallback for the one-click legacy
+// zip — see the module header for the zip-vs-fallback rationale). The frozen
+// File-Content expression matches onedrive_mail_sweep schema v1 byte-exact.
+mod flow_package;
+
 // WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
 // Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
 // PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
@@ -6245,6 +6252,26 @@ async fn ics_source_clear(
         .map_err(|e| format!("ics_source_clear: parse response failed: {e}"))
 }
 
+/// `generate_flow_package` — write the two OneDrive-mail Power Automate flows
+/// (Inbox + Sent) as flow-definition JSONs + a paste-ready recipe into
+/// `<dest_dir>/Threshold-PowerAutomate/`. Ships the tested definition+recipe
+/// FALLBACK (not a one-click legacy `.zip` — see `flow_package` module header).
+/// Idempotent: re-running overwrites in place. Returns the written paths so the
+/// UI can reveal / one-click-copy them.
+#[tauri::command]
+async fn generate_flow_package(dest_dir: String) -> Result<flow_package::GeneratedPackage, String> {
+    let dir = dest_dir.trim();
+    if dir.is_empty() {
+        return Err("No destination folder given.".to_string());
+    }
+    let dest = std::path::PathBuf::from(dir);
+    if !dest.is_dir() {
+        return Err(format!("That folder doesn't exist: {}", dest.display()));
+    }
+    flow_package::generate_flow_package(&dest)
+        .map_err(|e| format!("Couldn't write the flow package: {e}"))
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // WP-AUTO-IMPORT — designated-source background auto-import
 // ───────────────────────────────────────────────────────────────────────────
@@ -9438,6 +9465,8 @@ pub fn run() {
             ics_source_set,
             ics_source_status,
             ics_source_clear,
+            // WP-INTAKE (ONBOARD) commit 2 — Power Automate flow-package generator.
+            generate_flow_package,
             // WP-INTAKE E5-app — email thread-following sweep, driven by the
             // shared app-side channel tick (widget.js email callee).
             email_follow_sweep,
