@@ -54,6 +54,12 @@ mod email_follow;
 // Orchestration lives in `onedrive_mail_sweep` (the command) below.
 mod onedrive_mail_sweep;
 
+// WP-INTAKE (ONBOARD) — the integration doctor: silent per-channel probes,
+// OneDrive-root discovery + sweep-folder prep, and ICS availability-source
+// validate-and-set. Structured plumbing the onboarding cards render (no UI
+// here). Pure classifiers are `pub` + unit-tested cross-platform.
+mod integration_doctor;
+
 // WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
 // Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
 // PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
@@ -5778,6 +5784,468 @@ async fn push_availability(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE (ONBOARD) — the integration doctor commands
+// ───────────────────────────────────────────────────────────────────────────
+//
+// Structured plumbing the onboarding cards + Settings repair surface render.
+// No UI here (Ross's one-pair-of-eyes rule). Every command returns a typed,
+// never-throwing status. The silent doctor MUST NOT trigger the macOS Calendar
+// TCC prompt — the live classification is the separate `probe_calendar_live`,
+// called deliberately at the framed onboarding moment.
+
+/// One authenticated GET against the engine. Returns `(status, body-or-null)` on
+/// a completed request; `Err(note)` only on a transport failure (unreachable /
+/// timeout). Body parse errors fold into a `Null` body (still "reachable").
+async fn engine_get_json(
+    client: &reqwest::Client,
+    url: &str,
+    bearer: &str,
+) -> Result<(reqwest::StatusCode, serde_json::Value), String> {
+    let resp = client
+        .get(url)
+        .header("Authorization", format!("Bearer {}", bearer))
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "engine timed out".to_string()
+            } else if e.is_connect() {
+                "engine unreachable".to_string()
+            } else {
+                format!("engine error: {e}")
+            }
+        })?;
+    let status = resp.status();
+    let body = resp.json::<serde_json::Value>().await.unwrap_or(serde_json::Value::Null);
+    Ok((status, body))
+}
+
+/// Interpret a bearer-lane GET body as "is this lane enabled server-side?".
+/// A flag-off route returns `{ enabled: false }`; an enabled route returns a
+/// status/data body (no `enabled:false`). So: enabled ⇔ body isn't `{enabled:false}`.
+fn lane_enabled_from_body(body: &serde_json::Value) -> bool {
+    body.get("enabled") != Some(&serde_json::Value::Bool(false))
+}
+
+/// Cheap engine reachability + lane posture. Two concurrent bearer-lane GETs
+/// (availability/source is the authority for reach/auth; followed-threads adds
+/// the email-follow flag). Short timeout so the doctor stays snappy; a timeout
+/// is reported as `unreachable`, never thrown.
+async fn probe_engine(cfg: &AppConfig) -> integration_doctor::EngineProbe {
+    use integration_doctor::EngineProbe;
+    if cfg.bearer_token.trim().is_empty() {
+        return EngineProbe::not_configured();
+    }
+    let base = cfg.base_url.trim_end_matches('/').to_string();
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_millis(2500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return EngineProbe {
+                state: "unreachable",
+                availability_lane_enabled: None,
+                email_thread_follow_enabled: None,
+                base_url: Some(base),
+                note: Some(format!("HTTP client init failed: {e}")),
+            }
+        }
+    };
+    let avail_url = format!("{base}/api/availability/source");
+    let follow_url = format!("{base}/api/email/followed-threads");
+    let bearer = cfg.bearer_token.clone();
+    let (avail, follow) = tokio::join!(
+        engine_get_json(&client, &avail_url, &bearer),
+        engine_get_json(&client, &follow_url, &bearer),
+    );
+
+    match avail {
+        Err(note) => EngineProbe {
+            state: "unreachable",
+            availability_lane_enabled: None,
+            email_thread_follow_enabled: None,
+            base_url: Some(base),
+            note: Some(note),
+        },
+        Ok((status, body)) => {
+            if status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::FORBIDDEN
+            {
+                return EngineProbe {
+                    state: "unauthorized",
+                    availability_lane_enabled: None,
+                    email_thread_follow_enabled: None,
+                    base_url: Some(base),
+                    note: Some("Workspace rejected the bearer token — sign in again.".into()),
+                };
+            }
+            if !status.is_success() {
+                return EngineProbe {
+                    state: "unreachable",
+                    availability_lane_enabled: None,
+                    email_thread_follow_enabled: None,
+                    base_url: Some(base),
+                    note: Some(format!("engine HTTP {}", status.as_u16())),
+                };
+            }
+            let email_flag = match follow {
+                Ok((s, b)) if s.is_success() => Some(lane_enabled_from_body(&b)),
+                _ => None,
+            };
+            EngineProbe {
+                state: "reachable",
+                availability_lane_enabled: Some(lane_enabled_from_body(&body)),
+                email_thread_follow_enabled: email_flag,
+                base_url: Some(base),
+                note: None,
+            }
+        }
+    }
+}
+
+/// `integration_doctor` — the full status sweep. Local probes (platform, COM,
+/// calendar-presence, OneDrive roots, sweep-folder + plaud config) run on a
+/// blocking thread (the Windows PowerShell spawns block); the engine ping runs
+/// concurrently. Silent + never-throwing; does NOT prompt for calendar access.
+#[tauri::command]
+async fn integration_doctor(
+    state: tauri::State<'_, AppState>,
+) -> Result<integration_doctor::DoctorReport, String> {
+    // Snapshot the bits of config the local probes need (clone out of the mutex
+    // before crossing the await/blocking boundary).
+    let cfg = current_config(&state).ok();
+    let onedrive_mail_cfg = cfg
+        .as_ref()
+        .map(|c| c.onedrive_mail.clone())
+        .unwrap_or_default();
+    let plaud_connected_at = cfg
+        .as_ref()
+        .and_then(|c| c.plaud_connect.as_ref())
+        .map(|s| s.connected_at.clone());
+
+    // Local probes on a blocking thread.
+    let local = tauri::async_runtime::spawn_blocking(move || {
+        integration_doctor::run_local_probes(&onedrive_mail_cfg, plaud_connected_at)
+    });
+
+    // Engine probe concurrently (or the calm not-configured state).
+    let engine_fut = async {
+        match &cfg {
+            Some(c) => probe_engine(c).await,
+            None => integration_doctor::EngineProbe::not_configured(),
+        }
+    };
+
+    let (local, engine) = tokio::join!(local, engine_fut);
+    let local = local.map_err(|e| format!("doctor probe join error: {e}"))?;
+
+    Ok(integration_doctor::DoctorReport {
+        platform: local.platform,
+        outlook_classic_com: local.outlook_classic_com,
+        calendar_local: local.calendar_local,
+        one_note_com: local.one_note_com,
+        one_drive_root: local.one_drive_root,
+        onedrive_mail: local.onedrive_mail,
+        plaud: local.plaud,
+        engine,
+        links: integration_doctor::DeepLinks::canonical(),
+    })
+}
+
+/// `probe_calendar_live` — the DELIBERATE calendar check. Runs
+/// `calendar_read::read_window(1)` (which DOES trigger the macOS TCC prompt on
+/// first run) and classifies the typed result. Onboarding calls this at the
+/// framed moment ("we'll ask for calendar access now"), NOT the silent doctor.
+#[tauri::command]
+async fn probe_calendar_live() -> Result<integration_doctor::CalendarLiveProbe, String> {
+    let result = tauri::async_runtime::spawn_blocking(move || calendar_read::read_window(1))
+        .await
+        .map_err(|e| format!("calendar probe join error: {e}"))?;
+    Ok(integration_doctor::classify_calendar_live(result))
+}
+
+/// `integration_doctor_links` — the canonical deep-link URLs the guided steps
+/// open (Power Automate import, OWA shared-calendars). One source of truth so
+/// link rot is a one-line fix.
+#[tauri::command]
+fn integration_doctor_links() -> integration_doctor::DeepLinks {
+    integration_doctor::DeepLinks::canonical()
+}
+
+/// `onedrive_prepare_mail_folder` — auto-setup: create
+/// `<root>/Apps/Threshold/mail` (+ `processed/` + `failed/`), point the sweep
+/// config at it, persist, and return the resulting channel state. Idempotent —
+/// re-running on an existing folder is a calm no-op that just re-confirms state.
+#[tauri::command]
+async fn onedrive_prepare_mail_folder(
+    state: tauri::State<'_, AppState>,
+    root: String,
+) -> Result<integration_doctor::OneDriveMailProbe, String> {
+    let root_trim = root.trim();
+    if root_trim.is_empty() {
+        return Err("No OneDrive root given.".to_string());
+    }
+    let root_path = std::path::PathBuf::from(root_trim);
+    if !root_path.is_dir() {
+        return Err(format!(
+            "That OneDrive root doesn't exist yet: {}",
+            root_path.display()
+        ));
+    }
+    let mail_dir = integration_doctor::sweep_folder_under(&root_path);
+    // Create the mail folder + the two receipt subfolders (create_dir_all is
+    // idempotent — existing dirs are fine).
+    fs::create_dir_all(&mail_dir)
+        .map_err(|e| format!("Couldn't create the mail folder: {e}"))?;
+    fs::create_dir_all(mail_dir.join(onedrive_mail_sweep::PROCESSED_DIR))
+        .map_err(|e| format!("Couldn't create the processed folder: {e}"))?;
+    fs::create_dir_all(mail_dir.join(onedrive_mail_sweep::FAILED_DIR))
+        .map_err(|e| format!("Couldn't create the failed folder: {e}"))?;
+
+    let folder_str = mail_dir.to_string_lossy().into_owned();
+
+    // Point the sweep config at it + persist. Mutate the cached config in place
+    // so we never clobber concurrent unrelated edits.
+    {
+        let mut guard = state.config.lock().expect("config mutex poisoned");
+        let cfg = guard.get_or_insert_with(AppConfig::default);
+        cfg.onedrive_mail.folder = Some(folder_str.clone());
+        save_config_to_disk(cfg)?;
+    }
+    log::info!("ONBOARD: prepared OneDrive mail folder at {folder_str}");
+
+    // Re-read the state from the freshly-set config so the return reflects disk.
+    let cfg_snapshot = current_config(&state)?;
+    Ok(integration_doctor::probe_onedrive_mail_public(
+        &cfg_snapshot.onedrive_mail,
+    ))
+}
+
+/// Structured outcome of `ics_source_set`. `ok` ⇒ validated locally AND stored
+/// by the engine. `stage` names where it stopped (validation | fetch | engine |
+/// ok) so the UI renders the right red/green. NEVER carries the ICS URL — the
+/// engine's disclosure-safe status (fingerprint / updatedAt) is echoed in
+/// `engine_status` instead.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IcsSetResult {
+    pub ok: bool,
+    pub stage: String,
+    /// Mirrors the engine's `configured` when the POST completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configured: Option<bool>,
+    /// Disclosure-safe engine status body (no URL). Present on an engine round-trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_status: Option<serde_json::Value>,
+    /// Terse, plain-language note for the immediate green/red.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// `ics_source_set` — validate a pasted ICS URL locally (https + reachable +
+/// looks-like-VCALENDAR, capped fetch, NO full parse), then POST it to
+/// `/api/availability/source` via the Rust bearer plumbing. The URL is used
+/// exactly once (the fetch) and forwarded to the engine which owns storage — it
+/// is never logged or persisted app-side.
+#[tauri::command]
+async fn ics_source_set(
+    state: tauri::State<'_, AppState>,
+    ics_url: String,
+) -> Result<IcsSetResult, String> {
+    use integration_doctor::{
+        ics_body_looks_valid, validate_ics_url_shape, ICS_FETCH_BYTE_CAP, ICS_FETCH_TIMEOUT_SECS,
+    };
+    // 1. Local shape validation (no fetch).
+    let url = match validate_ics_url_shape(&ics_url) {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(IcsSetResult {
+                ok: false,
+                stage: e.stage().to_string(),
+                configured: None,
+                engine_status: None,
+                note: Some(e.user_message().to_string()),
+            })
+        }
+    };
+
+    // 2. Fetch once, capped, sniff for BEGIN:VCALENDAR. Plain external GET (no
+    //    bearer — this isn't the engine).
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(ICS_FETCH_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let mut resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => {
+            return Ok(IcsSetResult {
+                ok: false,
+                stage: "fetch".into(),
+                configured: None,
+                engine_status: None,
+                note: Some(
+                    integration_doctor::IcsValidationError::NotCalendar
+                        .user_message()
+                        .to_string(),
+                ),
+            })
+        }
+    };
+    if !resp.status().is_success() {
+        return Ok(IcsSetResult {
+            ok: false,
+            stage: "fetch".into(),
+            configured: None,
+            engine_status: None,
+            note: Some(
+                integration_doctor::IcsValidationError::NotCalendar
+                    .user_message()
+                    .to_string(),
+            ),
+        });
+    }
+    // Read up to the byte cap, then stop (don't slurp a hostile huge body).
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                buf.extend_from_slice(&chunk);
+                if buf.len() > ICS_FETCH_BYTE_CAP {
+                    return Ok(IcsSetResult {
+                        ok: false,
+                        stage: "fetch".into(),
+                        configured: None,
+                        engine_status: None,
+                        note: Some(
+                            integration_doctor::IcsValidationError::TooLarge
+                                .user_message()
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    let body_text = String::from_utf8_lossy(&buf);
+    if !ics_body_looks_valid(&body_text) {
+        return Ok(IcsSetResult {
+            ok: false,
+            stage: "fetch".into(),
+            configured: None,
+            engine_status: None,
+            note: Some(
+                integration_doctor::IcsValidationError::NotCalendar
+                    .user_message()
+                    .to_string(),
+            ),
+        });
+    }
+
+    // 3. POST to the engine (bearer + base URL from config; the URL leaves Rust
+    //    only here, straight to the engine that stores it).
+    let cfg = current_config(&state)?;
+    let engine_url = format!("{}/api/availability/source", cfg.base_url.trim_end_matches('/'));
+    let engine_client = build_auth_http_client(Duration::from_secs(20))?;
+    let resp = engine_client
+        .post(&engine_url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "icsUrl": url }))
+        .send()
+        .await
+        .map_err(friendly_auth_net_err)?;
+    let status = resp.status();
+    let engine_body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        return Ok(IcsSetResult {
+            ok: false,
+            stage: "engine".into(),
+            configured: None,
+            engine_status: Some(engine_body.clone()),
+            note: Some(format!("Workspace rejected the link (HTTP {}).", status.as_u16())),
+        });
+    }
+    // Lane disabled server-side ⇒ calm, not-ok.
+    if engine_body.get("enabled") == Some(&serde_json::Value::Bool(false)) {
+        return Ok(IcsSetResult {
+            ok: false,
+            stage: "engine".into(),
+            configured: Some(false),
+            engine_status: Some(engine_body),
+            note: Some("Availability isn't enabled on your workspace yet.".into()),
+        });
+    }
+    let configured = engine_body
+        .get("configured")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    Ok(IcsSetResult {
+        ok: true,
+        stage: "ok".into(),
+        configured: Some(configured),
+        engine_status: Some(engine_body),
+        note: Some("Calendar availability connected.".into()),
+    })
+}
+
+/// `ics_source_status` — GET the engine's disclosure-safe ICS-source status (no
+/// URL; fingerprint + updatedAt + poll health). Returns the engine JSON verbatim
+/// (or `{enabled:false}` when the lane is off).
+#[tauri::command]
+async fn ics_source_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/availability/source", cfg.base_url.trim_end_matches('/'));
+    let client = build_auth_http_client(Duration::from_secs(15))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(friendly_auth_net_err)?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("ics_source_status: parse response failed: {e}"))
+}
+
+/// `ics_source_clear` — POST `{ icsUrl: null }` to clear the viewer's ICS source
+/// (the "Reset links" repair path). Returns the engine JSON.
+#[tauri::command]
+async fn ics_source_clear(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/availability/source", cfg.base_url.trim_end_matches('/'));
+    let client = build_auth_http_client(Duration::from_secs(15))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "icsUrl": serde_json::Value::Null }))
+        .send()
+        .await
+        .map_err(friendly_auth_net_err)?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("ics_source_clear: parse response failed: {e}"))
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // WP-AUTO-IMPORT — designated-source background auto-import
 // ───────────────────────────────────────────────────────────────────────────
 //
@@ -8960,6 +9428,16 @@ pub fn run() {
             // WP-CALENDAR — local calendar read + availability push
             calendar_read_window,
             push_availability,
+            // WP-INTAKE (ONBOARD) — the integration doctor: silent probes,
+            // deliberate calendar-live probe, OneDrive sweep-folder prep,
+            // ICS availability-source validate/set/status/clear, deep links.
+            integration_doctor,
+            probe_calendar_live,
+            integration_doctor_links,
+            onedrive_prepare_mail_folder,
+            ics_source_set,
+            ics_source_status,
+            ics_source_clear,
             // WP-INTAKE E5-app — email thread-following sweep, driven by the
             // shared app-side channel tick (widget.js email callee).
             email_follow_sweep,
@@ -9107,6 +9585,60 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// WP-INTAKE (ONBOARD) live smoke — runs the REAL `integration_doctor`
+    /// internals on this machine (silent local probes + a real engine probe
+    /// against the on-disk config) and prints the JSON the UI will render.
+    /// `#[ignore]` so it never runs in `cargo test --lib` / CI (it touches the
+    /// network + real config); invoke deliberately:
+    ///   `cargo test --lib live_smoke_integration_doctor -- --ignored --nocapture`
+    /// It NEVER calls the calendar live probe, so it does NOT trigger the macOS
+    /// TCC prompt — exactly the silent-doctor guarantee under test.
+    #[test]
+    #[ignore]
+    fn live_smoke_integration_doctor() {
+        // Read the real on-disk config (if any) so the engine probe is honest.
+        let cfg = config_path()
+            .filter(|p| p.exists())
+            .and_then(|p| fs::read_to_string(p).ok())
+            .and_then(|raw| serde_json::from_str::<AppConfig>(&raw).ok());
+
+        let onedrive_mail_cfg = cfg
+            .as_ref()
+            .map(|c| c.onedrive_mail.clone())
+            .unwrap_or_default();
+        let plaud_connected_at = cfg
+            .as_ref()
+            .and_then(|c| c.plaud_connect.as_ref())
+            .map(|s| s.connected_at.clone());
+
+        let local =
+            integration_doctor::run_local_probes(&onedrive_mail_cfg, plaud_connected_at);
+
+        let rt = tokio::runtime::Runtime::new().expect("tokio rt");
+        let engine = rt.block_on(async {
+            match &cfg {
+                Some(c) => probe_engine(c).await,
+                None => integration_doctor::EngineProbe::not_configured(),
+            }
+        });
+
+        let report = integration_doctor::DoctorReport {
+            platform: local.platform,
+            outlook_classic_com: local.outlook_classic_com,
+            calendar_local: local.calendar_local,
+            one_note_com: local.one_note_com,
+            one_drive_root: local.one_drive_root,
+            onedrive_mail: local.onedrive_mail,
+            plaud: local.plaud,
+            engine,
+            links: integration_doctor::DeepLinks::canonical(),
+        };
+        println!(
+            "INTEGRATION_DOCTOR_JSON={}",
+            serde_json::to_string_pretty(&report).unwrap()
+        );
+    }
 
     // ───── documentId generation (D-OCR-06 / D-ADDIN-05 convention) ─────
 
