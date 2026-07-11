@@ -317,6 +317,22 @@
             <section class="settings-panel" data-panel="integrations">
               <h2 class="settings-panel-title">Integrations</h2>
 
+              <!-- Connections doctor — WP-ONBOARD. One card per channel, driven
+                   by the integration_doctor IPC probes. Rendered lazily by
+                   renderIntegrationDoctor() in main.js on panel open. -->
+              <div class="doctor-head">
+                <h3 class="settings-subhead">Connections</h3>
+                <button type="button" id="btn-doctor-refresh" class="btn-inline-link">Re-check</button>
+              </div>
+              <p class="field-help doctor-lede">
+                Threshold checks what works on this computer and in your
+                organization. Green means flowing; anything needing you shows one
+                step.
+              </p>
+              <div id="integration-doctor-body" class="doctor-cards">
+                <p class="field-help">Checking what works on this computer…</p>
+              </div>
+
               <!-- OneNote -->
               <h3 class="settings-subhead">OneNote</h3>
               <label class="field">

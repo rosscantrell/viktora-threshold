@@ -1403,6 +1403,153 @@ code {
   color: var(--warn-text);
 }
 
+/* ───────── Connections doctor (WP-ONBOARD) ───────── */
+
+.doctor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 7px;
+  margin: 4px 0 12px;
+}
+
+.doctor-head .settings-subhead {
+  border-bottom: none;
+  margin: 0;
+  padding-bottom: 0;
+}
+
+.doctor-lede {
+  margin: 2px 0 10px;
+}
+
+.doctor-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.doctor-card {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.doctor-card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.doctor-card[data-state="blocked"] .doctor-card-name,
+.doctor-card[data-state="blocked"] .doctor-card-detail {
+  color: var(--text-tertiary);
+}
+
+.doctor-card-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.doctor-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.doctor-card-detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 2px 0 0;
+}
+
+.doctor-pill {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.doctor-pill[data-state="ready"] {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.doctor-pill[data-state="action"] {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.doctor-pill[data-state="blocked"] {
+  background: var(--surface-2);
+  color: var(--text-tertiary);
+}
+
+.doctor-pill[data-state="checking"] {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.doctor-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.doctor-expand {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 10px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.doctor-expand-row {
+  display: flex;
+  gap: 8px;
+}
+
+.doctor-expand-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.doctor-note {
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  margin: 0;
+}
+
+.doctor-note[data-kind="ok"] {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.doctor-note[data-kind="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+
+.doctor-note[data-kind="err"] {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 /* ───────── Auto-import source list ───────── */
 
 .auto-import-list {
