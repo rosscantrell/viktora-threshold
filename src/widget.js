@@ -824,6 +824,62 @@ async function emailFollowSweep() {
 
 registerChannelCallee("email", emailFollowSweep);
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE — OneDrive folder-sweep mail import (registered as "email-files").
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The New-Outlook-safe SIBLING of the "email" (Outlook COM) callee. The whole
+// sweep lives in Rust (`onedrive_mail_sweep`): a Power Automate flow in the
+// user's tenant writes each arriving/sent email as a JSON file into a OneDrive
+// folder; the OneDrive sync client mirrors that folder to local disk; the Rust
+// command scans the folder, validates each file, and pushes it through the SAME
+// engine POST /api/email/import the "email" callee feeds (bearer stays in Rust).
+// Successful files move to processed/; malformed ones to failed/; transient
+// failures stay put for the next tick. Pure filesystem + HTTP ⇒ this callee is
+// NOT platform-gated — it runs on macOS AND Windows.
+//
+// This callee is a thin driver: invoke the command, log a concise receipt
+// (imported / duplicates / quarantined / failed), distinguish the calm
+// not-configured / folder-missing states, and NEVER rethrow into the shared tick.
+
+async function oneDriveMailSweep() {
+  let summary;
+  try {
+    summary = await invoke("onedrive_mail_sweep");
+  } catch (err) {
+    // The command returns a summary (not an error) for every expected case; a
+    // rejection means the IPC itself failed. Log calmly, let the next tick
+    // retry, never rethrow into the tick.
+    console.warn("[email-files] command failed:", err);
+    return;
+  }
+  if (!summary || summary.skipped || summary.folderNotConfigured) {
+    // Not configured (no bearer, or no OneDrive mail folder set up) — silent
+    // no-op by design (the common off case).
+    return;
+  }
+  if (summary.folderNotFound) {
+    // Fail-closed-but-VISIBLE: the configured folder is gone / not yet synced.
+    console.warn("[email-files] configured OneDrive mail folder not found (check the path)");
+    return;
+  }
+  if (!summary.enabled) {
+    // Engine import lane (EMAIL_THREAD_FOLLOW_ENABLED) is OFF — calm no-op.
+    console.log("[email-files] import lane disabled server-side (calm no-op)");
+    return;
+  }
+  const parts = [
+    `imported=${summary.imported}`,
+    `duplicates=${summary.duplicates}`,
+    `quarantined=${summary.quarantined}`,
+    `failed=${summary.failed}`,
+  ];
+  if (summary.truncated) parts.push(`deferred=${summary.deferred} (file cap)`);
+  console.log(`[email-files] ${parts.join(" · ")} of ${summary.found} file(s) found`);
+}
+
+registerChannelCallee("email-files", oneDriveMailSweep);
+
 // Expose the pure mapper for a bundler-free smoke (node --check target); no-op
 // side effect in the browser.
 if (typeof globalThis !== "undefined") {

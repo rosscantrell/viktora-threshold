@@ -45,6 +45,15 @@ mod calendar_read;
 // onenote_windows / calendar_read substrate.
 mod email_follow;
 
+// WP-INTAKE (contingency transport) — OneDrive folder-sweep email channel. The
+// New-Outlook-safe SIBLING of `email_follow`: a Power Automate flow in the
+// user's tenant writes arriving/sent emails as JSON files into a OneDrive folder
+// (mirrored to local disk by the sync client); this sweep reads that folder on
+// the shared tick and pushes each file through the SAME `POST /api/email/import`
+// endpoint. Pure filesystem + HTTP ⇒ works on macOS AND Windows (unlike COM).
+// Orchestration lives in `onedrive_mail_sweep` (the command) below.
+mod onedrive_mail_sweep;
+
 // WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
 // Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
 // PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
@@ -246,6 +255,14 @@ pub struct AppConfig {
     /// same pattern as `auto_import` / `plaud_connect` / `dismissed_record_ids`.
     #[serde(default)]
     pub email_follow: email_follow::EmailFollowState,
+    /// WP-INTAKE (OneDrive mail transport) — the local folder the Power Automate
+    /// flow's JSON mail files land in (via the OneDrive sync client) + any future
+    /// sweep state. `#[serde(default)]` (struct-level) ⇒ legacy configs without
+    /// the field deserialize to an empty `OneDriveMailConfig` (folder unset ⇒ the
+    /// sweep is a calm no-op) — additive-only schema delta, same pattern as
+    /// `auto_import` / `email_follow`.
+    #[serde(default)]
+    pub onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig,
 }
 
 impl Default for AppConfig {
@@ -262,6 +279,7 @@ impl Default for AppConfig {
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
+            onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
         }
     }
 }
@@ -6794,6 +6812,223 @@ async fn email_follow_sweep(
     Ok(summary)
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE — OneDrive folder-sweep email channel (New-Outlook-safe transport)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The `email-files` callee (widget.js) drives `onedrive_mail_sweep` once per
+// shared tick. SIBLING of `email_follow_sweep`: same import endpoint, different
+// transport (a Power Automate flow → OneDrive folder → local disk, instead of
+// local Outlook COM). Pure filesystem + HTTP, so it runs on macOS AND Windows.
+// Flow:
+//   1. Config gate — base URL + bearer present, else `skipped` (calm).
+//   2. Folder gate — folder configured + exists? else a typed calm skip
+//      (`folderNotConfigured` / `folderNotFound`) with a fail-VISIBLE log. This
+//      gate happens BEFORE any engine traffic (no HTTP on a no-op path).
+//   3. Scan the folder for top-level `*.json`; order oldest-first by mtime; cap
+//      at ONEDRIVE_MAIL_FILE_CAP with LOGGED truncation (`processed/`+`failed/`
+//      subdirs are never recursed).
+//   4. Per file: read + parse/validate. Malformed / wrong-schema / missing-
+//      required ⇒ MOVE to `failed/` (quarantine, logged, never re-read).
+//   5. Valid ⇒ map to the import body and POST /api/email/import (same bearer
+//      plumbing as email_follow, via `import_one_email`). `ok` OR `duplicate`
+//      ⇒ MOVE to `processed/` (never re-import). `{enabled:false}` ⇒ the lane
+//      flag is OFF ⇒ stop calmly, leave the file for when it's on. A transient
+//      failure (engine unreachable / 4xx-5xx) ⇒ LEAVE the file in place so the
+//      next tick retries (the folder itself is the watermark).
+// A sweep failure NEVER aborts the tick: every class folds into the summary or
+// a quiet log (mirrors push_availability / the OneNote + email-follow sweeps).
+
+/// Structured outcome of one OneDrive mail sweep, returned to the `email-files`
+/// callee (widget.js) for a concise receipt. Counts/flags only — no bodies.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OneDriveMailSweepSummary {
+    /// Not configured (no base URL / bearer, or no config loaded yet). Calm.
+    pub skipped: bool,
+    /// No swept folder configured in AppConfig — the channel isn't set up. Calm.
+    pub folder_not_configured: bool,
+    /// A folder is configured but doesn't exist / isn't a directory (OneDrive
+    /// not installed, wrong path, not yet synced). Calm skip, fail-VISIBLE log.
+    pub folder_not_found: bool,
+    /// Engine flag `EMAIL_THREAD_FOLLOW_ENABLED` (same lane) state. `false` ⇒
+    /// the import endpoint returned `{enabled:false}` (calm no-op).
+    pub enabled: bool,
+    /// `*.json` files found at the folder root this sweep (pre-cap).
+    pub found: usize,
+    /// Files the engine accepted as NEW (`{ok:true}`) ⇒ moved to `processed/`.
+    pub imported: usize,
+    /// Files the engine already had (`{ok:true,duplicate:true}`) — still a
+    /// success ⇒ moved to `processed/`.
+    pub duplicates: usize,
+    /// Files quarantined to `failed/` (malformed / wrong-schema / missing field).
+    pub quarantined: usize,
+    /// Files whose import POST failed transiently (network / 4xx-5xx) ⇒ LEFT in
+    /// place for a later tick.
+    pub failed: usize,
+    /// True if the per-sweep file cap left files for a later tick.
+    pub truncated: bool,
+    /// Files left unprocessed this sweep because of the file cap.
+    pub deferred: usize,
+}
+
+/// WP-INTAKE — one-shot OneDrive folder-sweep mail import, driven by the shared
+/// app-side channel tick (widget.js `email-files` callee). See the section
+/// header for the full flow. Never `Err`s in a way that aborts the tick: all
+/// failure classes fold into the returned summary or a quiet log.
+#[tauri::command]
+async fn onedrive_mail_sweep(app: tauri::AppHandle) -> Result<OneDriveMailSweepSummary, String> {
+    use onedrive_mail_sweep as ods;
+    let mut summary = OneDriveMailSweepSummary::default();
+
+    // ── 0. Config gate ──
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        None => {
+            summary.skipped = true;
+            return Ok(summary);
+        }
+    };
+    if cfg.base_url.trim().is_empty() || cfg.bearer_token.trim().is_empty() {
+        summary.skipped = true;
+        return Ok(summary);
+    }
+
+    // ── 1. Folder gate BEFORE any engine traffic ──
+    let folder = match ods::gate(&cfg.onedrive_mail) {
+        ods::SweepGate::NotConfigured => {
+            summary.folder_not_configured = true;
+            return Ok(summary);
+        }
+        ods::SweepGate::FolderNotFound => {
+            summary.folder_not_found = true;
+            // Fail-closed-but-VISIBLE: the configured folder is gone/unsynced.
+            log::warn!(
+                "WP-INTAKE odrive: configured mail folder not found/not a directory: {:?}",
+                cfg.onedrive_mail.folder
+            );
+            return Ok(summary);
+        }
+        ods::SweepGate::Ready => cfg
+            .onedrive_mail
+            .folder_path()
+            .expect("Ready ⇒ folder_path is Some"),
+    };
+
+    // ── 2. Scan + order oldest-first + cap ──
+    let scanned = ods::scan_inbox(&folder);
+    summary.found = scanned.len();
+    if scanned.is_empty() {
+        return Ok(summary);
+    }
+    let (ordered, deferred) = ods::select_files(scanned, ods::ONEDRIVE_MAIL_FILE_CAP);
+    summary.deferred = deferred;
+    if deferred > 0 {
+        summary.truncated = true;
+        // No silent caps (house law): the tail rotates in on later ticks.
+        log::info!(
+            "WP-INTAKE odrive: {} file(s) this sweep; {} deferred to a later tick (file cap {})",
+            ordered.len(),
+            deferred,
+            ods::ONEDRIVE_MAIL_FILE_CAP
+        );
+    }
+
+    // ── 3. Per-file: parse → quarantine-or-import → move ──
+    let mut disabled_midway = false;
+    for path in &ordered {
+        let contents = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                // A read failure (locked mid-sync, vanished) is transient — LEAVE
+                // the file in place for the next tick. Not a quarantine.
+                summary.failed += 1;
+                log::info!(
+                    "WP-INTAKE odrive: read failed for {:?} (left in place, retry next tick): {}",
+                    path,
+                    e
+                );
+                continue;
+            }
+        };
+        let parsed = match ods::parse_mail_file(&contents) {
+            Ok(m) => m,
+            Err(e) => {
+                // Bad file: quarantine to failed/ so it's never re-read.
+                summary.quarantined += 1;
+                log::warn!(
+                    "WP-INTAKE odrive: quarantining {:?}: {}",
+                    path.file_name().unwrap_or_default(),
+                    e
+                );
+                if let Err(mv) = ods::move_into_subdir(path, &folder, ods::FAILED_DIR) {
+                    log::warn!("WP-INTAKE odrive: quarantine move failed for {:?}: {}", path, mv);
+                }
+                continue;
+            }
+        };
+
+        let body = ods::build_import_body(&parsed);
+        match import_one_email(&cfg, body).await {
+            EmailImportOutcome::Imported => {
+                summary.imported += 1;
+                move_processed(&folder, path);
+            }
+            EmailImportOutcome::Duplicate => {
+                summary.duplicates += 1;
+                move_processed(&folder, path);
+            }
+            EmailImportOutcome::Disabled => {
+                // Flag OFF (server-side lane disabled). Stop calmly; LEAVE the
+                // file so it imports once the flag flips on.
+                disabled_midway = true;
+                break;
+            }
+            EmailImportOutcome::Failed(e) => {
+                // Transient — LEAVE in place, retry next tick (no move).
+                summary.failed += 1;
+                log::info!(
+                    "WP-INTAKE odrive: import failed for {} ({}); left in place",
+                    ods::mailbox_label(&parsed),
+                    e
+                );
+            }
+        }
+    }
+
+    summary.enabled = !disabled_midway;
+    if disabled_midway {
+        log::info!("WP-INTAKE odrive: import lane disabled server-side; stopped calmly");
+    }
+    log::info!(
+        "WP-INTAKE odrive: mail sweep ran (found={} imported={} duplicates={} quarantined={} failed={} deferred={})",
+        summary.found,
+        summary.imported,
+        summary.duplicates,
+        summary.quarantined,
+        summary.failed,
+        summary.deferred
+    );
+    Ok(summary)
+}
+
+/// Move a successfully-imported file to `processed/`; a move failure is logged
+/// but never fatal (the engine already has the message — worst case the file is
+/// re-POSTed next tick and the engine dedupes it).
+fn move_processed(folder: &std::path::Path, path: &std::path::Path) {
+    if let Err(e) = onedrive_mail_sweep::move_into_subdir(
+        path,
+        folder,
+        onedrive_mail_sweep::PROCESSED_DIR,
+    ) {
+        log::warn!(
+            "WP-INTAKE odrive: processed-move failed for {:?} (engine already has it; dedup on retry): {}",
+            path,
+            e
+        );
+    }
+}
+
 // ── Auto-import IPC surface ────────────────────────────────────────────────
 
 #[derive(Serialize, Clone, Debug)]
@@ -8728,6 +8963,9 @@ pub fn run() {
             // WP-INTAKE E5-app — email thread-following sweep, driven by the
             // shared app-side channel tick (widget.js email callee).
             email_follow_sweep,
+            // WP-INTAKE — OneDrive folder-sweep mail import (New-Outlook-safe
+            // transport), driven by the shared tick (widget.js email-files callee).
+            onedrive_mail_sweep,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -9190,6 +9428,7 @@ mod tests {
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
+            onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -9255,6 +9494,7 @@ mod tests {
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
+            onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
