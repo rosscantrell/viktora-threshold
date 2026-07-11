@@ -5953,7 +5953,14 @@ fn stop_auto_import_loop() {
     }
 }
 
-/// One polling tick: Plaud then OneNote. Bails early when auto-import is off.
+/// One polling tick. Bails early when auto-import is off.
+///
+/// WP-INTAKE T1: this standalone loop now sweeps ONLY Plaud. The OneNote
+/// sweep moved onto the shared app-side channel tick (widget.js
+/// `onenoteSweep` → `onenote_auto_import_sweep`), so we don't run two timers
+/// over OneNote (one tick, not a forest). The Plaud half stays here on its
+/// own `interval_minutes` cadence; consolidating Plaud is engine-side
+/// (WP-INTAKE E1), out of this app-side piece's scope.
 async fn tick_auto_import(app: &tauri::AppHandle) {
     let cfg = match current_config_opt(app) {
         Some(c) => c,
@@ -5963,7 +5970,6 @@ async fn tick_auto_import(app: &tauri::AppHandle) {
         return;
     }
     tick_auto_import_plaud(app, &cfg).await;
-    tick_auto_import_onenote(app, &cfg).await;
 }
 
 async fn tick_auto_import_plaud(app: &tauri::AppHandle, cfg: &AppConfig) {
@@ -6026,7 +6032,93 @@ async fn tick_auto_import_plaud(app: &tauri::AppHandle, cfg: &AppConfig) {
     }
 }
 
-async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
+/// WP-INTAKE T1 — per-sweep page cap. A first-ever sweep of a designated
+/// notebook (fresh baseline that then accrues a large edit backlog, or a
+/// re-baseline) must not enumerate + Publish + POST an unbounded number of
+/// pages in one tick — a huge notebook would hang the app on a single tick.
+/// We process at most this many *fresh* pages per source per sweep; the
+/// remainder catch up on subsequent ticks (the watermark only advances past
+/// what we actually sent, so nothing is lost). Truncation is logged, never
+/// silent (house law: no silent caps). 50 is generous — a real edit burst
+/// between two 30-min ticks is far smaller; the cap only bites on a first
+/// bulk backlog, which the watermark-advance drains deterministically.
+const ONENOTE_SWEEP_PAGE_CAP: usize = 50;
+
+/// WP-INTAKE T1 — structured outcome of one OneNote sweep, returned by the
+/// `onenote_auto_import_sweep` IPC command so the shared app-side channel
+/// tick (widget.js) can log a concise receipt. Every field is a count/flag —
+/// no page bodies. `platform_unsupported` distinguishes the calm macOS/Linux
+/// no-op (COM enumerate returns `PlatformUnsupported`) from a real failure,
+/// so the callee logs "platform no-op" rather than an error.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OneNoteSweepSummary {
+    /// Auto-import disabled / no enabled OneNote source ⇒ true, everything
+    /// else zero. A calm no-op, not an error.
+    pub skipped: bool,
+    /// COM enumerate returned `PlatformUnsupported` (macOS/Linux, or a
+    /// Windows box with no COM-registered OneNote). Calm, not an error.
+    pub platform_unsupported: bool,
+    /// Number of enabled OneNote sources considered this sweep.
+    pub sources: usize,
+    /// Sources baselined this sweep (first sight ⇒ watermark seeded, nothing
+    /// imported).
+    pub baselined: usize,
+    /// Pages that sent successfully (kind == success | idempotent).
+    pub imported: usize,
+    /// Pages whose send failed (COM/extract/handwriting-skip/etc.). Marked
+    /// seen so they don't retry every tick; watermark does NOT advance past a
+    /// failed page (a later edit re-qualifies it).
+    pub failed: usize,
+    /// True if at least one source hit `ONENOTE_SWEEP_PAGE_CAP` and left fresh
+    /// pages for a later tick.
+    pub truncated: bool,
+    /// Total fresh pages left unprocessed across all sources because of the
+    /// cap (0 unless `truncated`).
+    pub deferred: usize,
+}
+
+/// WP-INTAKE T1 — pure page-selection for one source's sweep. Given every
+/// timestamped page `(page_id, lastModifiedTime)` in the source's scope and
+/// the source's parsed watermark, return the fresh pages to send this tick
+/// (strictly newer than the watermark, not already sent this session),
+/// oldest-first, capped at `cap`, plus how many fresh pages were deferred by
+/// the cap. Side-effect-free (the `seen` predicate is injected) so it's unit-
+/// testable on every platform without COM or AppState.
+///
+/// Returns `(selected, deferred_count)` where `selected.len() <= cap`.
+fn select_fresh_onenote_pages<F: Fn(&str) -> bool>(
+    pages: Vec<(String, chrono::DateTime<chrono::FixedOffset>)>,
+    watermark: chrono::DateTime<chrono::FixedOffset>,
+    cap: usize,
+    already_sent: F,
+) -> (Vec<(String, chrono::DateTime<chrono::FixedOffset>)>, usize) {
+    let mut fresh: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = pages
+        .into_iter()
+        .filter(|(id, d)| *d > watermark && !already_sent(id))
+        .collect();
+    // Oldest-first so a truncated sweep advances the watermark by the largest
+    // safe amount and the *earliest* backlog pages land first (deterministic
+    // catch-up; a later tick picks up where this one stopped).
+    fresh.sort_by_key(|(_, d)| *d);
+    let total = fresh.len();
+    let deferred = total.saturating_sub(cap);
+    if deferred > 0 {
+        fresh.truncate(cap);
+    }
+    (fresh, deferred)
+}
+
+/// WP-INTAKE T1 — run ONE OneNote sweep and return a structured summary.
+/// Extracted from the old standalone-loop tick so the shared app-side channel
+/// tick (widget.js `onenoteSweep` callee) drives it exactly once per tick
+/// instead of OneNote running its own independent Rust timer (one tick, not a
+/// forest — WP-INTAKE T1). Behaviour is otherwise identical to the prior
+/// loop half: enumerate once, per-source diff against the watermark, baseline
+/// on first sight, send oldest-first, advance the watermark only past
+/// successes, session-dedup, toast each import. Adds the per-sweep page cap.
+async fn run_onenote_sweep_once(app: &tauri::AppHandle, cfg: &AppConfig) -> OneNoteSweepSummary {
+    let mut summary = OneNoteSweepSummary::default();
     let sources: Vec<AutoImportOneNoteSource> = cfg
         .auto_import
         .onenote_notebooks
@@ -6035,17 +6127,27 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
         .cloned()
         .collect();
     if sources.is_empty() {
-        return;
+        summary.skipped = true;
+        return summary;
     }
+    summary.sources = sources.len();
     // Enumerate once per tick; filter to designated notebooks below. On
-    // Mac/Linux this returns PlatformUnsupported → we skip silently.
+    // Mac/Linux this returns PlatformUnsupported → calm no-op (the shared tick
+    // logs "platform no-op" and continues; catch-up is inherent on Windows).
     let tree = match tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy).await
     {
         Ok(Ok(t)) => t,
-        Ok(Err(_)) => return,
+        Ok(Err(_)) => {
+            // Every enumerate failure class (PlatformUnsupported on Mac, COM
+            // not registered on a UWP-only Windows box, OneNote not running)
+            // is a calm no-op here: nothing to import, retry next tick. We
+            // flag platform_unsupported so the callee logs the calm case.
+            summary.platform_unsupported = true;
+            return summary;
+        }
         Err(e) => {
             log::warn!("WP-AUTO-IMPORT: enumerate join error: {}", e);
-            return;
+            return summary;
         }
     };
     for src in sources {
@@ -6082,6 +6184,7 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
                     src.section_id.as_deref(),
                     &newest.to_rfc3339(),
                 );
+                summary.baselined += 1;
                 log::info!(
                     "WP-AUTO-IMPORT: baselined OneNote source '{}'{} at {}",
                     src.name,
@@ -6095,11 +6198,25 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             }
             Some(w) => w,
         };
-        let mut fresh: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = pages
-            .into_iter()
-            .filter(|(id, d)| *d > watermark && !auto_import_seen(&format!("onenote:{}", id)))
-            .collect();
-        fresh.sort_by_key(|(_, d)| *d);
+        let (fresh, deferred) = select_fresh_onenote_pages(
+            pages,
+            watermark,
+            ONENOTE_SWEEP_PAGE_CAP,
+            |id| auto_import_seen(&format!("onenote:{}", id)),
+        );
+        if deferred > 0 {
+            summary.truncated = true;
+            summary.deferred += deferred;
+            // No silent caps (house law): log the truncation explicitly. The
+            // deferred pages catch up on later ticks — the watermark only
+            // advances past what we actually send below.
+            log::info!(
+                "WP-AUTO-IMPORT: OneNote source '{}' sweep capped at {} pages; {} deferred to a later tick",
+                src.name,
+                ONENOTE_SWEEP_PAGE_CAP,
+                deferred
+            );
+        }
         let mut max_seen = watermark;
         for (page_id, d) in fresh {
             let key = format!("onenote:{}", page_id);
@@ -6122,12 +6239,14 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             // successes, so a failed page below the new mark is dropped after
             // its single attempt — matching the silent best-effort contract.
             auto_import_mark(&key);
-            if ok && d > max_seen {
-                max_seen = d;
-            }
             if ok {
+                summary.imported += 1;
+                if d > max_seen {
+                    max_seen = d;
+                }
                 log::info!("WP-AUTO-IMPORT: auto-imported OneNote page {}", page_id);
             } else {
+                summary.failed += 1;
                 log::info!(
                     "WP-AUTO-IMPORT: OneNote page {} send failed ({})",
                     page_id,
@@ -6144,6 +6263,50 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             );
         }
     }
+    summary
+}
+
+/// WP-INTAKE T1 — one-shot OneNote sweep, driven by the shared app-side
+/// channel tick (widget.js `onenoteSweep` callee). This is the ONLY thing
+/// that fires the OneNote sweep now: the standalone auto-import loop no longer
+/// sweeps OneNote (it keeps the Plaud half on its own cadence — the Plaud
+/// consolidation is engine-side, WP-INTAKE E1). Reads the cached config,
+/// bails calmly when unconfigured or auto-import is off, and otherwise runs
+/// exactly one sweep. Never `Err`s in a way that would abort the tick: the
+/// callee try/catches anyway, but the sweep itself only returns a summary
+/// (all failure classes are folded into `platform_unsupported` / `failed` /
+/// `skipped`), so a dead OneNote can never throw into the tick.
+#[tauri::command]
+async fn onenote_auto_import_sweep(
+    app: tauri::AppHandle,
+) -> Result<OneNoteSweepSummary, String> {
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        // Unconfigured (no load_config yet) ⇒ calm skip. Not an error: the
+        // tick fires before Configure on a fresh install.
+        None => return Ok(OneNoteSweepSummary { skipped: true, ..Default::default() }),
+    };
+    if !cfg.auto_import.enabled {
+        return Ok(OneNoteSweepSummary { skipped: true, ..Default::default() });
+    }
+    let summary = run_onenote_sweep_once(&app, &cfg).await;
+    // Fail-closed-but-VISIBLE: a sweep that RAN leaves a trace even when it
+    // imported nothing, so a dead/quiet channel is diagnosable from the log
+    // (not just its successful imports). The macOS/Windows-COM-absent no-op is
+    // logged distinctly so "platform no-op" reads differently from "0 new".
+    if summary.platform_unsupported {
+        log::info!("WP-INTAKE T1: OneNote sweep = platform no-op (COM unavailable)");
+    } else {
+        log::info!(
+            "WP-INTAKE T1: OneNote sweep ran (sources={} baselined={} imported={} failed={} deferred={})",
+            summary.sources,
+            summary.baselined,
+            summary.imported,
+            summary.failed,
+            summary.deferred
+        );
+    }
+    Ok(summary)
 }
 
 // ── Auto-import IPC surface ────────────────────────────────────────────────
@@ -8071,6 +8234,9 @@ pub fn run() {
             get_auto_import_config,
             set_auto_import_config,
             auto_import_available_sources,
+            // WP-INTAKE T1 — one-shot OneNote sweep, driven by the shared
+            // app-side channel tick (widget.js onenoteSweep callee).
+            onenote_auto_import_sweep,
             // WP-CALENDAR — local calendar read + availability push
             calendar_read_window,
             push_availability,
@@ -9226,6 +9392,138 @@ mod tests {
             find_section_with_notebook(&tree, "{SEC-EMPTY}").expect("empty section is findable");
         assert_eq!(notebook.name, "Work");
         assert_eq!(section.pages.len(), 0);
+    }
+
+    // ───── WP-INTAKE T1 — OneNote sweep page selection (pure) ─────
+    //
+    // `select_fresh_onenote_pages` is the watermark diff + cap logic driving
+    // the shared-tick sweep. It's a pure function (the `seen` predicate is
+    // injected) so it runs on every platform without COM or AppState.
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::FixedOffset> {
+        chrono::DateTime::parse_from_rfc3339(s).expect("valid rfc3339")
+    }
+
+    fn pg(id: &str, t: &str) -> (String, chrono::DateTime<chrono::FixedOffset>) {
+        (id.to_string(), ts(t))
+    }
+
+    #[test]
+    fn select_fresh_keeps_only_pages_strictly_after_watermark() {
+        // Watermark = 12:00. Pages at 11:00 (old), 12:00 (== watermark, NOT
+        // fresh — strictly-after), 13:00 (fresh). Only the 13:00 page selects.
+        let pages = vec![
+            pg("{OLD}", "2026-07-10T11:00:00Z"),
+            pg("{EQ}", "2026-07-10T12:00:00Z"),
+            pg("{NEW}", "2026-07-10T13:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        assert_eq!(deferred, 0);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].0, "{NEW}");
+    }
+
+    #[test]
+    fn select_fresh_excludes_already_sent_this_session() {
+        // Both pages are newer than the watermark, but {SENT} was already
+        // sent this session (session-dedup) so only {UNSENT} selects.
+        let pages = vec![
+            pg("{SENT}", "2026-07-10T13:00:00Z"),
+            pg("{UNSENT}", "2026-07-10T14:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |id| id == "{SENT}",
+        );
+        assert_eq!(deferred, 0);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].0, "{UNSENT}");
+    }
+
+    #[test]
+    fn select_fresh_returns_oldest_first() {
+        // Deterministic catch-up: a truncated sweep must advance the watermark
+        // from the oldest edge, so selection is sorted oldest-first regardless
+        // of input order.
+        let pages = vec![
+            pg("{C}", "2026-07-10T15:00:00Z"),
+            pg("{A}", "2026-07-10T13:00:00Z"),
+            pg("{B}", "2026-07-10T14:00:00Z"),
+        ];
+        let (sel, _deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        let ids: Vec<&str> = sel.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["{A}", "{B}", "{C}"]);
+    }
+
+    #[test]
+    fn select_fresh_caps_and_reports_deferred_oldest_first() {
+        // 5 fresh pages, cap 2 ⇒ the 2 OLDEST are selected, 3 deferred to a
+        // later tick. This is the huge-first-sweep guard: the app never
+        // Publishes an unbounded backlog in one tick, and the watermark
+        // advances only past what actually sent, so the next tick resumes.
+        let pages = vec![
+            pg("{P5}", "2026-07-10T17:00:00Z"),
+            pg("{P1}", "2026-07-10T13:00:00Z"),
+            pg("{P4}", "2026-07-10T16:00:00Z"),
+            pg("{P2}", "2026-07-10T14:00:00Z"),
+            pg("{P3}", "2026-07-10T15:00:00Z"),
+        ];
+        let (sel, deferred) =
+            select_fresh_onenote_pages(pages, ts("2026-07-10T12:00:00Z"), 2, |_| false);
+        assert_eq!(deferred, 3);
+        let ids: Vec<&str> = sel.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["{P1}", "{P2}"]);
+    }
+
+    #[test]
+    fn select_fresh_empty_when_nothing_new() {
+        // All pages at or below the watermark ⇒ empty selection, zero
+        // deferred (the steady-state case every tick after catch-up).
+        let pages = vec![
+            pg("{X}", "2026-07-10T10:00:00Z"),
+            pg("{Y}", "2026-07-10T11:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        assert!(sel.is_empty());
+        assert_eq!(deferred, 0);
+    }
+
+    #[test]
+    fn onenote_sweep_summary_serde_is_camel_case() {
+        // widget.js reads the summary fields (imported / platformUnsupported /
+        // deferred) to log the receipt; a drift to snake_case would break the
+        // callee's log line. Assert the wire shape.
+        let s = OneNoteSweepSummary {
+            skipped: false,
+            platform_unsupported: true,
+            sources: 2,
+            baselined: 1,
+            imported: 3,
+            failed: 1,
+            truncated: true,
+            deferred: 4,
+        };
+        let json = serde_json::to_string(&s).expect("serializes");
+        assert!(json.contains("\"platformUnsupported\":true"), "{}", json);
+        assert!(json.contains("\"imported\":3"), "{}", json);
+        assert!(json.contains("\"deferred\":4"), "{}", json);
     }
 
     #[test]
