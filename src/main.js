@@ -880,11 +880,15 @@ function buildCalendarCard(report, ics) {
   // Local probe already succeeded (this session, or a remembered grant).
   if (lastCalendarProbe?.state === "works") {
     const n = lastCalendarProbe.eventCount ?? 0;
+    const emptyHint = n === 0
+      ? " — if your real calendar lives elsewhere (Google, Outlook), a shared link works better"
+      : "";
     return doctorCard({
       name: "Calendar",
-      detail: `Reads this computer's calendar · ${n} upcoming ${n === 1 ? "event" : "events"} found`,
+      detail: `Reads this computer's calendar · ${n} upcoming ${n === 1 ? "event" : "events"} found${emptyHint}`,
       pill: "Ready",
       pillState: "ready",
+      actions: [{ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card, report) }],
     });
   }
 
@@ -911,28 +915,34 @@ function buildCalendarCard(report, ics) {
   if (cal.readerPresent && !probeFailed) {
     detail = "Threshold can read the calendar on this computer. It will ask for access once.";
     actions.push({ label: "Allow access", primary: true, onClick: runLiveProbe });
+    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card, report) });
   } else if (cal.readerPresent && probeFailed) {
     detail = lastCalendarProbe.state === "permissionNeeded"
       ? "Access was declined. Enable Threshold under System Settings → Privacy & Security → Automation, then try again — or use a shared calendar link."
       : "The calendar couldn't be read on this computer. Try again — or use a shared calendar link instead.";
     actions.push({ label: "Try again", primary: true, onClick: runLiveProbe });
-    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card) });
+    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card, report) });
   } else {
     pill = "1 min";
     detail = icsConfigured && ics?.lastError
       ? "Your shared calendar link stopped working — publish a fresh one and paste it here."
       : "No local calendar on this computer. Publish a busy-times link from Outlook on the web and paste it here.";
-    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card) });
+    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card, report) });
   }
 
   return doctorCard({ name: "Calendar", detail, pill, pillState: "action", actions });
 }
 
-function toggleIcsExpand(card) {
+function toggleIcsExpand(card, report) {
   const existing = card.querySelector(".doctor-expand");
   if (existing) { existing.remove(); return; }
   const expand = document.createElement("div");
   expand.className = "doctor-expand";
+  // The link is stored engine-side — without a workspace connection the save
+  // has nowhere to go. Say so up front instead of failing on Save.
+  if (report?.engine?.state !== "reachable") {
+    expand.appendChild(doctorNote("warn", "Connect to your workspace first (Connection panel) — the calendar link is stored there, not on this computer."));
+  }
   const row = document.createElement("div");
   row.className = "doctor-expand-row";
   const input = document.createElement("input");
@@ -949,9 +959,19 @@ function toggleIcsExpand(card) {
     add.disabled = true;
     add.textContent = "Checking…";
     try {
-      await tauri.core.invoke("ics_source_set", { icsUrl: url });
-      showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed." });
-      renderIntegrationDoctor();
+      // ics_source_set is non-throwing: it resolves with {ok, stage, note}
+      // even when a stage failed. Only ok:true is success — a toast on a
+      // failed save is a lie the doctor is not allowed to tell.
+      const res = await tauri.core.invoke("ics_source_set", { icsUrl: url });
+      if (res?.ok) {
+        showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed." });
+        renderIntegrationDoctor();
+      } else {
+        add.disabled = false;
+        add.textContent = "Save link";
+        expand.querySelector(".doctor-note")?.remove();
+        expand.appendChild(doctorNote("err", res?.note || `Couldn't save the link (failed at: ${res?.stage || "unknown"}).`));
+      }
     } catch (err) {
       add.disabled = false;
       add.textContent = "Save link";
@@ -1907,6 +1927,15 @@ function enterWizardDone(cfg) {
 
 function finishWizard() {
   state.inWizard = false;
+  // First finish only: land on Settings → Integrations so the Connections
+  // doctor greets the new user with the engine now configured (WP-ONBOARD).
+  // Later wizard runs finish straight to the main view as before.
+  if (!localStorage.getItem("thresholdConnectionsIntroSeen")) {
+    localStorage.setItem("thresholdConnectionsIntroSeen", "1");
+    enterStandaloneConfigure();
+    switchSettingsPanel("integrations");
+    return;
+  }
   enterMainView(state.lastConfig);
 }
 
