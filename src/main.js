@@ -870,7 +870,7 @@ function buildCalendarCard(report, ics) {
       name: "Calendar",
       detail: ics?.lastPolledAt
         ? `Flowing via your shared calendar link · last checked ${doctorRelTime(ics.lastPolledAt)}`
-        : "Shared calendar link saved — first check runs within 30 minutes.",
+        : "Shared calendar link saved — busy times flow within 30 minutes (a newly published link can take up to an hour on Microsoft's side).",
       pill: "Ready",
       pillState: "ready",
       actions: [{ label: "Change link", link: true, onClick: (card) => toggleIcsExpand(card) }],
@@ -964,7 +964,7 @@ function toggleIcsExpand(card, report) {
       // failed save is a lie the doctor is not allowed to tell.
       const res = await tauri.core.invoke("ics_source_set", { icsUrl: url });
       if (res?.ok) {
-        showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed." });
+        showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed. A newly published link can take up to an hour to fill on Microsoft's side." });
         renderIntegrationDoctor();
       } else {
         add.disabled = false;
