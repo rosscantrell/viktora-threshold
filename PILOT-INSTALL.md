@@ -145,6 +145,42 @@ When the tidbit is ready, three things happen at once:
 
 ---
 
+## Passive email intake — OneDrive mail flow (optional, Windows-friendly)
+
+Threshold can pull your email into your workspace passively — no forwarding, no
+BCC — via two Power Automate flows in **your own** Microsoft account that drop
+each message as a small JSON file into `OneDrive → Apps → Threshold → mail`.
+Threshold's app sweeps that folder on its channel tick. This works even with
+New Outlook (which has no add-in/COM surface).
+
+The onboarding **integration doctor** generates the two flows for you (a
+`Threshold-PowerAutomate/` folder with `threshold-mail-inbox.flow.json`,
+`threshold-mail-sent.flow.json`, and `IMPORT-RECIPE.md`) and prepares the
+`Apps/Threshold/mail` sweep folder under your detected OneDrive root. Building
+the flows is a one-minute, no-admin step.
+
+**5-step manual build/import test** (do it once for **Inbox**, once for **Sent**
+— the full test is that a test email lands as a `.json` file):
+
+1. **New flow.** Power Automate → **Create → Automated cloud flow**. Name it
+   `Threshold mail — Inbox` (second flow: `Threshold mail — Sent`).
+2. **Trigger.** **Office 365 Outlook → When a new email arrives (V3)**. Set
+   **Folder** to **Inbox** (Sent flow: **Sent Items**).
+3. **Action.** **OneDrive for Business → Create file**. **Folder Path:**
+   `/Apps/Threshold/mail`. **File Name** (expression): `concat(guid(),'.json')`.
+4. **File Content** (expression editor) — paste the exact expression from
+   `IMPORT-RECIPE.md` for that mailbox (it starts `string(createObject('schemaVersion',1,'mailbox',…`).
+   This shape is FROZEN — it's what Threshold's sweep parses.
+5. **Save + test.** Send yourself a test email; within ~1 minute a `.json` file
+   appears in `OneDrive/Apps/Threshold/mail` and the channel flips green on the
+   next sweep.
+
+> A blocked connector ("your admin hasn't allowed this") is an org policy, not a
+> bug — the doctor records "blocked by org" and falls back to the classic-Outlook
+> or add-in path. Nothing here exposes more than the email you already receive.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
