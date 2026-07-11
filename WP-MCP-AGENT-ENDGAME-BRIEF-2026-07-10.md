@@ -351,24 +351,28 @@ section as it ships — and expose it through the MCP itself.
   discipline as the pilot-full flag-parity gate; a drift test should enforce
   registry-entry completeness.
 
-### C5. Build queue implied by Part C (ordered)
+### C5. Build queue implied by Part C (ordered; re-ordered 2026-07-11, Ross)
 
-1. **Agent closure lane** — async runs propose-resolve their own completed
-   commitments (ratify inbox / propose-edit). THE most important gap: the
-   0/349-resolve problem is now the agent's too; async execution without
-   closure makes the field worse, not better.
-2. **`propose_to_outbox` MCP capability** — the async wing's "done" for
-   outbound work = a lifecycle lane (send/dismiss), not prose in chat.
-   (Already queued in the handoff; pairs with #1.)
+1. **Capability ledger (C4) + `propose_to_outbox`, PAIRED in one slice** —
+   the ledger ships first because it's the cheapest item and compounds
+   everything after it (every later capability ships with selection metadata
+   from day one instead of becoming retrofit); `propose_to_outbox` rides the
+   same slice as the FIRST capability shipped under the same-PR ledger rule —
+   disciplines take hold with a first enforced example, not a standing
+   instruction. Outbox = the async wing's "done" for outbound work: a
+   lifecycle lane (send/dismiss), not prose in chat.
+2. **Agent closure lane** — async runs propose-resolve their own completed
+   commitments (ratify inbox / propose-edit). THE most important semantic
+   gap: the 0/349-resolve problem is now the agent's too; async execution
+   without closure makes the field worse, not better. Ships immediately
+   behind #1 and adopts the ledger rule.
 3. **Plan-anchor join in the packet** — a "today's plan" reconciliation
    section keyed off the morning capture doc's record-set.
 4. **`mark_seen` fix** — `newSince` is permanently null today; C2 is built on
    the watermark. Small fix, gates the more important organ.
 5. **Post-mint interrupt evaluation** (C2 gate) + ping delivery through the
    ✦ door, with the held-count per fail-closed-but-visible.
-6. **Capability ledger** (C4) — registry metadata + enriched
-   `list_capabilities` + packet cross-reference + the same-PR maintenance rule.
-7. **`mode:'review'` horizon** — after a week+ of real day-plan lineage.
+6. **`mode:'review'` horizon** — after a week+ of real day-plan lineage.
 
 Not on the list, by design: no new session structure, no orchestration
 framework, no plan format, no separate memory store. The collaboration depth
