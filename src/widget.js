@@ -765,6 +765,65 @@ async function onenoteSweep() {
 
 registerChannelCallee("onenote", onenoteSweep);
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE E5-app — email thread-following sweep (registered as "email").
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The whole sweep lives in Rust (`email_follow_sweep`): it GETs the followed
+// threads from the engine (bearer stays in Rust), locates each Outlook
+// conversation by known internet Message-IDs (caching threadKey↔ConversationID),
+// scans Inbox + Sent Items for messages newer than the per-thread watermark, and
+// pushes each via the engine's POST /api/email/import — advancing the watermark
+// only past successful imports. Windows COM only; macOS/Linux is a calm no-op
+// (the Rust command short-circuits BEFORE any engine call → zero engine traffic
+// on the no-op). The engine flag EMAIL_THREAD_FOLLOW_ENABLED gates it: flag-off
+// ⇒ `{enabled:false}` ⇒ a calm no-op here too.
+//
+// This callee is a thin driver: it invokes the command, logs a concise receipt
+// (threads checked / messages imported / deferred), distinguishes a platform
+// no-op from a real failure, and NEVER rethrows into the shared tick.
+
+async function emailFollowSweep() {
+  let summary;
+  try {
+    summary = await invoke("email_follow_sweep");
+  } catch (err) {
+    // The command returns a summary (not an error) for every expected case; a
+    // rejection means the IPC itself failed. Log calmly, let the next tick
+    // retry, never rethrow into the tick.
+    console.warn("[email-follow] command failed:", err);
+    return;
+  }
+  if (!summary || summary.skipped) {
+    // Not configured yet (fresh install before Configure) — silent no-op.
+    return;
+  }
+  if (summary.platformUnsupported) {
+    // Windows-only channel; on this Mac dev machine (and any non-Windows box)
+    // the sweep is a deliberate no-op made WITHOUT any engine traffic.
+    console.log("[email-follow] platform no-op (local Outlook is Windows-only)");
+    return;
+  }
+  if (!summary.enabled) {
+    // Engine flag EMAIL_THREAD_FOLLOW_ENABLED is OFF — a calm no-op, not an error.
+    console.log("[email-follow] disabled server-side (calm no-op)");
+    return;
+  }
+  const parts = [
+    `imported=${summary.imported}`,
+    `duplicates=${summary.duplicates}`,
+    `failed=${summary.failed}`,
+  ];
+  if (summary.discovered) parts.push(`discovered=${summary.discovered}`);
+  if (summary.deferredThreads) parts.push(`threadsDeferred=${summary.deferredThreads}`);
+  if (summary.truncated) parts.push(`msgsDeferred=${summary.deferredMessages} (cap)`);
+  console.log(
+    `[email-follow] ${parts.join(" · ")} across ${summary.threadsChecked}/${summary.threadsTotal} thread(s)`,
+  );
+}
+
+registerChannelCallee("email", emailFollowSweep);
+
 // Expose the pure mapper for a bundler-free smoke (node --check target); no-op
 // side effect in the browser.
 if (typeof globalThis !== "undefined") {
