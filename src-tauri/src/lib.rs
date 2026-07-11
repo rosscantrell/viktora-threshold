@@ -37,6 +37,14 @@ mod onenote_windows;
 // are their OWN lane (never substrate, no LLM) per the WP-CALENDAR brief.
 mod calendar_read;
 
+// WP-INTAKE E5-app — email thread-following sweep (local Outlook COM via
+// PowerShell on Windows; a calm PlatformUnsupported no-op on Mac/Linux). Pulls
+// new messages (incl. the user's own Sent replies) for threads already in the
+// field and pushes them via the engine's POST /api/email/import (bearer stays in
+// Rust — the orchestration lives in `email_follow_sweep` below). Mirrors the
+// onenote_windows / calendar_read substrate.
+mod email_follow;
+
 // WP-PLAUD-07b — Threshold-mediated Plaud OAuth bootstrap (Settings →
 // Connections → Connect Plaud). Rust port of plaud-bootstrap.js — runs the
 // PKCE flow on the champion's laptop with a 127.0.0.1:8199 callback listener,
@@ -230,6 +238,14 @@ pub struct AppConfig {
     /// additive-only schema delta, same pattern as `auto_import` / `plaud_connect`.
     #[serde(default)]
     pub dismissed_record_ids: Vec<String>,
+    /// WP-INTAKE E5-app — email thread-following cache + per-thread watermarks.
+    /// `threadKey↔ConversationID` resolutions (so sweeps skip the mailbox
+    /// search) and the locally-advanced watermark per followed thread.
+    /// `#[serde(default)]` (struct-level) ⇒ legacy configs without the field
+    /// deserialize to an empty `EmailFollowState` — additive-only schema delta,
+    /// same pattern as `auto_import` / `plaud_connect` / `dismissed_record_ids`.
+    #[serde(default)]
+    pub email_follow: email_follow::EmailFollowState,
 }
 
 impl Default for AppConfig {
@@ -245,6 +261,7 @@ impl Default for AppConfig {
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
+            email_follow: email_follow::EmailFollowState::default(),
         }
     }
 }
@@ -5953,7 +5970,14 @@ fn stop_auto_import_loop() {
     }
 }
 
-/// One polling tick: Plaud then OneNote. Bails early when auto-import is off.
+/// One polling tick. Bails early when auto-import is off.
+///
+/// WP-INTAKE T1: this standalone loop now sweeps ONLY Plaud. The OneNote
+/// sweep moved onto the shared app-side channel tick (widget.js
+/// `onenoteSweep` → `onenote_auto_import_sweep`), so we don't run two timers
+/// over OneNote (one tick, not a forest). The Plaud half stays here on its
+/// own `interval_minutes` cadence; consolidating Plaud is engine-side
+/// (WP-INTAKE E1), out of this app-side piece's scope.
 async fn tick_auto_import(app: &tauri::AppHandle) {
     let cfg = match current_config_opt(app) {
         Some(c) => c,
@@ -5963,7 +5987,6 @@ async fn tick_auto_import(app: &tauri::AppHandle) {
         return;
     }
     tick_auto_import_plaud(app, &cfg).await;
-    tick_auto_import_onenote(app, &cfg).await;
 }
 
 async fn tick_auto_import_plaud(app: &tauri::AppHandle, cfg: &AppConfig) {
@@ -6026,7 +6049,93 @@ async fn tick_auto_import_plaud(app: &tauri::AppHandle, cfg: &AppConfig) {
     }
 }
 
-async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
+/// WP-INTAKE T1 — per-sweep page cap. A first-ever sweep of a designated
+/// notebook (fresh baseline that then accrues a large edit backlog, or a
+/// re-baseline) must not enumerate + Publish + POST an unbounded number of
+/// pages in one tick — a huge notebook would hang the app on a single tick.
+/// We process at most this many *fresh* pages per source per sweep; the
+/// remainder catch up on subsequent ticks (the watermark only advances past
+/// what we actually sent, so nothing is lost). Truncation is logged, never
+/// silent (house law: no silent caps). 50 is generous — a real edit burst
+/// between two 30-min ticks is far smaller; the cap only bites on a first
+/// bulk backlog, which the watermark-advance drains deterministically.
+const ONENOTE_SWEEP_PAGE_CAP: usize = 50;
+
+/// WP-INTAKE T1 — structured outcome of one OneNote sweep, returned by the
+/// `onenote_auto_import_sweep` IPC command so the shared app-side channel
+/// tick (widget.js) can log a concise receipt. Every field is a count/flag —
+/// no page bodies. `platform_unsupported` distinguishes the calm macOS/Linux
+/// no-op (COM enumerate returns `PlatformUnsupported`) from a real failure,
+/// so the callee logs "platform no-op" rather than an error.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OneNoteSweepSummary {
+    /// Auto-import disabled / no enabled OneNote source ⇒ true, everything
+    /// else zero. A calm no-op, not an error.
+    pub skipped: bool,
+    /// COM enumerate returned `PlatformUnsupported` (macOS/Linux, or a
+    /// Windows box with no COM-registered OneNote). Calm, not an error.
+    pub platform_unsupported: bool,
+    /// Number of enabled OneNote sources considered this sweep.
+    pub sources: usize,
+    /// Sources baselined this sweep (first sight ⇒ watermark seeded, nothing
+    /// imported).
+    pub baselined: usize,
+    /// Pages that sent successfully (kind == success | idempotent).
+    pub imported: usize,
+    /// Pages whose send failed (COM/extract/handwriting-skip/etc.). Marked
+    /// seen so they don't retry every tick; watermark does NOT advance past a
+    /// failed page (a later edit re-qualifies it).
+    pub failed: usize,
+    /// True if at least one source hit `ONENOTE_SWEEP_PAGE_CAP` and left fresh
+    /// pages for a later tick.
+    pub truncated: bool,
+    /// Total fresh pages left unprocessed across all sources because of the
+    /// cap (0 unless `truncated`).
+    pub deferred: usize,
+}
+
+/// WP-INTAKE T1 — pure page-selection for one source's sweep. Given every
+/// timestamped page `(page_id, lastModifiedTime)` in the source's scope and
+/// the source's parsed watermark, return the fresh pages to send this tick
+/// (strictly newer than the watermark, not already sent this session),
+/// oldest-first, capped at `cap`, plus how many fresh pages were deferred by
+/// the cap. Side-effect-free (the `seen` predicate is injected) so it's unit-
+/// testable on every platform without COM or AppState.
+///
+/// Returns `(selected, deferred_count)` where `selected.len() <= cap`.
+fn select_fresh_onenote_pages<F: Fn(&str) -> bool>(
+    pages: Vec<(String, chrono::DateTime<chrono::FixedOffset>)>,
+    watermark: chrono::DateTime<chrono::FixedOffset>,
+    cap: usize,
+    already_sent: F,
+) -> (Vec<(String, chrono::DateTime<chrono::FixedOffset>)>, usize) {
+    let mut fresh: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = pages
+        .into_iter()
+        .filter(|(id, d)| *d > watermark && !already_sent(id))
+        .collect();
+    // Oldest-first so a truncated sweep advances the watermark by the largest
+    // safe amount and the *earliest* backlog pages land first (deterministic
+    // catch-up; a later tick picks up where this one stopped).
+    fresh.sort_by_key(|(_, d)| *d);
+    let total = fresh.len();
+    let deferred = total.saturating_sub(cap);
+    if deferred > 0 {
+        fresh.truncate(cap);
+    }
+    (fresh, deferred)
+}
+
+/// WP-INTAKE T1 — run ONE OneNote sweep and return a structured summary.
+/// Extracted from the old standalone-loop tick so the shared app-side channel
+/// tick (widget.js `onenoteSweep` callee) drives it exactly once per tick
+/// instead of OneNote running its own independent Rust timer (one tick, not a
+/// forest — WP-INTAKE T1). Behaviour is otherwise identical to the prior
+/// loop half: enumerate once, per-source diff against the watermark, baseline
+/// on first sight, send oldest-first, advance the watermark only past
+/// successes, session-dedup, toast each import. Adds the per-sweep page cap.
+async fn run_onenote_sweep_once(app: &tauri::AppHandle, cfg: &AppConfig) -> OneNoteSweepSummary {
+    let mut summary = OneNoteSweepSummary::default();
     let sources: Vec<AutoImportOneNoteSource> = cfg
         .auto_import
         .onenote_notebooks
@@ -6035,17 +6144,27 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
         .cloned()
         .collect();
     if sources.is_empty() {
-        return;
+        summary.skipped = true;
+        return summary;
     }
+    summary.sources = sources.len();
     // Enumerate once per tick; filter to designated notebooks below. On
-    // Mac/Linux this returns PlatformUnsupported → we skip silently.
+    // Mac/Linux this returns PlatformUnsupported → calm no-op (the shared tick
+    // logs "platform no-op" and continues; catch-up is inherent on Windows).
     let tree = match tauri::async_runtime::spawn_blocking(onenote_windows::enumerate_hierarchy).await
     {
         Ok(Ok(t)) => t,
-        Ok(Err(_)) => return,
+        Ok(Err(_)) => {
+            // Every enumerate failure class (PlatformUnsupported on Mac, COM
+            // not registered on a UWP-only Windows box, OneNote not running)
+            // is a calm no-op here: nothing to import, retry next tick. We
+            // flag platform_unsupported so the callee logs the calm case.
+            summary.platform_unsupported = true;
+            return summary;
+        }
         Err(e) => {
             log::warn!("WP-AUTO-IMPORT: enumerate join error: {}", e);
-            return;
+            return summary;
         }
     };
     for src in sources {
@@ -6082,6 +6201,7 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
                     src.section_id.as_deref(),
                     &newest.to_rfc3339(),
                 );
+                summary.baselined += 1;
                 log::info!(
                     "WP-AUTO-IMPORT: baselined OneNote source '{}'{} at {}",
                     src.name,
@@ -6095,11 +6215,25 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             }
             Some(w) => w,
         };
-        let mut fresh: Vec<(String, chrono::DateTime<chrono::FixedOffset>)> = pages
-            .into_iter()
-            .filter(|(id, d)| *d > watermark && !auto_import_seen(&format!("onenote:{}", id)))
-            .collect();
-        fresh.sort_by_key(|(_, d)| *d);
+        let (fresh, deferred) = select_fresh_onenote_pages(
+            pages,
+            watermark,
+            ONENOTE_SWEEP_PAGE_CAP,
+            |id| auto_import_seen(&format!("onenote:{}", id)),
+        );
+        if deferred > 0 {
+            summary.truncated = true;
+            summary.deferred += deferred;
+            // No silent caps (house law): log the truncation explicitly. The
+            // deferred pages catch up on later ticks — the watermark only
+            // advances past what we actually send below.
+            log::info!(
+                "WP-AUTO-IMPORT: OneNote source '{}' sweep capped at {} pages; {} deferred to a later tick",
+                src.name,
+                ONENOTE_SWEEP_PAGE_CAP,
+                deferred
+            );
+        }
         let mut max_seen = watermark;
         for (page_id, d) in fresh {
             let key = format!("onenote:{}", page_id);
@@ -6122,12 +6256,14 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             // successes, so a failed page below the new mark is dropped after
             // its single attempt — matching the silent best-effort contract.
             auto_import_mark(&key);
-            if ok && d > max_seen {
-                max_seen = d;
-            }
             if ok {
+                summary.imported += 1;
+                if d > max_seen {
+                    max_seen = d;
+                }
                 log::info!("WP-AUTO-IMPORT: auto-imported OneNote page {}", page_id);
             } else {
+                summary.failed += 1;
                 log::info!(
                     "WP-AUTO-IMPORT: OneNote page {} send failed ({})",
                     page_id,
@@ -6144,6 +6280,518 @@ async fn tick_auto_import_onenote(app: &tauri::AppHandle, cfg: &AppConfig) {
             );
         }
     }
+    summary
+}
+
+/// WP-INTAKE T1 — one-shot OneNote sweep, driven by the shared app-side
+/// channel tick (widget.js `onenoteSweep` callee). This is the ONLY thing
+/// that fires the OneNote sweep now: the standalone auto-import loop no longer
+/// sweeps OneNote (it keeps the Plaud half on its own cadence — the Plaud
+/// consolidation is engine-side, WP-INTAKE E1). Reads the cached config,
+/// bails calmly when unconfigured or auto-import is off, and otherwise runs
+/// exactly one sweep. Never `Err`s in a way that would abort the tick: the
+/// callee try/catches anyway, but the sweep itself only returns a summary
+/// (all failure classes are folded into `platform_unsupported` / `failed` /
+/// `skipped`), so a dead OneNote can never throw into the tick.
+#[tauri::command]
+async fn onenote_auto_import_sweep(
+    app: tauri::AppHandle,
+) -> Result<OneNoteSweepSummary, String> {
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        // Unconfigured (no load_config yet) ⇒ calm skip. Not an error: the
+        // tick fires before Configure on a fresh install.
+        None => return Ok(OneNoteSweepSummary { skipped: true, ..Default::default() }),
+    };
+    if !cfg.auto_import.enabled {
+        return Ok(OneNoteSweepSummary { skipped: true, ..Default::default() });
+    }
+    let summary = run_onenote_sweep_once(&app, &cfg).await;
+    // Fail-closed-but-VISIBLE: a sweep that RAN leaves a trace even when it
+    // imported nothing, so a dead/quiet channel is diagnosable from the log
+    // (not just its successful imports). The macOS/Windows-COM-absent no-op is
+    // logged distinctly so "platform no-op" reads differently from "0 new".
+    if summary.platform_unsupported {
+        log::info!("WP-INTAKE T1: OneNote sweep = platform no-op (COM unavailable)");
+    } else {
+        log::info!(
+            "WP-INTAKE T1: OneNote sweep ran (sources={} baselined={} imported={} failed={} deferred={})",
+            summary.sources,
+            summary.baselined,
+            summary.imported,
+            summary.failed,
+            summary.deferred
+        );
+    }
+    Ok(summary)
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE E5-app — email thread-following sweep (third shared-tick callee)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The `email` callee (widget.js) drives `email_follow_sweep` once per shared
+// tick. Flow (Windows; a calm no-op elsewhere):
+//   1. Platform gate FIRST — on macOS/Linux return `platformUnsupported`
+//      WITHOUT touching the engine (mirrors the OneNote local-first no-op;
+//      guarantees zero engine traffic on the no-op path).
+//   2. GET /api/email/followed-threads (bearer stays in Rust). Flag-off ⇒
+//      `{enabled:false}` ⇒ a CALM no-op (never an error).
+//   3. Merge each engine thread with the persisted cache (ConversationID +
+//      local watermark); effective watermark = max(engine.lastMessageAt, local).
+//   4. Select ≤ EMAIL_FOLLOW_THREAD_CAP threads least-recently-swept first
+//      (rotation → the tail catches up next tick); LOG the deferred remainder.
+//   5. One bounded Outlook COM PowerShell pass (see email_follow.rs) → discover
+//      ConversationIDs (cache them) + emit new messages.
+//   6. Import each (oldest-first) via POST /api/email/import; advance the
+//      per-thread watermark only past successful (ok|duplicate) imports; cap at
+//      EMAIL_FOLLOW_MESSAGE_CAP with LOGGED truncation.
+//   7. Persist the updated cache/watermarks/swept_at.
+// A sweep failure NEVER aborts the tick: every failure class folds into the
+// returned summary (or a quiet log), matching push_availability / the OneNote
+// sweep.
+
+/// Structured outcome of one email-follow sweep, returned to the `email` callee
+/// (widget.js) for a concise receipt. All counts/flags — no message bodies.
+#[derive(Serialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailFollowSweepSummary {
+    /// Not configured (no base URL / bearer, or no config loaded yet). Calm.
+    pub skipped: bool,
+    /// Engine flag `EMAIL_THREAD_FOLLOW_ENABLED` state. `false` ⇒ the engine
+    /// returned `{enabled:false}` (calm no-op) — everything else is zero.
+    pub enabled: bool,
+    /// Local Outlook COM path unavailable (macOS/Linux, or a Windows box with no
+    /// COM-registered Outlook). Calm, not an error. When true NO engine call was
+    /// made.
+    pub platform_unsupported: bool,
+    /// Followed threads the engine returned this sweep.
+    pub threads_total: usize,
+    /// Threads actually handed to the Outlook pass this sweep (≤ cap).
+    pub threads_checked: usize,
+    /// Threads left for a later tick because of the per-sweep thread cap.
+    pub deferred_threads: usize,
+    /// New `threadKey↔ConversationID` resolutions cached this sweep.
+    pub discovered: usize,
+    /// Messages the engine accepted as NEW (`{ok:true}`).
+    pub imported: usize,
+    /// Messages the engine already had (`{ok:true,duplicate:true}`) — still a
+    /// success for watermark purposes.
+    pub duplicates: usize,
+    /// Messages whose import POST failed (network / 4xx-5xx). Watermark does NOT
+    /// advance past a failed message; a later tick retries it.
+    pub failed: usize,
+    /// True if the per-sweep message cap left messages for a later tick.
+    pub truncated: bool,
+    /// Messages left unimported this sweep because of the message cap.
+    pub deferred_messages: usize,
+}
+
+/// The two shapes `GET /api/email/followed-threads` returns.
+enum FollowedThreadsResponse {
+    /// Flag OFF server-side — a calm no-op.
+    Disabled,
+    /// Flag ON — the followed-thread list (possibly empty).
+    Threads(Vec<email_follow::FollowedThread>),
+}
+
+/// GET the followed threads via the bearer lane (bearer never leaves Rust —
+/// same posture as `push_availability`). `{enabled:false}` ⇒ `Disabled`.
+async fn fetch_followed_threads(cfg: &AppConfig) -> Result<FollowedThreadsResponse, String> {
+    let url = format!(
+        "{}/api/email/followed-threads",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("engine unreachable: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status.as_u16(), body.trim()));
+    }
+    let parsed: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse followed-threads: {e}"))?;
+    if parsed.get("enabled") == Some(&serde_json::Value::Bool(false)) {
+        return Ok(FollowedThreadsResponse::Disabled);
+    }
+    let threads = parsed
+        .get("threads")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(vec![]));
+    let threads: Vec<email_follow::FollowedThread> =
+        serde_json::from_value(threads).map_err(|e| format!("parse threads[]: {e}"))?;
+    Ok(FollowedThreadsResponse::Threads(threads))
+}
+
+/// Outcome of a single `POST /api/email/import`.
+enum EmailImportOutcome {
+    /// `{ok:true, documentId}` — a NEW message was ingested.
+    Imported,
+    /// `{ok:true, duplicate:true}` — the engine already had it.
+    Duplicate,
+    /// `{enabled:false}` — the flag flipped OFF mid-sweep. Stop the loop calmly.
+    Disabled,
+    /// Any failure (network / 4xx-5xx). Don't advance the watermark past it.
+    Failed(String),
+}
+
+/// POST one normalized message to `/api/email/import` (bearer stays in Rust).
+/// Non-throwing: every expected failure folds into `EmailImportOutcome`.
+async fn import_one_email(cfg: &AppConfig, body: serde_json::Value) -> EmailImportOutcome {
+    let url = format!("{}/api/email/import", cfg.base_url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return EmailImportOutcome::Failed(format!("HTTP client init: {e}")),
+    };
+    let resp = match client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return EmailImportOutcome::Failed(format!("engine unreachable: {e}")),
+    };
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return EmailImportOutcome::Failed(format!("HTTP {}: {}", status.as_u16(), body_text.trim()));
+    }
+    let parsed: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if parsed.get("enabled") == Some(&serde_json::Value::Bool(false)) {
+        return EmailImportOutcome::Disabled;
+    }
+    if parsed.get("duplicate") == Some(&serde_json::Value::Bool(true)) {
+        return EmailImportOutcome::Duplicate;
+    }
+    EmailImportOutcome::Imported
+}
+
+/// Read-modify-write the persisted email-follow state for one thread: cache its
+/// ConversationID, advance its watermark, and stamp `swept_at`. Best-effort
+/// (quiet on lock-poisoned / write failure), mirroring
+/// `auto_import_persist_onenote_watermark`. Called once per swept thread AFTER
+/// its imports so a mid-sweep crash never loses a message (the watermark only
+/// advances past what actually imported).
+fn persist_email_follow_thread(
+    app: &tauri::AppHandle,
+    thread_key: &str,
+    conversation_id: Option<&str>,
+    watermark: Option<&str>,
+    swept_at: &str,
+) {
+    let state = app.state::<AppState>();
+    let mut guard = match state.config.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let mut cfg = guard.clone().unwrap_or_default();
+    let slot = match cfg
+        .email_follow
+        .threads
+        .iter_mut()
+        .find(|t| t.thread_key == thread_key)
+    {
+        Some(t) => t,
+        None => {
+            cfg.email_follow.threads.push(email_follow::EmailFollowThread {
+                thread_key: thread_key.to_string(),
+                ..Default::default()
+            });
+            cfg.email_follow
+                .threads
+                .last_mut()
+                .expect("just pushed")
+        }
+    };
+    if let Some(cid) = conversation_id {
+        if !cid.is_empty() {
+            slot.conversation_id = Some(cid.to_string());
+        }
+    }
+    if let Some(wm) = watermark {
+        if !wm.is_empty() {
+            slot.watermark = Some(wm.to_string());
+        }
+    }
+    slot.swept_at = Some(swept_at.to_string());
+    if let Err(e) = save_config_to_disk(&cfg) {
+        log::warn!("WP-INTAKE E5: persist email-follow thread failed: {}", e);
+    }
+    *guard = Some(cfg);
+}
+
+/// WP-INTAKE E5-app — one-shot email thread-following sweep, driven by the
+/// shared app-side channel tick (widget.js `email` callee). See the section
+/// header above for the full flow. Never `Err`s in a way that aborts the tick:
+/// all failure classes fold into the returned summary or a quiet log.
+#[tauri::command]
+async fn email_follow_sweep(
+    app: tauri::AppHandle,
+) -> Result<EmailFollowSweepSummary, String> {
+    let mut summary = EmailFollowSweepSummary::default();
+
+    // ── 0. Config gate ──
+    let cfg = match current_config_opt(&app) {
+        Some(c) => c,
+        None => {
+            summary.skipped = true;
+            return Ok(summary);
+        }
+    };
+    if cfg.base_url.trim().is_empty() || cfg.bearer_token.trim().is_empty() {
+        summary.skipped = true;
+        return Ok(summary);
+    }
+
+    // ── 1. Platform gate BEFORE any engine traffic (Mac = zero network) ──
+    // Fail-closed-but-VISIBLE: log the calm no-op so a sweep that RAN leaves a
+    // trace (mirrors the OneNote sweep's "platform no-op" log). Zero engine
+    // traffic on this path — the return is BEFORE any HTTP call.
+    if !email_follow::is_supported_platform() {
+        summary.platform_unsupported = true;
+        log::info!(
+            "WP-INTAKE E5: email sweep = platform no-op (local Outlook is Windows-only; no engine traffic)"
+        );
+        return Ok(summary);
+    }
+
+    // ── 2. GET followed threads (flag-off ⇒ calm no-op) ──
+    let engine_threads = match fetch_followed_threads(&cfg).await {
+        Ok(FollowedThreadsResponse::Disabled) => {
+            summary.enabled = false;
+            return Ok(summary);
+        }
+        Ok(FollowedThreadsResponse::Threads(t)) => t,
+        Err(e) => {
+            // Engine unreachable / rejected token / bad body: calm skip (the
+            // next tick retries). Never throw into the tick.
+            log::warn!("WP-INTAKE E5: followed-threads fetch failed (non-fatal): {}", e);
+            return Ok(summary);
+        }
+    };
+    summary.enabled = true;
+    summary.threads_total = engine_threads.len();
+    if engine_threads.is_empty() {
+        return Ok(summary);
+    }
+
+    // ── 3. Merge with the persisted cache → sweep state per thread ──
+    let cache: std::collections::HashMap<String, email_follow::EmailFollowThread> = cfg
+        .email_follow
+        .threads
+        .iter()
+        .map(|t| (t.thread_key.clone(), t.clone()))
+        .collect();
+    let mut states: Vec<email_follow::ThreadSweepState> = Vec::new();
+    for et in &engine_threads {
+        let cached = cache.get(&et.thread_key);
+        let local_wm = cached.and_then(|c| c.watermark.as_deref());
+        let effective = email_follow::effective_watermark(&et.last_message_at, local_wm);
+        // Normalize the engine's message ids defensively (they arrive already
+        // normalized, but the match must be exact).
+        let known_ids: Vec<String> = et
+            .message_ids
+            .iter()
+            .map(|m| email_follow::normalize_message_id(m))
+            .filter(|m| !m.is_empty())
+            .collect();
+        states.push(email_follow::ThreadSweepState {
+            thread_key: et.thread_key.clone(),
+            conversation_id: cached.and_then(|c| c.conversation_id.clone()),
+            known_ids,
+            effective_watermark: effective,
+            swept_at: cached.and_then(|c| c.swept_at.clone()),
+        });
+    }
+
+    // ── 4. Select ≤ cap threads, least-recently-swept first ──
+    let (selected, deferred_threads) =
+        email_follow::select_threads_to_sweep(states, email_follow::EMAIL_FOLLOW_THREAD_CAP);
+    summary.threads_checked = selected.len();
+    summary.deferred_threads = deferred_threads;
+    if deferred_threads > 0 {
+        // No silent caps (house law): the tail rotates in on later ticks.
+        log::info!(
+            "WP-INTAKE E5: {} followed threads this sweep; {} deferred to a later tick (thread cap {})",
+            selected.len(),
+            deferred_threads,
+            email_follow::EMAIL_FOLLOW_THREAD_CAP
+        );
+    }
+    if selected.is_empty() {
+        return Ok(summary);
+    }
+
+    // ── 5. Build the PowerShell input + oldest watermark, then read ──
+    let ps_threads: Vec<serde_json::Value> = selected
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "k": s.thread_key,
+                "c": s.conversation_id.clone().unwrap_or_default(),
+                "w": s.effective_watermark,
+                "ids": s.known_ids,
+            })
+        })
+        .collect();
+    let threads_json = serde_json::to_string(&ps_threads).unwrap_or_else(|_| "[]".to_string());
+    let oldest_watermark = selected
+        .iter()
+        .map(|s| s.effective_watermark.clone())
+        .reduce(|a, b| email_follow::iso_min(&a, &b))
+        .unwrap_or_default();
+
+    let input = email_follow::FollowReadInput {
+        threads_json,
+        oldest_watermark,
+        discovery_cap: email_follow::EMAIL_FOLLOW_THREAD_CAP,
+        message_cap: email_follow::EMAIL_FOLLOW_MESSAGE_CAP,
+    };
+    let read = match tauri::async_runtime::spawn_blocking(move || {
+        email_follow::run_follow_read(input)
+    })
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(email_follow::EmailFollowError::PlatformUnsupported)) => {
+            summary.platform_unsupported = true;
+            return Ok(summary);
+        }
+        Ok(Err(e)) => {
+            // COM-not-registered / Outlook not running / PowerShell error: calm
+            // no-op, retry next tick. Fail-closed-but-VISIBLE via the log.
+            log::warn!("WP-INTAKE E5: Outlook read failed (non-fatal): {}", e);
+            return Ok(summary);
+        }
+        Err(e) => {
+            log::warn!("WP-INTAKE E5: read join error: {}", e);
+            return Ok(summary);
+        }
+    };
+
+    // ── 6. Cache newly-discovered ConversationIDs (index for quick lookup) ──
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let mut discovered_cid: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for (tk, cid) in &read.conversations {
+        discovered_cid.insert(tk.clone(), cid.clone());
+    }
+    summary.discovered = read.conversations.len();
+    summary.truncated = read.truncated;
+
+    // ── 7. Import messages oldest-first (cap applied), track per-thread max ──
+    let (to_import, deferred_messages) = email_follow::select_messages_to_import(
+        read.messages,
+        email_follow::EMAIL_FOLLOW_MESSAGE_CAP,
+    );
+    if deferred_messages > 0 {
+        summary.truncated = true;
+        summary.deferred_messages += deferred_messages;
+    }
+    if summary.truncated {
+        log::info!(
+            "WP-INTAKE E5: message cap {} hit; {} message(s) deferred to a later tick",
+            email_follow::EMAIL_FOLLOW_MESSAGE_CAP,
+            summary.deferred_messages
+        );
+    }
+
+    // Per-thread newest successfully-imported date (to advance the watermark).
+    let mut advanced: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut disabled_midway = false;
+    for msg in &to_import {
+        let thread_key = msg.thread_key.clone();
+        let date = msg.date_time_created.clone();
+        let body = email_follow::build_import_body(msg);
+        match import_one_email(&cfg, body).await {
+            EmailImportOutcome::Imported => {
+                summary.imported += 1;
+            }
+            EmailImportOutcome::Duplicate => {
+                summary.duplicates += 1;
+            }
+            EmailImportOutcome::Disabled => {
+                // Flag flipped OFF mid-sweep — stop calmly. Nothing after this
+                // point counts as failed (the lane is simply off now).
+                disabled_midway = true;
+                break;
+            }
+            EmailImportOutcome::Failed(e) => {
+                summary.failed += 1;
+                log::info!(
+                    "WP-INTAKE E5: import failed for {} (thread {}): {}",
+                    email_follow::normalize_message_id(&msg.internet_message_id),
+                    thread_key,
+                    e
+                );
+                // Do NOT advance the watermark past a failed message.
+                continue;
+            }
+        }
+        // Success (imported | duplicate): advance this thread's high-water mark.
+        let entry = advanced.entry(thread_key).or_default();
+        *entry = email_follow::iso_max(entry, &date);
+    }
+
+    // ── 8. Persist per-thread state (ConversationID + watermark + swept_at) ──
+    // Every SELECTED thread gets swept_at stamped (so the rotation advances even
+    // for threads with zero new messages); watermark/ConversationID update only
+    // when we have a newer value.
+    for s in &selected {
+        let cid = discovered_cid
+            .get(&s.thread_key)
+            .map(|c| c.as_str())
+            .or(s.conversation_id.as_deref());
+        // New watermark = the newest imported date for this thread, if that is
+        // beyond the effective watermark we started from.
+        let new_wm = advanced.get(&s.thread_key).and_then(|d| {
+            if email_follow::iso_after(d, &s.effective_watermark) {
+                Some(email_follow::iso_max(&s.effective_watermark, d))
+            } else {
+                None
+            }
+        });
+        persist_email_follow_thread(
+            &app,
+            &s.thread_key,
+            cid,
+            new_wm.as_deref(),
+            &now_iso,
+        );
+    }
+
+    if disabled_midway {
+        log::info!("WP-INTAKE E5: import lane disabled mid-sweep; stopped calmly");
+    }
+    log::info!(
+        "WP-INTAKE E5: email sweep ran (threads={}/{} discovered={} imported={} duplicates={} failed={} deferred_msgs={})",
+        summary.threads_checked,
+        summary.threads_total,
+        summary.discovered,
+        summary.imported,
+        summary.duplicates,
+        summary.failed,
+        summary.deferred_messages
+    );
+    Ok(summary)
 }
 
 // ── Auto-import IPC surface ────────────────────────────────────────────────
@@ -8071,9 +8719,15 @@ pub fn run() {
             get_auto_import_config,
             set_auto_import_config,
             auto_import_available_sources,
+            // WP-INTAKE T1 — one-shot OneNote sweep, driven by the shared
+            // app-side channel tick (widget.js onenoteSweep callee).
+            onenote_auto_import_sweep,
             // WP-CALENDAR — local calendar read + availability push
             calendar_read_window,
             push_availability,
+            // WP-INTAKE E5-app — email thread-following sweep, driven by the
+            // shared app-side channel tick (widget.js email callee).
+            email_follow_sweep,
         ])
         .on_menu_event(|app, event| {
             // D-CUX-15 dispatch table. Each ID maps to a deferred action.
@@ -8535,6 +9189,7 @@ mod tests {
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
+            email_follow: email_follow::EmailFollowState::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -8599,6 +9254,7 @@ mod tests {
             plaud_connect: None,
             auto_import: AutoImportConfig::default(),
             dismissed_record_ids: Vec::new(),
+            email_follow: email_follow::EmailFollowState::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -9226,6 +9882,166 @@ mod tests {
             find_section_with_notebook(&tree, "{SEC-EMPTY}").expect("empty section is findable");
         assert_eq!(notebook.name, "Work");
         assert_eq!(section.pages.len(), 0);
+    }
+
+    // ───── WP-INTAKE T1 — OneNote sweep page selection (pure) ─────
+    //
+    // `select_fresh_onenote_pages` is the watermark diff + cap logic driving
+    // the shared-tick sweep. It's a pure function (the `seen` predicate is
+    // injected) so it runs on every platform without COM or AppState.
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::FixedOffset> {
+        chrono::DateTime::parse_from_rfc3339(s).expect("valid rfc3339")
+    }
+
+    fn pg(id: &str, t: &str) -> (String, chrono::DateTime<chrono::FixedOffset>) {
+        (id.to_string(), ts(t))
+    }
+
+    #[test]
+    fn select_fresh_keeps_only_pages_strictly_after_watermark() {
+        // Watermark = 12:00. Pages at 11:00 (old), 12:00 (== watermark, NOT
+        // fresh — strictly-after), 13:00 (fresh). Only the 13:00 page selects.
+        let pages = vec![
+            pg("{OLD}", "2026-07-10T11:00:00Z"),
+            pg("{EQ}", "2026-07-10T12:00:00Z"),
+            pg("{NEW}", "2026-07-10T13:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        assert_eq!(deferred, 0);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].0, "{NEW}");
+    }
+
+    #[test]
+    fn select_fresh_excludes_already_sent_this_session() {
+        // Both pages are newer than the watermark, but {SENT} was already
+        // sent this session (session-dedup) so only {UNSENT} selects.
+        let pages = vec![
+            pg("{SENT}", "2026-07-10T13:00:00Z"),
+            pg("{UNSENT}", "2026-07-10T14:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |id| id == "{SENT}",
+        );
+        assert_eq!(deferred, 0);
+        assert_eq!(sel.len(), 1);
+        assert_eq!(sel[0].0, "{UNSENT}");
+    }
+
+    #[test]
+    fn select_fresh_returns_oldest_first() {
+        // Deterministic catch-up: a truncated sweep must advance the watermark
+        // from the oldest edge, so selection is sorted oldest-first regardless
+        // of input order.
+        let pages = vec![
+            pg("{C}", "2026-07-10T15:00:00Z"),
+            pg("{A}", "2026-07-10T13:00:00Z"),
+            pg("{B}", "2026-07-10T14:00:00Z"),
+        ];
+        let (sel, _deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        let ids: Vec<&str> = sel.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["{A}", "{B}", "{C}"]);
+    }
+
+    #[test]
+    fn select_fresh_caps_and_reports_deferred_oldest_first() {
+        // 5 fresh pages, cap 2 ⇒ the 2 OLDEST are selected, 3 deferred to a
+        // later tick. This is the huge-first-sweep guard: the app never
+        // Publishes an unbounded backlog in one tick, and the watermark
+        // advances only past what actually sent, so the next tick resumes.
+        let pages = vec![
+            pg("{P5}", "2026-07-10T17:00:00Z"),
+            pg("{P1}", "2026-07-10T13:00:00Z"),
+            pg("{P4}", "2026-07-10T16:00:00Z"),
+            pg("{P2}", "2026-07-10T14:00:00Z"),
+            pg("{P3}", "2026-07-10T15:00:00Z"),
+        ];
+        let (sel, deferred) =
+            select_fresh_onenote_pages(pages, ts("2026-07-10T12:00:00Z"), 2, |_| false);
+        assert_eq!(deferred, 3);
+        let ids: Vec<&str> = sel.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["{P1}", "{P2}"]);
+    }
+
+    #[test]
+    fn select_fresh_empty_when_nothing_new() {
+        // All pages at or below the watermark ⇒ empty selection, zero
+        // deferred (the steady-state case every tick after catch-up).
+        let pages = vec![
+            pg("{X}", "2026-07-10T10:00:00Z"),
+            pg("{Y}", "2026-07-10T11:00:00Z"),
+        ];
+        let (sel, deferred) = select_fresh_onenote_pages(
+            pages,
+            ts("2026-07-10T12:00:00Z"),
+            ONENOTE_SWEEP_PAGE_CAP,
+            |_| false,
+        );
+        assert!(sel.is_empty());
+        assert_eq!(deferred, 0);
+    }
+
+    #[test]
+    fn onenote_sweep_summary_serde_is_camel_case() {
+        // widget.js reads the summary fields (imported / platformUnsupported /
+        // deferred) to log the receipt; a drift to snake_case would break the
+        // callee's log line. Assert the wire shape.
+        let s = OneNoteSweepSummary {
+            skipped: false,
+            platform_unsupported: true,
+            sources: 2,
+            baselined: 1,
+            imported: 3,
+            failed: 1,
+            truncated: true,
+            deferred: 4,
+        };
+        let json = serde_json::to_string(&s).expect("serializes");
+        assert!(json.contains("\"platformUnsupported\":true"), "{}", json);
+        assert!(json.contains("\"imported\":3"), "{}", json);
+        assert!(json.contains("\"deferred\":4"), "{}", json);
+    }
+
+    #[test]
+    fn email_follow_sweep_summary_serde_is_camel_case() {
+        // widget.js reads these fields (platformUnsupported / enabled /
+        // threadsChecked / imported / duplicates / deferredMessages) to log the
+        // receipt; a drift to snake_case would break the callee's log line.
+        let s = EmailFollowSweepSummary {
+            skipped: false,
+            enabled: true,
+            platform_unsupported: false,
+            threads_total: 5,
+            threads_checked: 3,
+            deferred_threads: 2,
+            discovered: 1,
+            imported: 4,
+            duplicates: 1,
+            failed: 0,
+            truncated: true,
+            deferred_messages: 7,
+        };
+        let json = serde_json::to_string(&s).expect("serializes");
+        assert!(json.contains("\"platformUnsupported\":false"), "{}", json);
+        assert!(json.contains("\"enabled\":true"), "{}", json);
+        assert!(json.contains("\"threadsChecked\":3"), "{}", json);
+        assert!(json.contains("\"imported\":4"), "{}", json);
+        assert!(json.contains("\"duplicates\":1"), "{}", json);
+        assert!(json.contains("\"deferredMessages\":7"), "{}", json);
     }
 
     #[test]

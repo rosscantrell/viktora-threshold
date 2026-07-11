@@ -711,14 +711,118 @@ async function pushAvailability() {
 // Register the calendar push FIRST (WP-CALENDAR piece B).
 registerChannelCallee("availability", pushAvailability);
 
-// WP-INTAKE T1 OneNote sweep plugs in here — a LATER, separate PR. It will
-// `registerChannelCallee("onenote", onenoteSweep)` where onenoteSweep diffs
-// each configured notebook against its per-source watermark, exports new/changed
-// pages via the existing ingest_files path, and advances the watermark. The
-// Windows COM plumbing + console-flash suppression already exist
-// (src-tauri/src/onenote_windows.rs, spawn_ps_script with CREATE_NO_WINDOW).
-// Nothing else in this tick needs to change when it lands — it just joins the
-// registry.
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE T1 — OneNote sweep (registered as the "onenote" callee).
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The whole sweep lives in Rust (`onenote_auto_import_sweep`): it reads the
+// persisted auto-import config, enumerates each configured notebook via the
+// existing OneNote COM plumbing, diffs pages against the per-source watermark,
+// exports + sends new/changed pages through the existing per-page ingest path,
+// and advances the watermark ONLY past successful sends. All the proven
+// COM/watermark/dedup machinery (WP-AUTO-IMPORT + WP-ONENOTE-EXPORT) is reused
+// verbatim — this callee is a thin driver so the sweep runs off the ONE shared
+// app-side tick instead of its own Rust timer (one tick, not a forest).
+//
+// Self-healing catch-up is inherent: the app closed all morning ⇒ the launch
+// pass sweeps; a failed send retries next tick (watermark didn't advance past
+// it). The command NEVER rejects in a way that matters — every failure class
+// (unconfigured, disabled, macOS/Windows COM-absent, per-page failure) is
+// folded into the returned summary, and the tick try/catches on top of that.
+//
+// macOS/Linux: OneNote COM is Windows-only, so the enumerate returns
+// PlatformUnsupported and the sweep is a calm no-op (`platformUnsupported`).
+// We log that distinctly from a real failure and the tick continues.
+
+async function onenoteSweep() {
+  let summary;
+  try {
+    summary = await invoke("onenote_auto_import_sweep");
+  } catch (err) {
+    // Should not happen (the command returns a summary, not an error, for
+    // every expected case) — but if the IPC itself fails, log calmly and let
+    // the next tick retry. Never rethrow into the tick.
+    console.warn("[onenote-sweep] command failed:", err);
+    return;
+  }
+  if (!summary || summary.skipped) {
+    // Auto-import disabled / no configured notebook / unconfigured — a silent
+    // no-op by design (nothing to say at the console for the common off case).
+    return;
+  }
+  if (summary.platformUnsupported) {
+    // Windows-only channel; on this Mac dev machine (and any non-Windows box)
+    // the sweep is a deliberate no-op. Log once per tick so the platform gate
+    // is visible in the dev console, then continue.
+    console.log("[onenote-sweep] platform no-op (OneNote COM is Windows-only)");
+    return;
+  }
+  const parts = [`imported=${summary.imported}`, `failed=${summary.failed}`];
+  if (summary.baselined) parts.push(`baselined=${summary.baselined}`);
+  if (summary.truncated) parts.push(`deferred=${summary.deferred} (page cap)`);
+  console.log(`[onenote-sweep] ${parts.join(" · ")} across ${summary.sources} source(s)`);
+}
+
+registerChannelCallee("onenote", onenoteSweep);
+
+// ───────────────────────────────────────────────────────────────────────────
+// WP-INTAKE E5-app — email thread-following sweep (registered as "email").
+// ───────────────────────────────────────────────────────────────────────────
+//
+// The whole sweep lives in Rust (`email_follow_sweep`): it GETs the followed
+// threads from the engine (bearer stays in Rust), locates each Outlook
+// conversation by known internet Message-IDs (caching threadKey↔ConversationID),
+// scans Inbox + Sent Items for messages newer than the per-thread watermark, and
+// pushes each via the engine's POST /api/email/import — advancing the watermark
+// only past successful imports. Windows COM only; macOS/Linux is a calm no-op
+// (the Rust command short-circuits BEFORE any engine call → zero engine traffic
+// on the no-op). The engine flag EMAIL_THREAD_FOLLOW_ENABLED gates it: flag-off
+// ⇒ `{enabled:false}` ⇒ a calm no-op here too.
+//
+// This callee is a thin driver: it invokes the command, logs a concise receipt
+// (threads checked / messages imported / deferred), distinguishes a platform
+// no-op from a real failure, and NEVER rethrows into the shared tick.
+
+async function emailFollowSweep() {
+  let summary;
+  try {
+    summary = await invoke("email_follow_sweep");
+  } catch (err) {
+    // The command returns a summary (not an error) for every expected case; a
+    // rejection means the IPC itself failed. Log calmly, let the next tick
+    // retry, never rethrow into the tick.
+    console.warn("[email-follow] command failed:", err);
+    return;
+  }
+  if (!summary || summary.skipped) {
+    // Not configured yet (fresh install before Configure) — silent no-op.
+    return;
+  }
+  if (summary.platformUnsupported) {
+    // Windows-only channel; on this Mac dev machine (and any non-Windows box)
+    // the sweep is a deliberate no-op made WITHOUT any engine traffic.
+    console.log("[email-follow] platform no-op (local Outlook is Windows-only)");
+    return;
+  }
+  if (!summary.enabled) {
+    // Engine flag EMAIL_THREAD_FOLLOW_ENABLED is OFF — a calm no-op, not an error.
+    console.log("[email-follow] disabled server-side (calm no-op)");
+    return;
+  }
+  const parts = [
+    `imported=${summary.imported}`,
+    `duplicates=${summary.duplicates}`,
+    `failed=${summary.failed}`,
+  ];
+  if (summary.discovered) parts.push(`discovered=${summary.discovered}`);
+  if (summary.deferredThreads) parts.push(`threadsDeferred=${summary.deferredThreads}`);
+  if (summary.truncated) parts.push(`msgsDeferred=${summary.deferredMessages} (cap)`);
+  console.log(
+    `[email-follow] ${parts.join(" · ")} across ${summary.threadsChecked}/${summary.threadsTotal} thread(s)`,
+  );
+}
+
+registerChannelCallee("email", emailFollowSweep);
 
 // Expose the pure mapper for a bundler-free smoke (node --check target); no-op
 // side effect in the browser.
