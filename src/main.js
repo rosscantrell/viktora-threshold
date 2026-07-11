@@ -725,7 +725,388 @@ function switchSettingsPanel(name) {
   if (name === "email-capture") renderEmailCapture();
   // The Integrations panel's AI-platforms section is lazy too — GET
   // /api/mcp/grants on open (WP-MCP-V2 Phase C).
-  if (name === "integrations") renderAiConnections();
+  if (name === "integrations") {
+    renderAiConnections();
+    renderIntegrationDoctor();
+  }
+}
+
+// ── Connections doctor (WP-ONBOARD) ──
+// One card per channel at the top of Settings → Integrations, driven by the
+// integration_doctor IPC probes. States: ready (flowing) / action (one step,
+// button on the card) / blocked (org or platform says no — say so and name
+// the fallback, never hide). Every action ends by re-rendering, so the cards
+// always reflect probed truth rather than optimistic UI state.
+let doctorRenderInFlight = false;
+
+// Session + cross-restart memory of the local calendar probe. TCC only
+// prompts the FIRST time — once the grant flag is set, re-running the live
+// probe at render time is silent (granted ⇒ quiet success; later revoked ⇒
+// quiet typed error), so the card stays truthful without ever ambushing.
+const CAL_GRANT_KEY = "thresholdCalendarProbeGranted";
+let lastCalendarProbe = null;
+let doctorRenderQueued = false;
+
+async function renderIntegrationDoctor() {
+  const body = document.getElementById("integration-doctor-body");
+  if (!body) return;
+  // Never DROP a render: if one is mid-flight, queue exactly one trailing
+  // re-run (a dropped render is how the cards silently go stale).
+  if (doctorRenderInFlight) {
+    doctorRenderQueued = true;
+    return;
+  }
+  doctorRenderInFlight = true;
+  let step = "probes";
+  try {
+    const report = await tauri.core.invoke("integration_doctor");
+    // ICS status only matters when the engine is reachable with the lane on.
+    let ics = null;
+    if (report?.engine?.state === "reachable" && report?.engine?.availabilityLaneEnabled) {
+      step = "calendar-link status";
+      try { ics = await tauri.core.invoke("ics_source_status"); } catch { /* card falls back to local-only */ }
+    }
+    // Previously-granted local calendar: refresh the live state silently.
+    if (!lastCalendarProbe && report?.calendarLocal?.readerPresent && localStorage.getItem(CAL_GRANT_KEY)) {
+      step = "calendar refresh";
+      try { lastCalendarProbe = await tauri.core.invoke("probe_calendar_live"); } catch { /* keep silent-unknown */ }
+    }
+    step = "render";
+    const stamp = document.createElement("p");
+    stamp.className = "doctor-card-detail";
+    stamp.textContent = `Checked ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+    body.replaceChildren(...buildDoctorCards(report, ics), stamp);
+  } catch (err) {
+    console.error("[doctor] render failed at", step, err);
+    body.replaceChildren(doctorNote("err", `Couldn't check connections (${step}): ${err}`));
+  } finally {
+    doctorRenderInFlight = false;
+    if (doctorRenderQueued) {
+      doctorRenderQueued = false;
+      renderIntegrationDoctor();
+    }
+  }
+}
+
+function doctorRelTime(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const min = Math.round(ms / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.round(min / 60);
+  return hr < 24 ? `${hr}h ago` : `${Math.round(hr / 24)}d ago`;
+}
+
+function doctorCard({ name, detail, pill, pillState, actions = [] }) {
+  const card = document.createElement("div");
+  card.className = "doctor-card";
+  card.dataset.state = pillState;
+
+  const row = document.createElement("div");
+  row.className = "doctor-card-row";
+
+  const main = document.createElement("div");
+  main.className = "doctor-card-main";
+  const nameEl = document.createElement("p");
+  nameEl.className = "doctor-card-name";
+  nameEl.textContent = name;
+  const detailEl = document.createElement("p");
+  detailEl.className = "doctor-card-detail";
+  detailEl.textContent = detail;
+  main.append(nameEl, detailEl);
+
+  const pillEl = document.createElement("span");
+  pillEl.className = "doctor-pill";
+  pillEl.dataset.state = pillState;
+  pillEl.textContent = pill;
+
+  const actionsEl = document.createElement("div");
+  actionsEl.className = "doctor-card-actions";
+  for (const a of actions) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = a.link ? "btn-inline-link" : `btn ${a.primary ? "btn-primary" : "btn-secondary"} btn-compact`;
+    btn.textContent = a.label;
+    btn.addEventListener("click", () => a.onClick(card, btn));
+    actionsEl.appendChild(btn);
+  }
+
+  row.append(main, pillEl, actionsEl);
+  card.appendChild(row);
+  return card;
+}
+
+function doctorNote(kind, text) {
+  const p = document.createElement("p");
+  p.className = "doctor-note";
+  p.dataset.kind = kind;
+  p.textContent = text;
+  return p;
+}
+
+function buildDoctorCards(report, ics) {
+  const cards = [];
+  if (report?.engine?.state !== "reachable") {
+    cards.push(doctorNote(
+      "warn",
+      "Not connected to your workspace yet — set the connection first. Below is only what this computer can do on its own.",
+    ));
+  }
+  cards.push(buildCalendarCard(report, ics));
+  cards.push(buildEmailFilesCard(report));
+  cards.push(buildPlaudCard(report));
+  cards.push(buildOneNoteCard(report));
+  return cards;
+}
+
+function buildCalendarCard(report, ics) {
+  const cal = report?.calendarLocal ?? {};
+  const icsConfigured = !!ics?.configured;
+
+  // Best working transport wins the headline.
+  if (icsConfigured && !ics?.lastError) {
+    return doctorCard({
+      name: "Calendar",
+      detail: ics?.lastPolledAt
+        ? `Flowing via your shared calendar link · last checked ${doctorRelTime(ics.lastPolledAt)}`
+        : "Shared calendar link saved — first check runs within 30 minutes.",
+      pill: "Ready",
+      pillState: "ready",
+      actions: [{ label: "Change link", link: true, onClick: (card) => toggleIcsExpand(card) }],
+    });
+  }
+
+  // Local probe already succeeded (this session, or a remembered grant).
+  if (lastCalendarProbe?.state === "works") {
+    const n = lastCalendarProbe.eventCount ?? 0;
+    return doctorCard({
+      name: "Calendar",
+      detail: `Reads this computer's calendar · ${n} upcoming ${n === 1 ? "event" : "events"} found`,
+      pill: "Ready",
+      pillState: "ready",
+    });
+  }
+
+  const probeFailed = lastCalendarProbe && lastCalendarProbe.state !== "works";
+  const actions = [];
+  let detail;
+  let pill = "1 step";
+
+  const runLiveProbe = async (card, btn) => {
+    btn.disabled = true;
+    btn.textContent = "Asking…";
+    try {
+      lastCalendarProbe = await tauri.core.invoke("probe_calendar_live");
+      if (lastCalendarProbe?.state === "works") {
+        localStorage.setItem(CAL_GRANT_KEY, "1");
+        showToast({ kind: "success", title: "Calendar connected", body: `Found ${lastCalendarProbe.eventCount ?? 0} upcoming events.` });
+      }
+    } catch (err) {
+      lastCalendarProbe = { state: "error", note: String(err) };
+    }
+    renderIntegrationDoctor();
+  };
+
+  if (cal.readerPresent && !probeFailed) {
+    detail = "Threshold can read the calendar on this computer. It will ask for access once.";
+    actions.push({ label: "Allow access", primary: true, onClick: runLiveProbe });
+  } else if (cal.readerPresent && probeFailed) {
+    detail = lastCalendarProbe.state === "permissionNeeded"
+      ? "Access was declined. Enable Threshold under System Settings → Privacy & Security → Automation, then try again — or use a shared calendar link."
+      : "The calendar couldn't be read on this computer. Try again — or use a shared calendar link instead.";
+    actions.push({ label: "Try again", primary: true, onClick: runLiveProbe });
+    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card) });
+  } else {
+    pill = "1 min";
+    detail = icsConfigured && ics?.lastError
+      ? "Your shared calendar link stopped working — publish a fresh one and paste it here."
+      : "No local calendar on this computer. Publish a busy-times link from Outlook on the web and paste it here.";
+    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card) });
+  }
+
+  return doctorCard({ name: "Calendar", detail, pill, pillState: "action", actions });
+}
+
+function toggleIcsExpand(card) {
+  const existing = card.querySelector(".doctor-expand");
+  if (existing) { existing.remove(); return; }
+  const expand = document.createElement("div");
+  expand.className = "doctor-expand";
+  const row = document.createElement("div");
+  row.className = "doctor-expand-row";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "https://outlook.office365.com/owa/calendar/…/calendar.ics";
+  input.setAttribute("aria-label", "Published calendar ICS link");
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "btn btn-primary btn-compact";
+  add.textContent = "Save link";
+  add.addEventListener("click", async () => {
+    const url = input.value.trim();
+    if (!url) return;
+    add.disabled = true;
+    add.textContent = "Checking…";
+    try {
+      await tauri.core.invoke("ics_source_set", { icsUrl: url });
+      showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed." });
+      renderIntegrationDoctor();
+    } catch (err) {
+      add.disabled = false;
+      add.textContent = "Save link";
+      expand.querySelector(".doctor-note")?.remove();
+      expand.appendChild(doctorNote("err", `That link didn't validate: ${err}`));
+    }
+  });
+  row.append(input, add);
+  const help = document.createElement("p");
+  help.className = "doctor-card-detail";
+  help.textContent = "Outlook on the web → Settings → Calendar → Shared calendars → publish \"Can view when I'm busy\", then paste the ICS link. Only busy times are shared — never titles.";
+  expand.append(row, help);
+  card.appendChild(expand);
+  input.focus();
+}
+
+function buildEmailFilesCard(report) {
+  const mail = report?.onedriveMail ?? {};
+  const root = report?.oneDriveRoot ?? {};
+
+  if (mail.state === "ready") {
+    const imported = mail.processedCount ?? 0;
+    const failed = mail.failedCount ?? 0;
+    return doctorCard({
+      name: "Email",
+      detail: failed > 0
+        ? `Flowing from your mail flows · ${imported} imported · ${failed} set aside for review`
+        : `Flowing from your mail flows · ${imported} imported so far`,
+      pill: "Ready",
+      pillState: "ready",
+      actions: [{ label: "Setup guide", link: true, onClick: (card, btn) => regenerateFlowRecipe(mail) }],
+    });
+  }
+
+  const candidates = Array.isArray(root.candidates) ? root.candidates : [];
+  if (!root.found || candidates.length === 0) {
+    return doctorCard({
+      name: "Email",
+      detail: "OneDrive isn't set up on this computer. Email still arrives via your capture address (see Email capture).",
+      pill: "Unavailable",
+      pillState: "blocked",
+    });
+  }
+
+  const business = candidates.find((c) => c.kind === "business") ?? candidates[0];
+  return doctorCard({
+    name: "Email",
+    detail: "One-minute setup: Threshold prepares a folder in your OneDrive and hands you the two mail flows. Turns green on its own when the first email lands.",
+    pill: "1 min",
+    pillState: "action",
+    actions: [{
+      label: "Set up",
+      primary: true,
+      onClick: async (card, btn) => {
+        btn.disabled = true;
+        btn.textContent = "Preparing…";
+        try {
+          const prepared = await tauri.core.invoke("onedrive_prepare_mail_folder", { root: business.path });
+          const parent = (prepared?.folder || "").replace(/[\\/]mail[\\/]?$/, "");
+          const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent || business.path });
+          const links = await tauri.core.invoke("integration_doctor_links");
+          try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries the pointer */ }
+          card.querySelector(".doctor-expand")?.remove();
+          const expand = document.createElement("div");
+          expand.className = "doctor-expand";
+          expand.appendChild(doctorNote("ok",
+            "Folder ready. The flow recipe is saved in your OneDrive (Apps/Threshold) — right there in the browser too. Build the two flows per the recipe, turn them on, then send yourself an email. This card turns green when it arrives."));
+          const copyRow = document.createElement("div");
+          copyRow.className = "doctor-expand-row";
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "btn btn-secondary btn-compact";
+          copyBtn.textContent = "Copy recipe location";
+          copyBtn.addEventListener("click", async () => {
+            try {
+              await tauri.core.invoke("copy_text", { text: pkg?.recipePath || parent });
+              copyBtn.textContent = "Copied";
+            } catch { /* non-fatal */ }
+          });
+          copyRow.appendChild(copyBtn);
+          expand.append(copyRow);
+          card.appendChild(expand);
+          btn.remove();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = "Set up";
+          showToast({ kind: "error", title: "Couldn't prepare the folder", body: String(err) });
+        }
+      },
+    }],
+  });
+}
+
+async function regenerateFlowRecipe(mail) {
+  try {
+    const parent = (mail?.folder || "").replace(/[\\/]mail[\\/]?$/, "");
+    if (!parent) return;
+    const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent });
+    await tauri.core.invoke("copy_text", { text: pkg?.recipePath || parent });
+    showToast({ kind: "success", title: "Setup guide refreshed", body: "Recipe regenerated in OneDrive (Apps/Threshold); its location is on your clipboard." });
+  } catch (err) {
+    showToast({ kind: "error", title: "Couldn't regenerate the guide", body: String(err) });
+  }
+}
+
+function buildPlaudCard(report) {
+  const plaud = report?.plaud ?? {};
+  if (plaud.state === "connected") {
+    return doctorCard({
+      name: "Plaud recordings",
+      detail: "Connected — new recordings enter your field within about 30 minutes.",
+      pill: "Ready",
+      pillState: "ready",
+    });
+  }
+  return doctorCard({
+    name: "Plaud recordings",
+    detail: "Connect your recorder and new recordings flow in on their own.",
+    pill: "1 step",
+    pillState: "action",
+    actions: [{
+      label: "Connect",
+      primary: true,
+      onClick: () => {
+        document.getElementById("connection-plaud")?.scrollIntoView({ behavior: "smooth", block: "center" });
+        document.getElementById("btn-plaud-connect")?.focus();
+      },
+    }],
+  });
+}
+
+function buildOneNoteCard(report) {
+  const on = report?.oneNoteCom ?? {};
+  if (on.state === "available") {
+    return doctorCard({
+      name: "OneNote",
+      detail: "Ready — designated notebooks sweep in automatically; the hotkey sends the page you're on.",
+      pill: "Ready",
+      pillState: "ready",
+    });
+  }
+  if (on.state === "notApplicable") {
+    return doctorCard({
+      name: "OneNote",
+      detail: "Windows only. On this computer, notes still arrive via email capture.",
+      pill: "Unavailable",
+      pillState: "blocked",
+    });
+  }
+  return doctorCard({
+    name: "OneNote",
+    detail: "OneNote desktop wasn't found on this computer. Notes still arrive via email capture.",
+    pill: "Unavailable",
+    pillState: "blocked",
+  });
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
@@ -17093,6 +17474,11 @@ window.addEventListener("DOMContentLoaded", () => {
   if (outlookAddinBtn) {
     outlookAddinBtn.addEventListener("click", handleOutlookAddinInstallClick);
   }
+
+  // Connections doctor re-check (WP-ONBOARD)
+  document.getElementById("btn-doctor-refresh")?.addEventListener("click", () => {
+    renderIntegrationDoctor();
+  });
   // Phase-progress events fire from the Rust orchestrator; listener is
   // process-wide (no view-bound teardown needed — the Plaud card lives in
   // Settings → Integrations and reads status on Settings open).
