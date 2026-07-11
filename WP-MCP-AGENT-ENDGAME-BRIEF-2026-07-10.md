@@ -351,28 +351,42 @@ section as it ships — and expose it through the MCP itself.
   discipline as the pilot-full flag-parity gate; a drift test should enforce
   registry-entry completeness.
 
-### C5. Build queue implied by Part C (ordered; re-ordered 2026-07-11, Ross)
+### C5. Build queue implied by Part C (ordered; re-ordered 2026-07-11, Ross;
+### items 1-4 SHIPPED + DEPLOYED to ross.viktora.ai same day)
 
 1. **Capability ledger (C4) + `propose_to_outbox`, PAIRED in one slice** —
-   the ledger ships first because it's the cheapest item and compounds
-   everything after it (every later capability ships with selection metadata
-   from day one instead of becoming retrofit); `propose_to_outbox` rides the
-   same slice as the FIRST capability shipped under the same-PR ledger rule —
-   disciplines take hold with a first enforced example, not a standing
-   instruction. Outbox = the async wing's "done" for outbound work: a
-   lifecycle lane (send/dismiss), not prose in chat.
-2. **Agent closure lane** — async runs propose-resolve their own completed
-   commitments (ratify inbox / propose-edit). THE most important semantic
-   gap: the 0/349-resolve problem is now the agent's too; async execution
-   without closure makes the field worse, not better. Ships immediately
-   behind #1 and adopts the ledger rule.
-3. **Plan-anchor join in the packet** — a "today's plan" reconciliation
-   section keyed off the morning capture doc's record-set.
-4. **`mark_seen` fix** — `newSince` is permanently null today; C2 is built on
-   the watermark. Small fix, gates the more important organ.
+   ✅ **SHIPPED: engine PR #439** (merged + live). `McpCapability` gains
+   purpose/whenToUse/unlocks/composesWith, all entries backfilled, drift test
+   enforces the same-PR rule, `list_capabilities` serves the ledger, packet
+   carries a compact LEDGER_POINTER. `propose_to_outbox` shipped as the first
+   capability under the rule — WITH ARTIFACT PAYLOADS (handoff §5 hard
+   requirement: outbox-artifacts store lane, 512KB/file + 2MB/call caps,
+   the deck+pre-read "hold ready-to-send" live case is a named test).
+2. **Agent closure lane** — ✅ **SHIPPED: engine PR #438** (merged + live).
+   `propose_record_edit` (resolve / re_date / link); every verb an INERT
+   HITL proposal (`action:'propose'`, `proposedBy:'mcp-agent'`) — test-pinned
+   that a proposal never silently flips a record resolved; closure applies
+   only at human ratification through existing machinery.
+3. **Plan-anchor join in the packet** — ✅ **SHIPPED: engine PR #440**
+   (merged + live). `todaysPlan` reconciliation section: anchor = today's
+   session-close capture doc(s) (adapter provenance + title convention),
+   diff = moved/stalled/newlyActionable/stillOpen + byOwner(user/companion),
+   payload-capped, honest `present:false` when no plan was captured.
+   Live-verified day one: found the real 2026-07-11 debrief capture,
+   planCount 11. Also carried the captureSource adapter-fallback fix.
+4. **`mark_seen` fix** — ✅ **ALREADY ON MAIN** (v3.2 "honest watermark",
+   commit 9d1eaba, predated the brief) — verified, not re-implemented.
 5. **Post-mint interrupt evaluation** (C2 gate) + ping delivery through the
-   ✦ door, with the held-count per fail-closed-but-visible.
+   ✦ door, with the held-count per fail-closed-but-visible. NOT built (wants
+   a design pass on ping delivery first).
 6. **`mode:'review'` horizon** — after a week+ of real day-plan lineage.
+
+Also shipped in the same sweep: engine PR #441 (reenrich endpoint bearer-gate
+fix — the #414 bug class, found live re-enriching the 2026-07-10 capture docs;
+audit-pinned both directions). Deployed state: ross.viktora.ai runs 8b00356 —
+18 MCP tools, full ledger, todaysPlan live, lazy-boot (#437) killing the
+deploy-502 class, both 2026-07-10 capture docs re-enriched (Maria status
+minted without re-asking).
 
 Not on the list, by design: no new session structure, no orchestration
 framework, no plan format, no separate memory store. The collaboration depth
