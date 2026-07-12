@@ -93,11 +93,18 @@ a:hover{color:var(--accent)}
   font-size:clamp(30px,5.2vw,52px);
   line-height:1.14;font-weight:600;letter-spacing:-0.015em;
   max-width:16ch;margin:0 auto;
+  /* Reserve room for the tallest rotating headline (up to 3 lines) so the CTA
+     and hero image below don't jump when a shorter/longer variant swaps in. */
+  min-height:3.6em;display:flex;align-items:center;justify-content:center;
+  transition:opacity .38s var(--ease);
 }
 .hero .lede{
   margin:22px auto 0;max-width:60ch;
   font-size:clamp(16px,2.2vw,19px);color:var(--text-secondary);
+  min-height:4.8em;
+  transition:opacity .38s var(--ease);
 }
+.hero-fade-out{opacity:0}
 .cta-btn{
   display:inline-block;margin-top:30px;
   font-size:17px;font-weight:600;color:var(--accent-text);
@@ -132,15 +139,14 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 .problem{border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle)}
 .problem .section-lead{font-size:clamp(17px,2.2vw,20px);color:var(--text-primary);max-width:68ch}
 
-/* Numbered feature blocks */
+/* Numbered feature blocks — copy above, screenshot below at full content
+   width so the app text stays READABLE (the two-column grid halved every
+   screenshot; nothing survived that). */
 .feature{
-  display:grid;grid-template-columns:1fr 1fr;gap:44px;align-items:start;
   padding:44px 0;border-bottom:1px solid var(--border-subtle);
 }
-.feature-copy{padding-top:6px}
 .feature:last-of-type{border-bottom:none}
-.feature.reverse .feature-copy{order:2}
-.feature.reverse .feature-media{order:1}
+.feature-copy{max-width:66ch}
 .feature-num{
   display:inline-flex;align-items:center;justify-content:center;
   width:34px;height:34px;border-radius:var(--radius-pill);
@@ -151,15 +157,16 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 .feature h3{font-size:clamp(20px,2.6vw,24px);line-height:1.25;font-weight:600;letter-spacing:-0.01em}
 .feature p{margin-top:14px;color:var(--text-secondary);font-size:16px}
 .feature-media{
+  margin-top:26px;
+  width:fit-content;max-width:100%;
   background:var(--surface-card);
   border:1px solid var(--border-subtle);
   border-radius:var(--radius-lg);
   box-shadow:var(--shadow-card);
   overflow:hidden;
 }
-.feature-media video,.feature-media img{width:100%;height:auto;display:block}
-.feature-media .stack > *{display:block;width:100%}
-.feature-media .stack > * + *{border-top:1px solid var(--border-subtle)}
+/* Natural size, capped at content width — never upscale a screenshot. */
+.feature-media video,.feature-media img{max-width:100%;height:auto;display:block}
 
 /* ── Trust ──────────────────────────────────────────────────────────── */
 .trust{
@@ -175,6 +182,11 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
   padding:34px 38px;
 }
 .trust-card .section-lead{max-width:none;color:var(--text-secondary);font-size:17px}
+/* No-homework proof card — full content width (breaks out of the narrow
+   trust-card) so the question card reads at size. The card image carries its
+   own border, so no extra frame here. */
+.trust-media{margin:26px auto 0;max-width:100%}
+.trust-media img{max-width:100%;height:auto;display:block;border-radius:var(--radius-md)}
 
 /* ── CTA / waitlist ─────────────────────────────────────────────────── */
 .join{border-top:1px solid var(--border-subtle);text-align:center}
@@ -239,14 +251,20 @@ footer{
   color:var(--text-tertiary);font-size:14px;
 }
 footer .dot{margin:0 8px;opacity:.5}
+.foot-privacy{
+  margin:12px auto 0;max-width:52ch;
+  font-size:13px;color:var(--text-tertiary);opacity:.85;line-height:1.5;
+}
+.foot-privacy a{color:var(--text-secondary)}
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
 @media (max-width:760px){
-  .feature{grid-template-columns:1fr;gap:24px}
-  .feature.reverse .feature-copy{order:1}
-  .feature.reverse .feature-media{order:2}
   .hero{padding:52px 0 32px}
   section{padding:44px 0}
+  /* The lede wraps to ~5 lines at narrow widths (vs ~3 on desktop) — the
+     desktop min-height isn't tall enough here, measured empirically across
+     all 5 rotating variants. */
+  .hero .lede{min-height:7.6em}
 }
 @media (max-width:400px){
   .wrap{padding:0 18px}
@@ -271,24 +289,89 @@ footer .dot{margin:0 8px;opacity:.5}
 <!-- ── Hero ────────────────────────────────────────────────────────── -->
 <div class="wrap">
   <div class="hero">
-    <h1>The deadline was in the thread the whole time.</h1>
-    <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
+    <h1 id="hero-h1">The deadline was in the thread the whole time.</h1>
+    <p class="lede" id="hero-lede">Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
     <a class="cta-btn" href="#join">Ask for a beta invite</a>
 
-    <!-- HERO VIDEO: ~62s screencast — forward → receipt → Today fills →
-         plan unfolds → date-move ripple → close. Poster shown until play. -->
+    <!-- HERO: the Today view — State of Play digest over the two-week deadline
+         outlook, with the waiting-on-you queue. Video deferred (audio revisit). -->
     <div class="media-card hero-video">
-      <video
-        controls playsinline preload="none"
-        poster="assets/hero-poster.jpg"
-        title="Threshold hero screencast: forward an email, get a receipt, Today fills with promises, a worked-back plan unfolds, and moving a date ripples through the plan.">
-        <source src="assets/hero.webm" type="video/webm">
-        <source src="assets/hero.mp4" type="video/mp4">
-        <img src="assets/02-today-wide.jpg" alt="The Threshold Today view — the full two-week deadline outlook." loading="lazy">
-      </video>
+      <img src="assets/hero-app.jpg" width="2880" height="1630"
+           alt="The Threshold Today view: a State of Play summary — six commitments blocked, twenty-nine overdue — above a two-week deadline outlook and a queue of items waiting on you.">
     </div>
   </div>
 </div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────────
+   Hero headline — auto-rotates LIVE through 5 copy variants on the same
+   incident (an unwritten promise surfacing at the worst moment), each
+   testing a different angle. Loops continuously while the visitor is on
+   the page (fade out → swap text → fade in), pauses when the tab isn't
+   visible, and resumes on return. Honors prefers-reduced-motion — those
+   visitors just get the static flagship line with no rotation at all,
+   same posture as the site's video handling.
+   ───────────────────────────────────────────────────────────────────────── */
+(function () {
+  var VARIANTS = [
+    {
+      h: "The deadline was in the thread the whole time.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again."
+    },
+    {
+      h: "Someone asked. You didn’t have an answer.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list — so when someone asked, you found out live. Threshold exists so that never happens again."
+    },
+    {
+      h: "You own the deadline. You never saw the promise.",
+      l: "Someone on your team made it three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list. Threshold watches the work you give it, so the promise finds you before the deadline does."
+    },
+    {
+      h: "It wasn’t on your list. That’s how it slipped.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. A task tracker can’t hold a promise nobody wrote down. Threshold can."
+    },
+    {
+      h: "The warning sign was there. Nobody was watching.",
+      l: "Someone on your team made a promise three weeks ago — in a thread, a meeting, a chat you were barely part of. Nobody put it on a list, so nobody saw it coming. Threshold watches so you do."
+    }
+  ];
+
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var h1 = document.getElementById("hero-h1");
+  var lede = document.getElementById("hero-lede");
+  if (reduce || !h1 || !lede || VARIANTS.length < 2) return; // static flagship line only
+
+  var idx = 0;
+  var FADE_MS = 380;
+  var HOLD_MS = 5200;
+  var timer = null;
+
+  function showNext() {
+    idx = (idx + 1) % VARIANTS.length;
+    h1.classList.add("hero-fade-out");
+    lede.classList.add("hero-fade-out");
+    setTimeout(function () {
+      h1.textContent = VARIANTS[idx].h;
+      lede.textContent = VARIANTS[idx].l;
+      h1.classList.remove("hero-fade-out");
+      lede.classList.remove("hero-fade-out");
+    }, FADE_MS);
+  }
+
+  function start() {
+    if (!timer) timer = setInterval(showNext, HOLD_MS);
+  }
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) stop(); else start();
+  });
+
+  start();
+})();
+</script>
 
 <!-- ── The problem, plainly ────────────────────────────────────────── -->
 <section class="problem">
@@ -312,35 +395,20 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/16-capture-crop.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
-          <!-- animation A: forward → receipt → items appear on Today -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-a-poster.jpg"
-                 title="Today loads and populates with captured promises.">
-            <source src="assets/clip-a.webm" type="video/webm">
-            <source src="assets/clip-a.mp4" type="video/mp4">
-          </video>
-        </div>
+        <!-- Address token shown as password dots — it's a private capture address; the real one is a long random token. -->
+        <img src="assets/16-capture-crop-dots.jpg" alt="The private email capture address in Threshold settings — forward to it and get a receipt back." loading="lazy" width="805" height="180">
       </div>
     </div>
 
     <!-- 2 -->
-    <div class="feature reverse">
+    <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">2</span>
         <h3>A two-week windshield, not a rear-view mirror.</h3>
-        <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
+        <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. Threshold watches your connected sources: when a step's work shows up, it's checked off — seen — and the plan recomputes. When a date passes with nothing seen, the item turns amber before it's late, not after.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
-          <!-- animation B: click a swimlane → the plan unfolds -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-b-poster.jpg"
-                 title="Clicking a swimlane unfolds the worked-back plan.">
-            <source src="assets/clip-b.webm" type="video/webm">
-            <source src="assets/clip-b.mp4" type="video/mp4">
-          </video>
-        </div>
+        <img src="assets/22-workback-seen.jpg" alt="A worked-back plan mid-flight — two steps seen and checked off in green, two pending with the latest date each can start, and the plan recomputed to on track." loading="lazy" width="1620" height="448">
       </div>
     </div>
 
@@ -352,27 +420,19 @@ footer .dot{margin:0 8px;opacity:.5}
         <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096">
-          <!-- animation C: move the date → bars, tags, and ordering ripple -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-c-poster.jpg"
-                 title="Moving the date ripples through the bars, tags, and ordering; then undo restores it.">
-            <source src="assets/clip-c.webm" type="video/webm">
-            <source src="assets/clip-c.mp4" type="video/mp4">
-          </video>
-        </div>
+        <img src="assets/23-plan-editor.jpg" alt="A worked-back plan with its editing controls — done and doesn't-apply on every step, the move-the-date editor open, add a step, and undo last change." loading="lazy" width="1620" height="422">
       </div>
     </div>
 
     <!-- 4 -->
-    <div class="feature reverse">
+    <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">4</span>
         <h3>Put out the fire before it starts.</h3>
         <p>When something starts drifting, you see it early — while there's still time to reshuffle, pull someone in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note that waits in your outbox. Nothing sends itself.</p>
       </div>
       <div class="feature-media">
-        <img src="assets/27-headsup-crop.jpg" alt="A drifting item — due in two days, no draft observed — with a staged heads-up one tap away." loading="lazy" width="666" height="200">
+        <img src="assets/27-headsup.jpg" alt="A client-facing commitment due in two days with no draft observed — with a one-tap Draft heads-up to client staged, and Draft follow-up beside it." loading="lazy" width="1544" height="264">
       </div>
     </div>
   </div>
@@ -384,6 +444,9 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="trust-card">
       <div class="section-eyebrow">No homework</div>
       <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
+    </div>
+    <div class="trust-media">
+      <img src="assets/29-merge-ask.jpg" alt="The one small question: Threshold asks whether two similarly-named areas are the same piece of work — with the consequences of each answer spelled out, fully undoable." loading="lazy" width="1544" height="368">
     </div>
   </div>
 </section>
@@ -427,7 +490,7 @@ footer .dot{margin:0 8px;opacity:.5}
       <button type="submit" id="wl-submit">Join the beta</button>
       <p class="form-note">
         No password, no download to try. Prefer email?
-        <a href="mailto:beta@viktora.ai?subject=Threshold%20beta%20invite&amp;body=Name%3A%20%0AWork%20email%3A%20%0AOne%20line%20about%20what%20I%20run%3A%20">Ask for an invite by email</a>.
+        <a href="mailto:ross@viktora.ai?subject=Threshold%20beta%20invite&amp;body=Name%3A%20%0AWork%20email%3A%20%0AOne%20line%20about%20what%20I%20run%3A%20">Ask for an invite by email</a>.
       </p>
       <div class="form-status" id="form-status" role="status" aria-live="polite"></div>
     </form>
@@ -435,53 +498,14 @@ footer .dot{margin:0 8px;opacity:.5}
 </section>
 
 <!-- ── Footer ──────────────────────────────────────────────────────── -->
-<footer>
+<footer id="privacy">
   <div class="wrap">
-    Viktora <span class="dot">·</span> Threshold is in active pilot <span class="dot">·</span> <a href="#join">privacy note</a>
+    <div class="foot-id">Viktora <span class="dot">·</span> Threshold <span class="dot">·</span> <a href="#privacy">Privacy</a></div>
+    <p class="foot-privacy">We use your email only to send your beta invite and let you know when a spot opens — never sold, never shared. Want it removed? Email <a href="mailto:ross@viktora.ai?subject=Remove%20me">ross@viktora.ai</a>.</p>
   </div>
 </footer>
 
 <script>
-/* ─────────────────────────────────────────────────────────────────────────
-   Lazy media. The below-fold section-accent clips only fetch + play once they
-   scroll near the viewport (keeps the initial load light / Lighthouse-minded),
-   and pause when scrolled away. The poster frame shows until then. Reduced-
-   motion users keep the poster and never autoplay.
-   ───────────────────────────────────────────────────────────────────────── */
-(function(){
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var clips = Array.prototype.slice.call(document.querySelectorAll('video.loopclip'));
-  if (reduce || !clips.length) return;
-  if (!('IntersectionObserver' in window)) {
-    // No IO — just let the browser handle autoplay from markup.
-    clips.forEach(function(v){ try { v.load(); v.play().catch(function(){}); } catch(e){} });
-    return;
-  }
-  var io = new IntersectionObserver(function(entries){
-    entries.forEach(function(en){
-      var v = en.target;
-      if (en.isIntersecting) {
-        if (v.preload === 'none') { v.preload = 'auto'; v.load(); }
-        v.play().catch(function(){});
-      } else {
-        v.pause();
-      }
-    });
-  }, { rootMargin: '200px 0px', threshold: 0.15 });
-  clips.forEach(function(v){ io.observe(v); });
-})();
-
-/* ─────────────────────────────────────────────────────────────────────────
-   Hero video: when it finishes, return to the poster frame instead of resting
-   on the last (dark) frame — otherwise a played-through hero reads as a blank
-   page. load() re-displays the poster because preload is 'none'.
-   ───────────────────────────────────────────────────────────────────────── */
-(function(){
-  var hero = document.querySelector('.hero-video video');
-  if (!hero) return;
-  hero.addEventListener('ended', function(){ try { hero.load(); } catch(e){} });
-})();
-
 /* ─────────────────────────────────────────────────────────────────────────
    Progressive enhancement. With JS off (or the endpoint down), the form is a
    plain POST to /api/waitlist and the mailto: fallback is always visible.
@@ -495,7 +519,7 @@ footer .dot{margin:0 8px;opacity:.5}
   if (!form) return;
 
   var REFERRAL = "Know someone else who's accountable for other people's promises? Invites move you both up the list.";
-  var MAILTO = 'mailto:beta@viktora.ai?subject=Threshold%20beta%20invite';
+  var MAILTO = 'mailto:ross@viktora.ai?subject=Threshold%20beta%20invite';
 
   function showOk(){
     statusEl.innerHTML =

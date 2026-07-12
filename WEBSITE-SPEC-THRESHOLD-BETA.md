@@ -7,13 +7,86 @@ threads.
 
 ## Page copy (in order)
 
-### Hero
-**The deadline was in the thread the whole time.**
-Someone on your team made a promise three weeks ago, at the bottom of an
-email you were barely on. Nobody put it on a list. Someone had to ask.
-Threshold exists so that never happens again.
+### Hero — AUTO-ROTATING LIVE (5 variants, 2026-07-08)
+Ross asked for 3-4 alternate headlines cycling at the top, then to broaden
+them off "email" (meetings/chats/other places commitments get made), then
+"cycle through all these at top" — clarified via explicit question to mean
+LIVE auto-rotation while a visitor sits on the page (not per-visit/reload,
+not random). Implemented as a client-side interval: every ~5.2s the
+headline+lede fade out (380ms), swap text, fade back in, looping through
+all 5 and wrapping to 0. Pauses via the Page Visibility API when the tab
+isn't visible (resumes on return — no wasted cycles, no catch-up jump).
+Honors `prefers-reduced-motion`: those visitors get the static flagship
+line with no rotation at all, same posture as the site's video handling.
+Variant 0 (flagship) is what's baked into the static HTML for no-JS /
+crawlers / first paint. All five keep the client-agnostic "someone had to
+ask" framing and the channel-agnostic "thread, a meeting, a chat" phrase —
+no re-litigating those calls.
 
-[screenshot: 02-today-wide — the full Today view]
+**Anti-layout-jump:** headline lengths vary 2-3 lines, lede lengths vary
+too — without a fix, the CTA button and hero image below would visibly
+shift on every rotation. Fixed with reserved `min-height` on both the h1
+(flex-centered so shorter variants sit centered, not top-aligned) and the
+lede, MEASURED empirically per breakpoint (not guessed) across all 5
+variants:
+  - Desktop (1280px): h1 max 3.42em / lede uniformly 4.5em across all
+    variants → reserved 3.6em / 4.8em.
+  - Mobile (≤760px): h1 same 3.42em max; lede uniformly 7.5em (wraps to 5
+    lines at this width, all variants tie) → desktop's 4.8em was
+    insufficient here, so a `@media (max-width:760px)` override bumps
+    lede min-height to 7.6em.
+  - Confirmed on real content: CTA button top position identical (467px)
+    whether the 2-line or 3-line headline variant is showing.
+
+**0 — flagship (unchanged headline, broadened lede):**
+**The deadline was in the thread the whole time.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list. Someone
+had to ask. Threshold exists so that never happens again.
+
+**1 — the ask:**
+**Someone asked. You didn't have an answer.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list — so when
+someone asked, you found out live. Threshold exists so that never happens
+again.
+
+**2 — the ownership gap:**
+**You own the deadline. You never saw the promise.**
+Someone on your team made it three weeks ago — in a thread, a meeting, a
+chat you were barely part of. Nobody put it on a list. Threshold watches
+the work you give it, so the promise finds you before the deadline does.
+
+**3 — the list failure:**
+**It wasn't on your list. That's how it slipped.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. A task tracker can't hold a
+promise nobody wrote down. Threshold can.
+
+**4 — the early warning:**
+**The warning sign was there. Nobody was watching.**
+Someone on your team made a promise three weeks ago — in a thread, a
+meeting, a chat you were barely part of. Nobody put it on a list, so
+nobody saw it coming. Threshold watches so you do.
+
+Verified: sequence cycles 0→1→2→3→4→0→1… correctly at the real ~5.2s
+cadence (measured with a self-contained in-page timer, immune to tool-call
+latency); confirmed stable within a 2s window (no premature/rapid firing)
+and advancing within longer windows. Layout holds with zero jump at both
+the shortest (2-line) and longest (3-line wrap) headline, desktop and
+mobile. Copy-verbatim source of truth for all 5 lives in the rotation
+script in site/index.html (search `VARIANTS` / the hero `<script>` block)
+— edit BOTH here and there if any variant's wording changes.
+
+[HERO IMAGE: hero-app.jpg — the Today view showing MORE OF THE APP (Ross):
+the State of Play digest (synthesized forest narrative + counts pills:
+"32 overdue · 6 blocked · 3 gone stale" + Compose-update-to-team) above the
+two-week deadline outlook, with the waiting-on-you queue on the right. REAL
+capture from the ANONYMIZED scrub-corpus (Northwind/Daniel/Maya). The SoP
+had to be composed live (valid ANTHROPIC key) then the rendered panel
+injected into a headless page — the harness shim's fetch_sop lens param
+returns 400, so the on-Today panel wouldn't populate otherwise. Video
+DEFERRED pending an audio/VO revisit — hero.mp4/webm stay in the repo.]
 
 CTA button: **Ask for a beta invite**
 
@@ -37,24 +110,36 @@ you before they're due.
    finds — who promised what, by when, in their exact words — and replies
    with a receipt. Nothing invented; if it finds nothing, the receipt
    says so.
-   [screenshot: 16-capture-crop — cropped to the address strip + receipt line]
-   [animation A: forward → receipt → items appear on Today]
+   [screenshot: 16-capture-crop-dots — address strip + receipt line; the
+   random token renders as PASSWORD DOTS (`cap-` + dots + `@in.viktora.ai`)
+   — it's a private address and any real one is an unreadable 30+ char
+   token; blur was tried and looked smudgy (Ross)]
 
 2. **A two-week windshield, not a rear-view mirror.**
    Today opens with every promise due in the next two weeks and who owns
    it. The bigger ones get a worked-back plan — the latest date each step
-   can start and still make the deadline. When that date passes with
-   nothing seen, the item turns amber before it's late, not after.
-   [screenshot: 21-workback-crop — cropped to the expanded plan card]
-   [animation B: click a swimlane → the plan unfolds]
+   can start and still make the deadline. Threshold watches your connected
+   sources: when a step's work shows up, it's checked off — seen — and the
+   plan recomputes. When a date passes with nothing seen, the item turns
+   amber before it's late, not after.
+   [screenshot: 22-workback-seen — the expanded plan with two steps ✓ seen
+   (green), two pending with latest-start dates, bar recomputed to
+   "on track". REAL capture from the Trisha-pass corpus via shim harness;
+   the seen states were staged with the product's own step-done gestures
+   and undone after (verified restored). The auto-observe lane
+   (workback-judge evidence match) produces this identical render.]
 
 3. **You stay the editor.**
    Every plan is correctable in place — mark a step done, rule it out,
    move the date, undo any of it. When Threshold isn't sure, it asks
    instead of guessing — and your answers teach it.
-   [screenshot: 28-name-ask — already card-tight; the ask examples live in
-   the image now, not the copy]
-   [animation C: move the date → bars, tags, and ordering ripple]
+   [screenshot: 23-plan-editor — Trisha's plan with the editing controls
+   visible: done / doesn't-apply on every step, the move-the-date inline
+   editor OPEN (date input + apply), add a step, undo last change. REAL
+   capture from the Trisha-pass corpus via shim harness; the date editor
+   is a client-side toggle — no gesture posted, no corpus mutation.
+   (Prior 28-name-ask was the wrong screenshot here (Ross) — it shows the
+   ask, not the editor; it moved to No homework.)]
 
 4. **Put out the fire before it starts.**
    When something starts drifting, you see it early — while there's still
@@ -72,6 +157,13 @@ matters and it does the filing — the emails, the meeting notes, the running
 log of decisions and commitments — organized and kept current on its own.
 When it isn't sure, it asks you one small question instead of handing you a
 system to manage.
+[screenshot: 29-merge-ask, inside the trust card — the literal "one small
+question": "Are 'Vaccines Story Refresh' and 'Vaccine Confidence &
+Narrative Refresh' the same piece of work?" with Yes→consequences spelled
+out ("14 jobs move, 44 entries re-home… Fully undoable") and No→it stops
+suggesting. Ross picked this card over 28-name-ask (2026-07-08) — the
+consequence lines + "fully undoable" carry the calibration beat.
+Source: docs/user-guide-assets/29-merge-ask.png, header sliver cropped.]
 
 ### Trust, stated plainly
 Threshold only sees what you forward or connect. Every claim it makes
@@ -86,7 +178,12 @@ letting people in in small waves.
 **Referral hook (Dropbox mechanic):** after signup — "know someone else who's
 accountable for other people's promises? Invites move you both up the list."
 
-Footer: Viktora · Threshold is in active pilot · privacy note link.
+Footer: **Viktora · Threshold · Privacy** — "in active pilot" CUT (Ross,
+2026-07-08): earliness is already carried by the beta CTAs + "small waves,"
+and "pilot" reads as a hedge / implies an unnamed customer. The Privacy link
+now resolves to a REAL one-line note (email used only for the invite + spot
+notice, never sold/shared, removal on request at ross@viktora.ai) instead of
+scrolling to the signup form.
 
 ## GTM notes (Dropbox strategy, Ross 2026-07-08)
 - Individual-first: beta users → rapid individual expansion. All copy speaks
@@ -107,30 +204,78 @@ Footer: Viktora · Threshold is in active pilot · privacy note link.
   "Sent via Threshold" line is the lever; touching client-facing email is
   sensitive, so it's a decision, not a default.
 
+## SCRUB STATUS (real-data → anonymized, 2026-07-08)
+All screenshots came from Trisha's live corpus (real names/clients). Fix:
+an anonymized corpus COPY at ~/scratch/scrub-corpus (Vantage Collective /
+Northwind / Daniel-Maya persona set; 0 residual real entities, verified),
+served by a throwaway engine on :3030, re-captured via the shim harness.
+- **hero-outlook.jpg, 22-workback-seen.jpg, 23-plan-editor.jpg** — RE-SHOT
+  clean and swapped in (Daniel / Maya; amber + seen states re-staged and
+  reverted). Visually QA'd, zero real names.
+- **29-merge-ask.jpg (No homework)** — RESTORED as a faithful reconstruction.
+  The QE merge/alias question doesn't surface from the scrubbed corpus (the
+  scrubbed job names aren't similar enough to re-trigger alias detection), so
+  the card was rebuilt with the app's REAL render classes (rule-card
+  question-card, question-futures, etc. — copied from buildQuestionCard in
+  main.js) + the anonymized text from frame-questions/default.json ("Product
+  Story Refresh" / "Product Trust & Narrative Refresh"). Rendered against the
+  live app CSS and captured at 2x. Pixel-faithful to the original; 0 real info.
+  The prior 29-merge-ask.png (real "Vaccines Story Refresh" / "Vaccine
+  Confidence & Narrative Refresh" — client-confidential) is retired.
+- **27-headsup.jpg (feature 4)** — RESTORED as a faithful reconstruction
+  (same technique as the merge-ask). The corpus is all backlog (overdue), so
+  no clean "due soon · no draft observed · Draft heads-up to client" card
+  surfaces live — that's the exact state feature 4 needs ("before it's late").
+  Rebuilt with the app's REAL coming-up-row classes (from renderComingUpRow in
+  main.js) + scrubbed content: a client-facing commitment "due in 2 days · no
+  draft observed", Northwind Landing Page / Daniel Okafor, with the amber
+  "Draft heads-up to client" action. Rendered against live app CSS, 2x.
+  Retired the real-name 27-headsup-crop.jpg.
+
 ## Open from the Trisha session (visual pass, not copy — 2026-07-08)
 - **Hero poster frame**: current opening frame shows "the state of play,
   nothing important" (Ross). Re-select a meaningful first frame (the Today
   payoff or a receipt), or re-shoot.
 - **Hero video end-state**: FIXED — resets to the poster on `ended` instead
   of resting on a dark final frame that read as a blank page.
-- **Hero video audio**: none currently. Intended, or add VO/captions?
+- **Hero video audio**: none currently. Ross wants to REVISIT and add audio
+  (2026-07-08, confirmed post-launch queue item) — VO or a scored
+  walkthrough; pairs with the hero-poster re-shoot. Not a launch gate.
 - **Section screenshots too dense** (Trisha): ADDRESSED for statics
   (2026-07-08 pass) — features 1/2/4 now use tight crops (capture strip,
   expanded plan card, single drifting-item card); feature copy trimmed
-  ~60→~45 words; feature grid top-aligned (numbers align). Still open:
-  the three loop CLIPS are full-app captures (re-shoot zoomed if needed).
+  ~60→~45 words; feature grid top-aligned (numbers align).
+- **Section loop clips REMOVED** (Ross, big-screen review: "can't see
+  anything", "click-throughs really fast") — the three full-app clips are
+  off the page pending zoomed re-shoots. Re-shoot spec: zoom to the acting
+  region (not full app), SLOW the interaction pacing (his complaint), ≤2MB,
+  same shim-harness recipe. Hero video unaffected.
+- **Capture address token redacted** (Ross: "the really bad email address")
+  — the raw 30+ char token is off-putting. v1 blur looked smudgy (Ross);
+  v2 = password dots (`cap-` + • • • + `@in.viktora.ai`), crisp and reads
+  as "private secret". Asset: 16-capture-crop-dots.jpg (unblurred crop +
+  original kept in assets/).
+- **Feature layout restacked full-width** (Ross, big-screen: "still cannot
+  see the pictures easily") — the 2-col grid rendered every screenshot at
+  ~490px (36% scale for the plan card). Now copy-above, media-below at
+  natural size capped at content width (~1030px); never upscaled.
 - **"Learn from you"** (Ross, open): consider whether the teach-it beat in
   feature 3 needs its own surfacing. Currently covered by "your answers
   organize your workspace — and teach it."
 
 ## Claims for Ross to adjudicate (skill rule: flag, don't decide)
-1. "in active pilot" in the footer — say it, soften it, or cut it?
-   (No customer names/quotes anywhere, per the no-signed-customer rule.)
+1. ~~"in active pilot" in the footer~~ — RESOLVED (Ross, 2026-07-08): CUT.
+   Footer is now Viktora · Threshold · Privacy with a real privacy note.
 2. Product naming on the site: "Threshold" with "Viktora" as the company —
-   matches installer branding. Confirm.
-3. The hero story is Trisha's June-30 incident, fully genericized (no names,
-   no client, no agency). Comfortable?
-4. Beta promise wording: "onboarding a small number of teams" — accurate?
+   matches installer branding. Confirm. (Standing as-is; no objection raised.)
+3. ~~The hero story (Trisha's June-30 incident, genericized)~~ — RESOLVED
+   (Ross, 2026-07-08): comfortable. Rebuilt WITH Trisha in the live session;
+   she confirmed it's her experience and "not a very unique thing."
+4. Beta promise wording — the site says "one person from day one / small
+   waves," not "onboarding a small number of teams." Individual-first per
+   the Dropbox GTM. (Consistent; no open question.)
+
+REMAINING GATE: only Ross's explicit GO. All three prior calls are closed.
 
 ## Build spec (for the Opus build agent, after copy sign-off)
 - Static single page, self-contained (inline CSS, no trackers, no CDN
