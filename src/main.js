@@ -16,6 +16,13 @@
 //     renders a structured toast (D-12-18 schema: kind/title/body/cta)
 //   • "Capture Screen" → stub until increment 5 (screenshot subprocess)
 
+import {
+  ROUTINES,
+  loadRoutines,
+  saveRoutines,
+  composeRoutineSetupMessage,
+} from "./routines.js";
+
 const tauri = window.__TAURI__;
 
 // WP-ONENOTE-EXPORT-03 — default global hotkey for "send current OneNote
@@ -1736,133 +1743,53 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
 })();
 
 // ── Daily routines (WP-CHECKIN-ROUTINES) ────────────────────────────────────
-// One button sets up the four daily companion check-ins. claude.ai has no
-// external API for creating scheduled tasks, so Threshold cannot create them
-// silently — the button opens the companion URL (same localStorage store as
-// the Standup chip) with ONE prefilled message asking Claude to create all
-// four schedules; the user reviews and sends it there. The routine prompts
-// stay deliberately thin — all protocol engineering is server-side in
-// get_checkin_packet — and carry tz_offset_minutes computed from this
-// machine's clock (packet convention: minutes east of UTC, the reverse sign
-// of getTimezoneOffset), never hardcoded. Threshold can't read the
-// companion's schedule back, so the status line only claims what the app
-// verified: that it opened.
-const ROUTINE_TIMES_KEY = "threshold.routineTimes";
-const ROUTINES = [
-  {
-    key: "prework",
-    name: "Pre-work session",
-    desc: "unattended — stages drafts before you start",
-    time: "07:00",
-    prompt: (tz) =>
-      "Run my pre-work session: call get_checkin_packet with mode:'prework' and tz_offset_minutes:" +
-      tz +
-      ", follow its protocol exactly — investigate each candidate via the navigation recipe, " +
-      "prepare drafts where preparable, classify PREPARED / PREPARABLE-BUT-BLOCKED / NOT-MINE — " +
-      "then stage everything via stage_prework and stop. Do not capture, do not mark_seen, " +
-      "do not message anyone.",
-  },
-  {
-    key: "morning",
-    name: "Morning standup",
-    desc: "leads with the staged pre-work",
-    time: "08:30",
-    prompt: (tz) =>
-      "Run my morning standup: call get_checkin_packet with tz_offset_minutes:" +
-      tz +
-      " and follow its protocol. Lead with the staged pre-work drafts, reconcile todaysPlan, " +
-      "surface the incoming/watching/intake sections before plan work. We'll divide the work; " +
-      "at close, capture the session per the protocol's session-close step — the agreed plan " +
-      "and both our commitments mint from that capture.",
-  },
-  {
-    key: "midday",
-    name: "Midday check-in",
-    desc: "short — what moved since morning",
-    time: "12:30",
-    prompt: (tz) =>
-      "Run my midday check-in: get_checkin_packet with tz_offset_minutes:" +
-      tz +
-      ", follow its protocol. Reconcile todaysPlan against what moved since morning; lead with " +
-      "anything new/incoming since we last spoke. Max 3 decision points. Capture at close.",
-  },
-  {
-    key: "evening",
-    name: "Evening debrief",
-    desc: "closes the day, seeds tomorrow",
-    time: "17:30",
-    prompt: (tz) =>
-      "Run my evening debrief: get_checkin_packet with tz_offset_minutes:" +
-      tz +
-      ", follow its protocol. Reconcile the day against todaysPlan — what closed " +
-      "(propose_record_edit for anything I confirm done), what carries forward, what you'll " +
-      "queue via propose_to_outbox for my morning send. Capture at close; that capture is " +
-      "tomorrow's plan seed.",
-  },
-];
-
-function composeRoutineSetupMessage(times) {
-  const tz = -new Date().getTimezoneOffset();
-  const abs = Math.abs(tz);
-  const utc =
-    "UTC" +
-    (tz < 0 ? "-" : "+") +
-    String(Math.floor(abs / 60)).padStart(2, "0") +
-    ":" +
-    String(abs % 60).padStart(2, "0");
-  const lines = [
-    "Set up my four daily Threshold check-in routines as scheduled tasks — all four from " +
-      "this one message. (I can still edit the times below before sending this.)",
-    "",
-    "My timezone is " + utc + "; the times below are local, every weekday (Mon–Fri). The " +
-      "tz_offset_minutes values in the prompts are already computed for my clock.",
-    "",
-  ];
-  ROUTINES.forEach((r, i) => {
-    lines.push(i + 1 + ". " + r.name + " — " + (times[r.key] || r.time) + ". Task prompt:");
-    lines.push('"' + r.prompt(tz) + '"');
-    lines.push("");
-  });
-  lines.push("Create all four now, then list back exactly what you created with each schedule.");
-  return lines.join("\n");
-}
-
+// The Settings face of the routines architecture (definitions + rationale in
+// routines.js). Attended check-ins are native: the always-resident widget
+// pings at the times set here (persist-on-change, like the companion URL —
+// no global-Save dependency), and the brief's ✦ chip opens the companion.
+// The prework row is engine-side; until the engine runner exposes its config
+// endpoint the row shows the time honestly but schedules nothing — say so,
+// never pretend. The claude.ai one-message setup remains below as the
+// optional cloud tier.
 (function initRoutineSetup() {
   const list = document.getElementById("routine-list");
   const btn = document.getElementById("routine-setup");
   if (!list || !btn) return;
 
-  let saved = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(ROUTINE_TIMES_KEY)) || {};
-  } catch (_e) { /* corrupt store ⇒ defaults */ }
+  const cfg = loadRoutines();
 
-  list.innerHTML = ROUTINES.map(
-    (r) =>
+  list.innerHTML = ROUTINES.map((r) => {
+    const c = cfg[r.key];
+    const toggle = r.attended
+      ? '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
+        (c.enabled ? " checked" : "") + ' aria-label="Remind me for ' + r.name + '" />'
+      : '<span class="routine-toggle-slot" aria-hidden="true"></span>';
+    return (
       '<div class="routine-row">' +
+      toggle +
       '<input type="time" class="routine-time" data-routine="' + r.key + '" value="' +
-      (saved[r.key] || r.time) +
-      '" aria-label="' + r.name + ' time" />' +
+      c.time + '" aria-label="' + r.name + ' time" />' +
       '<span class="routine-name">' + r.name + "</span>" +
       '<span class="routine-desc">' + r.desc + "</span>" +
       "</div>"
-  ).join("");
+    );
+  }).join("");
 
-  const readTimes = () => {
-    const out = {};
+  const readConfig = () => {
+    const out = loadRoutines();
     for (const input of list.querySelectorAll(".routine-time")) {
-      const r = ROUTINES.find((x) => x.key === input.dataset.routine);
-      out[input.dataset.routine] = input.value || (r && r.time);
+      if (input.value) out[input.dataset.routine].time = input.value;
+    }
+    for (const box of list.querySelectorAll(".routine-toggle")) {
+      out[box.dataset.routine].enabled = box.checked;
     }
     return out;
   };
-  list.addEventListener("change", () => {
-    localStorage.setItem(ROUTINE_TIMES_KEY, JSON.stringify(readTimes()));
-  });
+  list.addEventListener("change", () => saveRoutines(readConfig()));
 
   btn.addEventListener("click", async () => {
     const status = document.getElementById("routine-setup-status");
-    const msg = composeRoutineSetupMessage(readTimes());
+    const msg = composeRoutineSetupMessage(readConfig());
     let url = (localStorage.getItem(COMPANION_URL_KEY) || "https://claude.ai/new").trim();
     // Same prefill rule as the Standup chip: ?q= is a claude.ai nicety; other
     // companions get the message on the clipboard instead.

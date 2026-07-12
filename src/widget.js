@@ -18,6 +18,8 @@
 //   - Native context menu (Phase 2)
 //   - Native OS notifications (Phase 2 — relies on tauri-plugin-notification)
 
+import { ROUTINES, loadRoutines, timeToMinutes } from "./routines.js";
+
 const tauri = window.__TAURI__;
 const invoke = tauri.core.invoke;
 const listen = tauri.event.listen;
@@ -535,11 +537,10 @@ setInterval(refreshProxyBadge, LOG_BADGE_REFRESH_MS);
 // pings. Trisha's "I get so many pings" → deliberately at most one per check-in.
 // (Notification-click → open-brief is best-effort on Tauri 2; the pill pulse +
 // the always-works chevron are the reliable path, mirroring the tidbit badge.)
-const CHECKINS = [
-  { key: "morning", hour: 9, title: "Morning check-in", body: "Here's your day — what you're on the hook for." },
-  { key: "midday", hour: 12, title: "Mid-day check-in", body: "What's slipping — half the day's gone." },
-  { key: "evening", hour: 17, title: "Evening check-in", body: "Close out and tee up tomorrow." },
-];
+//
+// Times and toggles come from the Settings routines card (routines.js store),
+// re-read every tick so edits apply without a relaunch. Only attended
+// routines ping — prework runs engine-side before anyone's awake.
 
 function checkinSeenKey(d, key) {
   return `checkin-pinged-${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}-${key}`;
@@ -556,18 +557,24 @@ function pulseWidget() {
 
 async function maybeFireCheckins() {
   const now = new Date();
-  const due = CHECKINS.filter((c) => now.getHours() >= c.hour);
+  const cfg = loadRoutines();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const due = ROUTINES.filter((r) => {
+    if (!r.attended || !cfg[r.key].enabled) return false;
+    const t = timeToMinutes(cfg[r.key].time);
+    return t !== null && nowMinutes >= t;
+  }).sort((a, b) => timeToMinutes(cfg[a.key].time) - timeToMinutes(cfg[b.key].time));
   if (!due.length) return;
   const current = due[due.length - 1]; // the latest check-in whose time has come
   // Mark earlier due check-ins seen (no backlog ping) so only the current one fires.
-  for (const c of due) {
-    if (c !== current) localStorage.setItem(checkinSeenKey(now, c.key), "1");
+  for (const r of due) {
+    if (r !== current) localStorage.setItem(checkinSeenKey(now, r.key), "1");
   }
   const ck = checkinSeenKey(now, current.key);
   if (localStorage.getItem(ck)) return; // current check-in already pinged today
   localStorage.setItem(ck, "1");
   try {
-    await maybeShowNotification({ title: current.title, body: current.body });
+    await maybeShowNotification({ title: current.ping.title, body: current.ping.body });
     pulseWidget();
   } catch (err) {
     console.warn("[widget] check-in ping failed:", err);

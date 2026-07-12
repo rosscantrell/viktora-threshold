@@ -6632,6 +6632,20 @@ button.rec-source {
   margin-bottom: 12px;
 }
 .routine-row { display: flex; align-items: center; gap: 10px; }
+/* The reminder toggle must shed the .field input text-field chrome. */
+.routine-row .routine-toggle {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--accent);
+  background: none;
+  border: none;
+  box-shadow: none;
+}
+/* Prework has no local toggle (engine-side) — hold the column so times align. */
+.routine-toggle-slot { flex: 0 0 auto; width: 15px; }
 /* No fixed width: the control sizes to its locale's format (12-hour adds an
    AM/PM segment; a pinned width clips it and 17:30 reads as "05:30"). */
 .routine-row .routine-time { flex: 0 0 auto; width: auto; }
