@@ -733,7 +733,25 @@
            fire-and-forget off the critical path (< 1s cold first paint, §2.6).
            ══════════════════════════════════════════════════════════════════ -->
 
-      <!-- ① Don't miss — the curated might-slip list: obligations that arrived
+      <!-- ① Your plan — the morning plan-of-record reconciliation (todaysPlan
+           via fetch_checkin_brief: what we agreed, what moved, what stalled,
+           what opened up; yours vs the companion's ✦). HONESTLY HIDDEN when
+           no plan was captured today (present:false) — never fabricated.
+           Populated by loadTodayPlan. -->
+      <section class="today-brief-section" id="today-planrec-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Your plan</h2>
+          <span class="today-section-count" id="today-planrec-count"></span>
+          <span class="today-planrec-when" id="today-planrec-when"></span>
+        </div>
+        <div class="today-planrec-panel">
+          <div id="today-planrec-list"></div>
+          <button type="button" class="today-log-line" id="today-planrec-open" aria-expanded="false" hidden></button>
+          <div id="today-planrec-open-list" hidden></div>
+        </div>
+      </section>
+
+      <!-- ② Don't miss — the curated might-slip list: obligations that arrived
            without acknowledgement, promises others are waiting on, due-soon
            items with nothing moving behind them. Sources: primary vigilance
            voids + readiness no-precursor joins (loadTodayMiss). Capped at
@@ -750,7 +768,7 @@
         <button type="button" class="today-log-line" id="today-miss-more" hidden></button>
       </section>
 
-      <!-- ② Your week — every OPEN commitment due through Friday as a runway
+      <!-- ③ Your week — every OPEN commitment due through Friday as a runway
            row (summary + state + today→due bar + workback tick; click to
            expand reasoning + actions). The rest of the fortnight sits behind
            one collapsed line. "Nothing due" is affirmative information — the
@@ -768,24 +786,6 @@
         <div class="today-outlook-rows" id="today-outlook-rest" hidden></div>
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due this week.</p>
         <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
-      </section>
-
-      <!-- ③ Your plan — the morning plan-of-record reconciliation (todaysPlan
-           via fetch_checkin_brief: what we agreed, what moved, what stalled,
-           what opened up; yours vs the companion's ✦). HONESTLY HIDDEN when
-           no plan was captured today (present:false) — never fabricated.
-           Populated by loadTodayPlan. -->
-      <section class="today-brief-section" id="today-planrec-section" hidden>
-        <div class="today-section-head">
-          <h2 class="today-section-title">Your plan</h2>
-          <span class="today-section-count" id="today-planrec-count"></span>
-          <span class="today-planrec-when" id="today-planrec-when"></span>
-        </div>
-        <div class="today-planrec-panel">
-          <div id="today-planrec-list"></div>
-          <button type="button" class="today-log-line" id="today-planrec-open" aria-expanded="false" hidden></button>
-          <div id="today-planrec-open-list" hidden></div>
-        </div>
       </section>
 
       <!-- ④ Prepared for you — AI-prepared work products awaiting the user's
