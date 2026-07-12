@@ -747,6 +747,13 @@
         </div>
       </section>
 
+      <!-- The right column (≥1200px) — Next two weeks + Where things stand as
+           ONE flowing grid item beside the queue (the WP-R-c2 wrapper lesson:
+           grid rows are shared across columns, so two separate right-column
+           items would leave the taller queue's row-height as dead space under
+           the shorter watch box). display:contents in the narrow flow. -->
+      <div id="today-right">
+
       <!-- ② Next two weeks — the ONE forward-looking surface (WP-TODAY-3BANDS:
            the former Deadline outlook, "This week" pick list, and Coming-up rail
            were three renderings of the SAME fetch_decision_log_full records; a
@@ -770,21 +777,8 @@
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due in the next two weeks.</p>
       </section>
 
-      <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
-           from GET /api/decision-log/priority (loaded on Today, independent of
-           the State-of-Play button). main.js fills these via renderTodayPriority. -->
-      <div id="log-priority-sections"></div>
-
-      <!-- WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list. The headline
-           vigilance surface lives here on Today (where you look for "what now"),
-           not in the Watching tab. Populated from GET /api/vigilance/voids?grouped=1
-           joined with jobHeat/jobNames from GET /api/decision-log?full=1.
-           Additive + silent: empty (no node) when grouped data is absent. -->
-      <div id="log-stalled-sections"></div>
-
-      <!-- ③ Where things stand — the READ band (WP-TODAY-3BANDS): ONE narrative
-           plus the demoted rollup, full-width below the act/watch columns. -->
-      <div id="today-readband">
+      <!-- ③ Where things stand — the narrative half rides the right column
+           (under Next two weeks); the rollup board below stays full-width. -->
 
       <!-- The State-of-Play narrative. Person lens when the viewer has an
            identity (loadPersonLensSoP; the "All work" toggle reaches the forest
@@ -809,6 +803,13 @@
            all projects. On demand when the person lens rendered; the automatic
            narrative otherwise. -->
       <div class="sop-panel" id="log-sop-panel" hidden></div>
+
+      </div><!-- /#today-right -->
+
+      <!-- WP-Priority-Operator + WP-Job-Vigilance-Wave2 — debug-only containers
+           (VIEW_DEBUG); empty on the default Today. -->
+      <div id="log-priority-sections"></div>
+      <div id="log-stalled-sections"></div>
 
       <!-- "Needs attention" — the prior Today content (needs-attention rows,
            conflicts, workload), grouped by project under one collapsible. Populated
@@ -851,8 +852,6 @@
           </section>
         </div>
       </section>
-
-      </div><!-- /#today-readband -->
 
       <p class="log-status" id="log-status" hidden></p>
     </section>

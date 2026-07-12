@@ -2533,8 +2533,15 @@ code {
   margin-bottom: 16px;
 }
 /* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
-.today-nextweeks[hidden] {
+.today-nextweeks[hidden],
+.today-sop[hidden] {
   display: none;
+}
+
+/* The right-column wrapper is layout-only: invisible to the narrow single-
+   column flow; a flex column in the ≥1200px grid (see WP-TODAY-3BANDS grid). */
+#today-right {
+  display: contents;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -6692,10 +6699,10 @@ button.rec-source {
    Wide composition (Ross-approved Concept B mockup, 2026-07-11):
 
      ROW 3, LEFT  (col 1, ≈43%): ① Needs you — the act band.
-     ROW 3, RIGHT (col 2, ≈57%): ② Next two weeks — the runway list (the
-           bars want the wider track).
-     BELOW (full width): ③ Where things stand — narrative + the demoted
-           rollup, inside ONE #today-readband wrapper; the worklist packs
+     ROW 3, RIGHT (col 2, ≈57%): ② Next two weeks + ③'s narrative, ONE
+           flowing #today-right wrapper (the bars want the wider track; the
+           narrative fills the space under the short watch box).
+     BELOW (full width): the Needs-attention board; the worklist packs
            into responsive ≥420px columns (amendment-1 floor respected).
 
    NOTHING spans rows (the WP-R-c2 lesson stands): the two bands sit in ONE
@@ -6716,24 +6723,33 @@ button.rec-source {
     align-items: start;
   }
 
-  /* Full-width strata: header on top; the read band + status at the bottom,
+  /* Full-width strata: header on top; the board + status at the bottom,
      below the taller of the two columns. Priority/Stalled are VIEW_DEBUG-only
      containers (empty otherwise) and keep their own rows. */
   #view-log:not([hidden]) > .log-header,
   #view-log:not([hidden]) > #today-plan-slot,
   #view-log:not([hidden]) > #log-priority-sections,
   #view-log:not([hidden]) > #log-stalled-sections,
-  #view-log:not([hidden]) > #today-readband,
+  #view-log:not([hidden]) > #log-everything-section,
   #view-log:not([hidden]) > #log-status {
     grid-column: 1 / -1;
   }
   #view-log:not([hidden]) > .log-header { grid-row: 1; }
   #view-log:not([hidden]) > #today-plan-slot { grid-row: 2; }
   #view-log:not([hidden]) > #today-queue-section { grid-column: 1; grid-row: 3; }
-  #view-log:not([hidden]) > #today-nextweeks-section { grid-column: 2; grid-row: 3; }
+  /* The right column — Next two weeks + the narrative as ONE flowing item, so
+     the shorter watch box can't strand dead space beside a tall queue. */
+  #view-log:not([hidden]) > #today-right {
+    grid-column: 2;
+    grid-row: 3;
+    display: flex;
+    flex-direction: column;
+    align-self: start;
+    min-width: 0;
+  }
   #view-log:not([hidden]) > #log-priority-sections { grid-row: 4; }
   #view-log:not([hidden]) > #log-stalled-sections { grid-row: 5; }
-  #view-log:not([hidden]) > #today-readband { grid-row: 6; }
+  #view-log:not([hidden]) > #log-everything-section { grid-row: 6; }
   #view-log:not([hidden]) > #log-status { grid-row: 7; }
 
   #view-log:not([hidden]) #today-sop-section {
@@ -6839,6 +6855,14 @@ button.rec-source {
 .day-digest-count { font-size: 11.5px; color: var(--text-secondary); margin-left: auto; }
 .day-digest-band.tone-fire .day-digest-count { color: var(--warn-text); }
 .day-digest-items { display: flex; flex-direction: column; gap: 1px; padding: 0 8px 9px 11px; }
+/* The recurring class-display-vs-[hidden] trap (WP-R2 amendment 5 family):
+   any class display outranks the UA [hidden] rule, so collapsed lists paint
+   expanded. Explicit guards for every Today list JS toggles hidden on. */
+.day-digest-items[hidden],
+.proxy-filed-rows[hidden],
+.today-filed-demoted[hidden] {
+  display: none;
+}
 .day-digest-item {
   display: flex; align-items: baseline; gap: 8px;
   font-size: 11.5px; color: var(--text-secondary); line-height: 1.5;

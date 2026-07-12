@@ -4266,7 +4266,10 @@ async function enterLogView() {
 // no network). Called at the top of every enterLogView so a re-entry starts
 // clean before the async sources repopulate.
 function renderTodaySkeleton() {
-  // ① SoP — skeleton line; the lens bar hides until prose resolves.
+  // ③ SoP — skeleton line; the lens bar hides until prose resolves; the
+  //   section itself re-shows (loadPersonLensSoP hides it when it has nothing).
+  const sopSection = document.getElementById("today-sop-section");
+  if (sopSection) sopSection.hidden = false;
   const sopPanel = document.getElementById("log-sop-lens-panel");
   if (sopPanel) sopPanel.innerHTML = '<div class="sop-status today-sop-skeleton">Composing your state of play…</div>';
   const sopBar = document.getElementById("log-sop-lens");
@@ -7387,6 +7390,7 @@ function renderPersonLensSoP(container, data, lens) {
 async function loadPersonLensSoP() {
   const bar = document.getElementById("log-sop-lens");
   const panel = document.getElementById("log-sop-lens-panel");
+  const section = document.getElementById("today-sop-section");
   if (!panel) return false;
   const viewerSlug = _todayCtx && _todayCtx.viewerSlug;
   // The Person lens needs an identity. The old no-identity fallback rendered the
@@ -7398,6 +7402,7 @@ async function loadPersonLensSoP() {
   if (!viewerSlug) {
     panel.innerHTML = "";
     if (bar) bar.hidden = true;
+    if (section) section.hidden = true; // empty surface must not reserve a gap
     return false;
   }
   const lens = _sopLens;
@@ -7408,8 +7413,10 @@ async function loadPersonLensSoP() {
     // Nothing to show — keep the surface calm and empty (no bar, no panel).
     panel.innerHTML = "";
     if (bar) bar.hidden = true;
+    if (section) section.hidden = true;
     return false;
   }
+  if (section) section.hidden = false;
   if (bar) {
     bar.hidden = false;
     // The Person toggle only makes sense with an identity.
@@ -16489,11 +16496,15 @@ function renderOutboxCard(item) {
   }
 
   // Source attribution — suppressed when it just repeats the subject (agent-
-  // proposed items stamp source.label = subject; the line would be noise).
-  if (item.source && item.source.label && item.source.label !== item.subject) {
+  // proposed items stamp source.label = subject; follow-up drafts stamp the
+  // commitment summary the subject already carries — exact match missed those,
+  // so the card said the same sentence twice. Containment either way = noise).
+  const srcLabel = item.source && item.source.label ? String(item.source.label).trim() : "";
+  const subj = String(item.subject || "").trim();
+  if (srcLabel && !(subj.includes(srcLabel) || srcLabel.includes(subj))) {
     const src = document.createElement("p");
     src.className = "record-meta";
-    src.textContent = "From: " + item.source.label;
+    src.textContent = "From: " + srcLabel;
     card.appendChild(src);
   }
 
