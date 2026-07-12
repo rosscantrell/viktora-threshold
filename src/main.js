@@ -4241,8 +4241,8 @@ async function enterLogView() {
   //    readiness half when the full records land).
   loadTodayMissVoids().catch((e) => console.warn("[main] Don't miss (voids):", e));
 
-  // ③ Ready to send — drafts staged for the user's send.
-  loadTodayPlanDrafts().catch((e) => console.warn("[main] Ready to send:", e));
+  // ③ Prepared for you — AI-prepared work awaiting the user's review.
+  loadTodayPlanDrafts().catch((e) => console.warn("[main] Prepared for you:", e));
 
   // ④ One question — the organizing-question queue, one at a time.
   loadTodayQuestions().catch((e) => console.warn("[main] Questions:", e));
@@ -5120,7 +5120,7 @@ async function loadTodayPlanDrafts() {
     return;
   }
   if (emptyEl) emptyEl.hidden = true;
-  if (countEl) countEl.textContent = `${items.length} to send`;
+  if (countEl) countEl.textContent = `${items.length} draft${items.length === 1 ? "" : "s"}`;
   for (const item of items) {
     try { list.appendChild(renderDraftRow(item)); }
     catch (e) { console.warn("[main] renderDraftRow (Your plan):", e); }
@@ -5144,7 +5144,7 @@ function renderDraftRow(item) {
   row.appendChild(text);
   const tag = document.createElement("span");
   tag.className = "today-draft-tag";
-  tag.textContent = "ready to send";
+  tag.textContent = "for your review";
   row.appendChild(tag);
   const detail = document.createElement("div");
   detail.className = "today-draft-detail";

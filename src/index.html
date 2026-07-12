@@ -744,19 +744,20 @@
         <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
       </section>
 
-      <!-- ③ Ready to send — what's been PREPARED for the user's send (drafts
-           from the Draft-follow-up lane and the companion's proposals; ✦ marks
-           companion work). Honest naming per Ross 2026-07-12: this is prepared
-           output, NOT the day plan — "Your plan" stays reserved for the
-           todaysPlan reconciliation (the slot above ①) when the packet IPC
-           lands. Compact rows; the full draft + artifacts + verbs expand. -->
+      <!-- ③ Prepared for you — AI-prepared work products awaiting the user's
+           review (drafts from the Draft-follow-up lane and the companion's
+           proposals; ✦ marks companion work; some still need a recipient or
+           an edit — "ready to send" overclaimed, Ross 2026-07-12). NOT the
+           day plan — "Your plan" stays reserved for the todaysPlan
+           reconciliation (the slot above ①) when the packet IPC lands.
+           Compact rows; the full draft + artifacts + verbs expand. -->
       <section class="today-brief-section" id="today-plan-section">
         <div class="today-section-head">
-          <h2 class="today-section-title">Ready to send</h2>
+          <h2 class="today-section-title">Prepared for you</h2>
           <span class="today-section-count" id="today-plan-count"></span>
         </div>
         <div class="today-outbox-list" id="today-outbox-list"></div>
-        <p class="log-empty" id="today-plan-empty" hidden>Nothing staged to send.</p>
+        <p class="log-empty" id="today-plan-empty" hidden>Nothing prepared right now.</p>
       </section>
 
       <!-- ④ One question for you — the single next question that keeps the
