@@ -731,7 +731,7 @@
            section stays present so the brief reads complete. -->
       <section class="today-brief-section today-nextweeks" id="today-nextweeks-section" hidden>
         <div class="today-section-head">
-          <h2 class="today-section-title">Your week</h2>
+          <h2 class="today-section-title">Due this week</h2>
           <span class="today-section-count" id="today-nextweeks-count"></span>
         </div>
         <div class="today-outlook-rows" id="today-outlook-rows"></div>
@@ -741,22 +741,22 @@
         <button type="button" class="today-log-line" id="today-week-rest-toggle" aria-expanded="false" hidden></button>
         <div class="today-outlook-rows" id="today-outlook-rest" hidden></div>
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due this week.</p>
+        <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
       </section>
 
-      <!-- ③ Your plan — plans, decisions & commitments. The day-plan
-           reconciliation renders here when a captured plan exists (next
-           slice); until then the stratum carries what the plan produces NOW:
-           drafts staged for your send (compact rows; expand for the full
-           draft + artifacts + verbs) and the honest open-counts line into the
-           Log. -->
+      <!-- ③ Ready to send — what's been PREPARED for the user's send (drafts
+           from the Draft-follow-up lane and the companion's proposals; ✦ marks
+           companion work). Honest naming per Ross 2026-07-12: this is prepared
+           output, NOT the day plan — "Your plan" stays reserved for the
+           todaysPlan reconciliation (the slot above ①) when the packet IPC
+           lands. Compact rows; the full draft + artifacts + verbs expand. -->
       <section class="today-brief-section" id="today-plan-section">
         <div class="today-section-head">
-          <h2 class="today-section-title">Your plan</h2>
+          <h2 class="today-section-title">Ready to send</h2>
           <span class="today-section-count" id="today-plan-count"></span>
         </div>
         <div class="today-outbox-list" id="today-outbox-list"></div>
         <p class="log-empty" id="today-plan-empty" hidden>Nothing staged to send.</p>
-        <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
       </section>
 
       <!-- ④ One question for you — the single next question that keeps the

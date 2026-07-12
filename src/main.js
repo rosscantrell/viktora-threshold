@@ -4241,8 +4241,8 @@ async function enterLogView() {
   //    readiness half when the full records land).
   loadTodayMissVoids().catch((e) => console.warn("[main] Don't miss (voids):", e));
 
-  // ③ Your plan — drafts staged for the user's send.
-  loadTodayPlanDrafts().catch((e) => console.warn("[main] Your plan (drafts):", e));
+  // ③ Ready to send — drafts staged for the user's send.
+  loadTodayPlanDrafts().catch((e) => console.warn("[main] Ready to send:", e));
 
   // ④ One question — the organizing-question queue, one at a time.
   loadTodayQuestions().catch((e) => console.warn("[main] Questions:", e));
@@ -4313,6 +4313,11 @@ function renderTodaySkeleton() {
   if (filedSection) filedSection.hidden = true;
   const filedList = document.getElementById("today-filed-list");
   if (filedList) filedList.innerHTML = "";
+
+  // Runway rows start COLLAPSED on every entry (Ross 2026-07-12: an expanded
+  // step plan made "Due this week" read as the plan stratum) — the set still
+  // preserves expansion across a gesture's re-render within the view.
+  _outlookExpanded.clear();
 
   // Debug containers + status reset.
   for (const id of ["log-priority-sections", "log-stalled-sections"]) {
@@ -5197,7 +5202,7 @@ async function renderTodayDecisionLog() {
   const planLine = document.getElementById("today-plan-log-line");
   if (planLine) {
     if (open > 0) {
-      planLine.textContent = `still open: ${open} — every plan & decision is in the Log →`;
+      planLine.textContent = `${open} open in all — every plan & decision is in the Log →`;
       planLine.hidden = false;
       if (!planLine.dataset.wired) {
         planLine.dataset.wired = "1";
