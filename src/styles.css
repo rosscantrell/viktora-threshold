@@ -2521,28 +2521,27 @@ code {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WP-R2 Today rebuild — SoP header · Needs-you queue · Filed confidently · tray.
-   All dark/glassy tokens only (§2.5); no new colours/fonts.
+   WP-TODAY-3BANDS — the three Today bands (Needs you · Next two weeks ·
+   Where things stand). All dark/glassy tokens only (§2.5); no new colours/fonts.
    ══════════════════════════════════════════════════════════════════════════ */
 .today-sop,
 .today-queue,
-.today-comingup,
-.today-outbox-tray {
+.today-nextweeks {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-bottom: 16px;
 }
-
-/* ══════════════════════════════════════════════════════════════════════════
-   WP-R-c2 — Deadline outlook (the READ-side runway picture). Wide layout
-   only: below 1200px the section stays display:none regardless of [hidden]
-   state, so the narrow single-column flow renders byte-identically. Rows are
-   buttons (tap → scroll the matching Coming-up row into view).
-   ══════════════════════════════════════════════════════════════════════════ */
-.today-outlook {
+/* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
+.today-nextweeks[hidden] {
   display: none;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The Next-two-weeks runway rows (formerly the wide-only Deadline outlook —
+   now THE forward surface at every width). Rows are buttons (tap → the
+   reasoning + actions expand inline).
+   ══════════════════════════════════════════════════════════════════════════ */
 .today-outlook-rows {
   --outlook-label-w: 200px;
   display: flex;
@@ -2661,6 +2660,11 @@ code {
   flex-direction: column;
   gap: 6px;
 }
+/* display:flex outranks the UA [hidden] rule — without this guard every
+   collapsed row paints an empty inset box under its runway bar. */
+.today-outlook-details[hidden] {
+  display: none;
+}
 .today-outlook-quote {
   font-size: 11px;
   color: var(--glass-text-dim);
@@ -2726,11 +2730,6 @@ code {
   font-size: 11px;
   color: var(--glass-text-faint);
   margin: 2px 0 0;
-}
-.today-outlook-hop {
-  align-self: flex-start;
-  font-size: 11px;
-  padding: 0;
 }
 .today-outlook-mini {
   font-size: 10px;
@@ -2798,26 +2797,39 @@ code {
   margin: 2px 0 0;
 }
 
-/* Tap-through landing flash on the Coming-up row. */
-.today-row-flash {
-  outline: 1px solid var(--accent-ring);
-  outline-offset: 2px;
-  transition: outline-color 1.2s var(--ease);
-}
-/* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
-.today-comingup[hidden] {
-  display: none;
+/* WP-TODAY-3BANDS — quiet focus chip on a runway row: the priority operator as
+   rank emphasis ("rank, don't list"), quiet metadata grammar — ghost border,
+   no amber (that stays spent on urgency). */
+.today-focus-chip {
+  display: inline-block;
+  margin: 2px 0 1px;
+  padding: 0 7px;
+  font-size: 10px;
+  line-height: 15px;
+  color: var(--glass-text-dim);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
 }
 
-/* WP-TODAY-READ-ACT — the action-rail wrapper is layout-only: invisible to the
-   single-column flow (display:contents), a pinned flex column in the ≥1200px
-   two-column grid (see the WP-WIDE-TODAY block). */
-#today-rail {
-  display: contents;
+/* WP-TODAY-3BANDS — per-item actions inside an expanded runway row (source ·
+   heads-up · follow-up · resolve/snooze · dismiss). Same quiet grammar as the
+   workback gesture footer above it. */
+.today-outlook-rowacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
 }
-/* WP-R-c2 — the READ wrapper mirrors the rail: invisible to the narrow flow. */
-#today-read {
-  display: contents;
+
+/* WP-TODAY-3BANDS — the one-appearance receipt under the needs-attention board:
+   rows absorbed by Next two weeks leave this quiet count behind. */
+.today-dedup-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--glass-text-faint);
 }
 
 /* WP-TODAY-READ-ACT — quiet report: Today's strata empty-lines sit flush under
@@ -2825,7 +2837,7 @@ code {
    compact report, not centered labels floating in section-sized voids. Scoped
    to Today's strata — other views keep the centered .log-empty. */
 .today-queue .log-empty,
-.today-comingup .log-empty,
+.today-nextweeks .log-empty,
 #log-attention-empty {
   text-align: left;
   padding: 4px 0 6px;
@@ -3046,13 +3058,6 @@ code {
   padding: 1px 7px;
   white-space: nowrap;
 }
-/* WP-R2 amendment item 5 — the tray's `display: flex` (a class rule) outranks the
-   UA `[hidden]{display:none}`, so an empty, `hidden` tray (label included) still
-   painted. Restore the hide: when the tray carries [hidden], nothing renders. */
-.today-outbox-tray[hidden] {
-  display: none;
-}
-
 /* Shared section header (title + count). Matches .log-section-title register. */
 .today-section-head {
   display: flex;
@@ -3146,19 +3151,14 @@ code {
   font-size: 10px;
 }
 
-/* Awaiting-send / Sent tray — a quiet demoted strip; hidden when empty. */
-.today-outbox-tray {
-  padding: 10px 12px;
-  background: var(--glass-surface);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--glass-radius-md);
-}
-.today-tray-title { color: var(--glass-text-dim); }
+/* Awaiting-send drafts inside the Needs-you band (WP-TODAY-3BANDS — the former
+   standalone tray). Cards keep the companion-card anatomy below. */
 .today-outbox-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
+.today-outbox-list:empty { display: none; }
 
 /* WP-OUTBOX-COMPANION-CARD — the companion-lane outbox card. */
 /* Doubled selector beats .record-chip's uppercase regardless of sheet order —
@@ -6685,105 +6685,59 @@ button.rec-source {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WP-WIDE-TODAY (reworked by WP-TODAY-READ-ACT) — two-column Today at ≥1200px.
-   Below the breakpoint #view-log stays plain block flow (the existing single
-   column, byte-for-byte — the #today-rail wrapper is display:contents there,
-   so the narrow DOM flow is unchanged).
+   WP-TODAY-3BANDS — two-column Today at ≥1200px. Below the breakpoint
+   #view-log stays plain block flow: the DOM order IS the band order
+   (Needs you → Next two weeks → Where things stand).
 
-   The composition is "read | act" (Ross-ruled 2026-07-06, supersedes the
-   full-width-narrative band):
+   Wide composition (Ross-approved Concept B mockup, 2026-07-11):
 
-     LEFT  (col 1, ≈60%): the READ — State-of-Play narrative panel (the SoP
-           auto-load renders the narrative into #log-sop-panel, so THAT panel
-           anchors the column; full-width it left a dead right half), then the
-           on-demand SoP section, Focus/Watch, Stalled.
-     RIGHT (col 2, ≈40%): the ACT — #today-rail as ONE flowing sticky column:
-           Waiting on you → Coming up → Awaiting-send tray. A single grid item,
-           so its strata stack tight instead of coupling to left-column rows.
-     BELOW (full width): Needs attention — the worklist packs into responsive
-           ≥420px columns (amendment-1 floor respected) instead of a single
-           narrow tower; 25 items become a scannable board, not a scroll.
+     ROW 3, LEFT  (col 1, ≈43%): ① Needs you — the act band.
+     ROW 3, RIGHT (col 2, ≈57%): ② Next two weeks — the runway list (the
+           bars want the wider track).
+     BELOW (full width): ③ Where things stand — narrative + the demoted
+           rollup, inside ONE #today-readband wrapper; the worklist packs
+           into responsive ≥420px columns (amendment-1 floor respected).
 
-   Full-width band items: header on top, Needs attention + status at the
-   bottom. Explicit rows; the rail spans the left column's rows.
+   NOTHING spans rows (the WP-R-c2 lesson stands): the two bands sit in ONE
+   row-3 band as siblings, so neither can inflate the other's rows or paint
+   over the board. The hidden #today-plan-slot holds row 2 for Concept A.
    ══════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 1200px) {
   #view-log:not([hidden]) {
     /* Lift the 560px single-column cap (set on .view-log) so the two-column
        layout can actually use the width. Held to 1480px + centered so an
        ultra-wide monitor doesn't sprawl edge-to-edge. The SoP prose keeps its
-       own ~72ch measure inside the left column. */
+       own ~72ch measure inside the read band. */
     max-width: 1480px;
     display: grid;
-    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-    /* WP-R-c2 rework (Ross's wasted-space report + Trisha's overlap repro,
-       both 2026-07-07): NOTHING spans rows anymore. Both columns are wrapped
-       (#today-read | #today-rail) and sit in ONE row-2 band, so the rail can
-       neither inflate the left rows (spanned intrinsic tracks share surplus
-       equally) nor overflow onto the board (spanning items crossing flexible
-       tracks are ignored in intrinsic sizing — a 1fr absorber can't contain
-       them; tried, regressed, reverted). */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
     column-gap: 28px;
     row-gap: 0;
     align-items: start;
   }
 
-  /* Full-width bands: header on top; Needs attention + status at the bottom,
-     below the taller of the two columns. */
+  /* Full-width strata: header on top; the read band + status at the bottom,
+     below the taller of the two columns. Priority/Stalled are VIEW_DEBUG-only
+     containers (empty otherwise) and keep their own rows. */
   #view-log:not([hidden]) > .log-header,
-  #view-log:not([hidden]) > #log-everything-section,
+  #view-log:not([hidden]) > #today-plan-slot,
+  #view-log:not([hidden]) > #log-priority-sections,
+  #view-log:not([hidden]) > #log-stalled-sections,
+  #view-log:not([hidden]) > #today-readband,
   #view-log:not([hidden]) > #log-status {
     grid-column: 1 / -1;
   }
   #view-log:not([hidden]) > .log-header { grid-row: 1; }
-  #view-log:not([hidden]) > #log-everything-section { grid-row: 5; }
-  #view-log:not([hidden]) > #log-status { grid-row: 6; }
+  #view-log:not([hidden]) > #today-plan-slot { grid-row: 2; }
+  #view-log:not([hidden]) > #today-queue-section { grid-column: 1; grid-row: 3; }
+  #view-log:not([hidden]) > #today-nextweeks-section { grid-column: 2; grid-row: 3; }
+  #view-log:not([hidden]) > #log-priority-sections { grid-row: 4; }
+  #view-log:not([hidden]) > #log-stalled-sections { grid-row: 5; }
+  #view-log:not([hidden]) > #today-readband { grid-row: 6; }
+  #view-log:not([hidden]) > #log-status { grid-row: 7; }
 
-  /* LEFT column (col 1) — ONE wrapper in the row-2 band: narrative panel,
-     on-demand SoP, Deadline outlook flow inside it (plain block flow, no
-     grid rows to inflate). min-height on the SoP section keeps its
-     composing/skeleton state visible (never a zero-height slot that reads
-     as broken). Priority/Stalled keep their own rows BELOW the band —
-     their DOM position (after the rail) can't join the wrapper without
-     reordering the narrow flow. */
-  #view-log:not([hidden]) > #today-read {
-    display: block;
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
-  }
   #view-log:not([hidden]) #today-sop-section {
     min-height: 2.5em;
-  }
-  /* WP-R-c2 — Deadline outlook renders in the wide layout only ([hidden] —
-     no due-soon items — still wins over the flex). */
-  #view-log:not([hidden]) #today-outlook-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-  #view-log:not([hidden]) #today-outlook-section[hidden] {
-    display: none;
-  }
-  #view-log:not([hidden]) > #log-priority-sections { grid-column: 1; grid-row: 3; }
-  #view-log:not([hidden]) > #log-stalled-sections { grid-column: 1; grid-row: 4; }
-
-  /* RIGHT rail (col 2) — one flowing action column in the SAME single row-2
-     band as #today-read. NOT sticky (a stuck rail floats out of its column
-     and paints over the board — Ross's original overlap report) and NOT
-     row-spanning (a spanning rail either inflates the left rows — the
-     wasted-space report — or, with an fr absorber, is ignored by intrinsic
-     track sizing and overflows onto the board — Trisha's repro, 2026-07-07).
-     Two wrapped columns in one row: the row is as tall as the taller column,
-     and neither can paint over row 3+. */
-  #view-log:not([hidden]) > #today-rail {
-    grid-column: 2;
-    grid-row: 2;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    align-self: start;
   }
 
   /* Needs-attention header row: keep the "Needs attention" title on one line
@@ -6853,72 +6807,7 @@ button.rec-source {
   white-space: nowrap;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   WP-FOCUS — "This week" pick list (short-fuse items: dense burn-down rows,
-   owner-grouped, one chase per pile) + the seen-evidence link.
-   ══════════════════════════════════════════════════════════════════════════ */
-.today-thisweek {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--edge-highlight);
-  margin-bottom: 10px;
-}
-.today-thisweek[hidden] { display: none; }
-.thisweek-head {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--glass-text);
-  margin: 0;
-}
-.thisweek-group { display: flex; flex-direction: column; gap: 2px; }
-.thisweek-group-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0 2px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.thisweek-owner {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--glass-text-dim);
-}
-.thisweek-chase .btn-link { font-size: 11px; padding: 0; position: static; }
-.thisweek-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 0;
-  min-width: 0;
-}
-.thisweek-due {
-  flex: none;
-  width: 64px;
-  font-size: 11px;
-  color: var(--glass-text-dim);
-}
-.thisweek-summary {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--glass-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.thisweek-acts {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.thisweek-acts .btn { font-size: 10px; padding: 1px 8px; }
+/* The seen-evidence link on a runway step (WP-FOCUS task #5). */
 .today-outlook-seen-link {
   cursor: pointer;
   text-decoration: underline;
@@ -6926,44 +6815,6 @@ button.rec-source {
   text-underline-offset: 3px;
 }
 .today-outlook-seen-link:hover { color: var(--text-primary); }
-
-/* WP-FOCUS follow-up (Ross): This-week pairs with the outlook in the left
-   column (wide only — narrow keeps it in flow after the SoP); rows are
-   clickable and expand to the full item. */
-.today-thisweek { display: none; }
-@media (min-width: 1200px) {
-  #view-log:not([hidden]) #today-thisweek {
-    display: flex;
-    margin-top: 4px;
-    margin-bottom: 16px;
-  }
-  #view-log:not([hidden]) #today-thisweek[hidden] { display: none; }
-}
-@media (max-width: 1199.98px) {
-  #view-log:not([hidden]) #today-thisweek { display: flex; }
-  #view-log:not([hidden]) #today-thisweek[hidden] { display: none; }
-}
-.thisweek-row { cursor: pointer; border-radius: var(--radius-sm); }
-.thisweek-row:hover .thisweek-summary { color: var(--text-primary); }
-.thisweek-detail {
-  margin: 2px 0 8px 74px;
-  padding: 10px 12px;
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.thisweek-detail-summary { font-size: 12px; color: var(--text-primary); margin: 0; }
-.thisweek-detail-quote { font-size: 11px; font-style: italic; color: var(--glass-text-dim); margin: 0; }
-.thisweek-detail-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.thisweek-detail-actions .btn-link { position: static; font-size: 11px; padding: 0; }
 
 /* WP-DAY-DIGEST (Ross UAT 2026-07-10) — deterministic top-of-Today digest.
    Fires first (the ONE amber accent, canon 8), then due-today / rest-of-week /

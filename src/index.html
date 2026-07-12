@@ -685,102 +685,48 @@
         </div>
       </header>
 
-      <!-- WP-THRESHOLD-STATE-OF-PLAY — corpus altitude: the Monday overview across
-           all projects, on demand. -->
-      <!-- WP-R-c2 overlap fix — the READ wrapper, symmetric with #today-rail:
-           display:contents in the narrow flow (order unchanged), a plain
-           block column in the ≥1200px grid. With BOTH columns wrapped,
-           nothing spans grid rows, so the rail can neither inflate the left
-           rows (the wasted-space report) nor overflow onto the board (the
-           overlap report — spec: spanning items crossing flexible tracks are
-           ignored in intrinsic sizing, so a 1fr absorber can't contain it). -->
-      <div id="today-read">
-      <div class="sop-panel" id="log-sop-panel" hidden></div>
-
       <!-- ══════════════════════════════════════════════════════════════════
-           WP-R2 Today rebuild — three stacked sections (paint order) + a tray.
-           enterLogView paints this skeleton synchronously; every data source is
-           fire-and-forget off the critical path (< 1s cold first paint, §2.6) and
-           re-renders only its own section when it lands. Defensive: an empty or
-           errored payload degrades to a calm empty/hidden state, never a blank
-           screen or thrown exception.
+           WP-TODAY-3BANDS (Ross ruling 2026-07-11, Concept B of
+           MOCKUPS-TODAY-REORG-2026-07-11.html) — Today is THREE bands organized
+           by what the user is doing, not by which engine surface produced them:
+             ① Needs you        — everything actionable (outbox + queue), one count
+             ② Next two weeks   — ONE runway list (outlook ∪ this-week ∪ coming-up)
+             ③ Where things stand — ONE narrative + the demoted rollup
+           Hard rule: a record renders ONCE, in its strongest band; anything a
+           band absorbs from another leaves a quiet count behind (fail-closed-
+           but-VISIBLE). enterLogView paints this skeleton synchronously; every
+           data source stays fire-and-forget off the critical path (< 1s cold
+           first paint, §2.6) and re-renders only its own band when it lands.
            ══════════════════════════════════════════════════════════════════ -->
 
-      <!-- ① SoP header — the person-lens State-of-Play narrative. Skeleton paints
-           immediately; the prose streams in when fetch_sop resolves (person lens,
-           forest fallback when there's no viewer identity). Claims render receipted
-           via renderReceipt; the endpoint governs register (no invented facts). -->
-      <section class="today-sop" id="today-sop-section">
-        <!-- WP-WorkForest-Native-SoP (UI-1 + UI-6) — Person / Forest lens toggle.
-             Hidden until the SoP resolves with prose (loadPersonLensSoP). -->
-        <div class="sop-lens-bar" id="log-sop-lens" hidden>
-          <button type="button" class="sop-lens-btn" data-lens="person" aria-pressed="true">Your jobs</button>
-          <button type="button" class="sop-lens-btn" data-lens="forest" aria-pressed="false">All work</button>
-        </div>
-        <div class="sop-lens-panel" id="log-sop-lens-panel">
-          <div class="sop-status today-sop-skeleton">Composing your state of play…</div>
-        </div>
-      </section>
+      <!-- Reserved slot — Concept A's plan-reconciliation band (todaysPlan via
+           the check-in packet) drops in HERE when the packet IPC lands. Inert
+           until then; hidden div so the grid rows below never shift. -->
+      <div id="today-plan-slot" hidden></div>
 
-      <!-- WP-R-c2 — Deadline outlook: the READ-side runway picture for the same
-           due-soon commitments the Coming-up rail acts on. One bar per item,
-           today → due date on a 14-day axis; a tick marks where work usually
-           needs to start (workback latest-safe-start, when the engine serves
-           it), amber when that point passed with nothing seen. Fills the
-           left column's vacant row under the SoP in the ≥1200px layout ONLY
-           (display:none below — the narrow single-column flow is unchanged,
-           and Coming-up already carries the facts there). Derived client-side
-           from the same fetch_decision_log_full records as Coming-up; empty ⇒
-           hidden (never fabricated content). Tap a row → the matching
-           Coming-up row scrolls into view. -->
-      <section class="today-outlook" id="today-outlook-section" hidden>
-        <div class="today-section-head">
-          <h2 class="today-section-title">Deadline outlook</h2>
-          <span class="today-section-count" id="today-outlook-count"></span>
-        </div>
-        <div class="today-outlook-rows" id="today-outlook-rows"></div>
-        <p class="today-outlook-legend" id="today-outlook-legend" hidden>
-          | = latest start that still makes the due date · amber = that point passed with nothing seen
-        </p>
-      </section>
-
-      <!-- WP-FOCUS — "This week": the short-fuse pick list, PAIRED with the
-           outlook in the left column (Ross, 2026-07-08: the two-week picture
-           reads as one — plans above, burn-down below; the rail was also too
-           narrow for the rows). Runway <7d items get no swimlane, no card:
-           a dense owner-grouped row here, click to expand the full item.
-           Filled by renderThisWeekList; empty ⇒ hidden. -->
-      <div class="today-thisweek" id="today-thisweek" hidden></div>
-
-      </div><!-- /#today-read -->
-
-      <!-- WP-TODAY-READ-ACT — the action rail. Layout-only wrapper: display:contents
-           by default (invisible to the single-column flow), a flex column pinned
-           beside the State-of-Play narrative in the ≥1200px two-column grid, so
-           "Waiting on you" / "Coming up" / the outbox tray stack as ONE flowing
-           rail instead of separate grid rows that couple to the left column's
-           heights. -->
-      <div id="today-rail">
-
-      <!-- ② Waiting on you — the ratification queue, ONE card family (§2.3).
-           Filled by three async sources, each appending its cards as it arrives:
+      <!-- ① Needs you — everything actionable under ONE header + ONE count:
+             · staged outbox drafts (renderOutboxCard / fetch_outbox — Send is
+               the primary verb, so these lead)
              · proxy-queue "Wants your eye" cards (renderProxyCard / fetch_proxy_queue)
              · the Question-Engine pull card / affordance (buildQuestionSection)
              · vigilance-void chase cards (renderVoidCard / fetch_vigilance_voids)
            Confirm/dismiss/undo (or snooze) live on each card via their existing
            handlers. Skeleton until the first source lands; empty state when all
-           three resolve to nothing. -->
+           sources resolve to nothing. -->
       <section class="today-queue" id="today-queue-section">
         <div class="today-section-head">
-          <h2 class="today-section-title">Waiting on you</h2>
+          <h2 class="today-section-title">Needs you</h2>
           <span class="today-section-count" id="today-queue-count"></span>
         </div>
+        <!-- Awaiting-send drafts lead the band (the one action only the user can
+             take); the cards carry their own type + companion chips. -->
+        <div class="today-outbox-list" id="today-outbox-list"></div>
         <!-- The Question-Engine pull affordance / card (its own slot so it isn't
              cleared when the proxy/void sources re-render). -->
         <div id="today-question-slot"></div>
         <div class="today-queue-list" id="today-queue-list"></div>
-        <p class="today-queue-skeleton" id="today-queue-skeleton">Checking what's waiting on you…</p>
-        <p class="log-empty" id="today-queue-empty" hidden>Nothing's waiting on you right now.</p>
+        <p class="today-queue-skeleton" id="today-queue-skeleton">Checking what needs you…</p>
+        <p class="log-empty" id="today-queue-empty" hidden>Nothing needs you right now.</p>
 
         <!-- Filed automatically — the proxy queue's high-confidence pile, DEMOTED
              into this section as ONE quiet collapsed line that expands the filed
@@ -801,35 +747,28 @@
         </div>
       </section>
 
-      <!-- ③ Coming up — the forward-looking window (the "windshield"). OPEN
-           commitments due within the next 14 days, soonest first, so a client is
-           told BEFORE the deadline, not the day of. Derived client-side in
-           renderTodayComingUp from the full decision-log records (due present,
-           state open, dueDate in [today, today+14d]). Grouped by project like
-           "Needs attention"; empty ⇒ the quiet line below (WP-TODAY-READ-ACT:
-           "nothing due" is affirmative information — the section stays present
-           so the morning report reads complete, per the quiet-report ruling). -->
-      <section class="today-comingup" id="today-comingup-section" hidden>
+      <!-- ② Next two weeks — the ONE forward-looking surface (WP-TODAY-3BANDS:
+           the former Deadline outlook, "This week" pick list, and Coming-up rail
+           were three renderings of the SAME fetch_decision_log_full records; a
+           record now renders ONCE here). Every OPEN commitment due in
+           [today, today+14d], soonest first, as a runway row: summary + state +
+           today→due bar with the workback latest-safe-start tick (amber when
+           that point passed with nothing seen). Click a row → the reasoning +
+           actions expand inline (steps, gestures, resolve/snooze/dismiss,
+           follow-up). Empty ⇒ the quiet line below ("nothing due" is
+           affirmative information — the section stays present so the morning
+           report reads complete, per the quiet-report ruling). -->
+      <section class="today-nextweeks" id="today-nextweeks-section" hidden>
         <div class="today-section-head">
-          <h2 class="today-section-title">Coming up</h2>
-          <span class="today-section-count" id="today-comingup-count"></span>
+          <h2 class="today-section-title">Next two weeks</h2>
+          <span class="today-section-count" id="today-nextweeks-count"></span>
         </div>
-        <div class="log-attention-groups" id="today-comingup-groups"></div>
-        <div class="log-attention-list" id="today-comingup-list"></div>
+        <div class="today-outlook-rows" id="today-outlook-rows"></div>
+        <p class="today-outlook-legend" id="today-outlook-legend" hidden>
+          | = latest start that still makes the due date · amber = that point passed with nothing seen
+        </p>
         <p class="log-empty" id="today-comingup-empty" hidden>Nothing due in the next two weeks.</p>
       </section>
-
-      <!-- Awaiting send / Sent tray — the Outbox demotion. Appears ONLY when there
-           are staged drafts (empty ⇒ hidden). Sourced from fetch_outbox. -->
-      <section class="today-outbox-tray" id="today-outbox-tray" hidden>
-        <div class="today-section-head">
-          <h2 class="today-section-title today-tray-title">Awaiting send</h2>
-          <span class="today-section-count" id="today-outbox-count"></span>
-        </div>
-        <div class="today-outbox-list" id="today-outbox-list"></div>
-      </section>
-
-      </div><!-- /#today-rail -->
 
       <!-- WP-Priority-Operator — Focus + Watch collapsible sections, populated
            from GET /api/decision-log/priority (loaded on Today, independent of
@@ -843,12 +782,42 @@
            Additive + silent: empty (no node) when grouped data is absent. -->
       <div id="log-stalled-sections"></div>
 
+      <!-- ③ Where things stand — the READ band (WP-TODAY-3BANDS): ONE narrative
+           plus the demoted rollup, full-width below the act/watch columns. -->
+      <div id="today-readband">
+
+      <!-- The State-of-Play narrative. Person lens when the viewer has an
+           identity (loadPersonLensSoP; the "All work" toggle reaches the forest
+           altitude); the corpus panel below auto-opens ONLY when no person
+           narrative rendered — one corpus, ONE narrative (WP-TODAY-3BANDS;
+           the stacked double-synthesis was inventory finding #1/#2). The
+           header "State of Play" button still toggles the corpus panel on
+           demand either way. -->
+      <section class="today-sop" id="today-sop-section">
+        <!-- WP-WorkForest-Native-SoP (UI-1 + UI-6) — Person / Forest lens toggle.
+             Hidden until the SoP resolves with prose (loadPersonLensSoP). -->
+        <div class="sop-lens-bar" id="log-sop-lens" hidden>
+          <button type="button" class="sop-lens-btn" data-lens="person" aria-pressed="true">Your jobs</button>
+          <button type="button" class="sop-lens-btn" data-lens="forest" aria-pressed="false">All work</button>
+        </div>
+        <div class="sop-lens-panel" id="log-sop-lens-panel">
+          <div class="sop-status today-sop-skeleton">Composing your state of play…</div>
+        </div>
+      </section>
+
+      <!-- WP-THRESHOLD-STATE-OF-PLAY — corpus altitude: the Monday overview across
+           all projects. On demand when the person lens rendered; the automatic
+           narrative otherwise. -->
+      <div class="sop-panel" id="log-sop-panel" hidden></div>
+
       <!-- "Needs attention" — the prior Today content (needs-attention rows,
            conflicts, workload), grouped by project under one collapsible. Populated
            by the decision-log source when it lands (fire-and-forget). ONE header
            (no inner sub-header). The states strip (open / resolved / replaced)
            rides in the header row, right-aligned + visually small — it no longer
-           renders as its own floating stratum. -->
+           renders as its own floating stratum. Rows the Next-two-weeks band
+           already shows are skipped here with a quiet count (one appearance per
+           item, fail-closed-but-VISIBLE). -->
       <section class="log-collapse" id="log-everything-section" hidden>
         <div class="log-collapse-head-row">
           <button type="button" class="log-collapse-head" id="log-everything-toggle" aria-expanded="true">
@@ -882,6 +851,8 @@
           </section>
         </div>
       </section>
+
+      </div><!-- /#today-readband -->
 
       <p class="log-status" id="log-status" hidden></p>
     </section>
