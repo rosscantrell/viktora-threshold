@@ -2521,27 +2521,130 @@ code {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WP-TODAY-3BANDS — the three Today bands (Needs you · Next two weeks ·
-   Where things stand). All dark/glassy tokens only (§2.5); no new colours/fonts.
+   WP-TODAY-BRIEF — the four strata of the daily brief (Don't miss · Your
+   week · Your plan · One question). One row grammar, one column. All
+   dark/glassy tokens only (§2.5); no new colours/fonts.
    ══════════════════════════════════════════════════════════════════════════ */
-.today-sop,
-.today-queue,
-.today-nextweeks {
+.today-brief-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 /* Empty ⇒ absent: the flex display would otherwise outrank [hidden]. */
-.today-nextweeks[hidden],
-.today-sop[hidden] {
+.today-brief-section[hidden] {
   display: none;
 }
 
-/* The right-column wrapper is layout-only: invisible to the narrow single-
-   column flow; a flex column in the ≥1200px grid (see WP-TODAY-3BANDS grid). */
-#today-right {
-  display: contents;
+/* The quiet into-the-Log line every stratum ends on: counted, clickable,
+   never amber. */
+.today-log-line {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--glass-text-faint);
+  cursor: pointer;
+  text-align: left;
+}
+.today-log-line:hover {
+  color: var(--glass-text);
+}
+
+/* ① Don't miss — the ONLY amber on the page (rubric: amber = urgency).
+   Compact rows: amber left bar, one-line text, quiet tag; the full card
+   expands in place. */
+#today-miss-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.today-miss-item {
+  display: flex;
+  flex-direction: column;
+}
+.today-miss-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--warn-soft, rgba(255, 196, 64, 0.05));
+  border: none;
+  border-left: 2px solid var(--glass-accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.today-miss-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-miss-row:hover .today-miss-text {
+  color: var(--text-primary);
+}
+.today-miss-tag {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+.today-miss-detail {
+  margin: 4px 0 6px 12px;
+}
+.today-miss-detail[hidden] {
+  display: none;
+}
+
+/* ③ Your plan — compact draft rows; the full companion card expands below. */
+.today-draft-item {
+  display: flex;
+  flex-direction: column;
+}
+.today-draft-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.today-draft-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-draft-row:hover .today-draft-text {
+  color: var(--text-primary);
+}
+.today-draft-tag {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+.today-draft-detail {
+  margin: 4px 0 6px 12px;
+}
+.today-draft-detail[hidden] {
+  display: none;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -2549,8 +2652,11 @@ code {
    now THE forward surface at every width). Rows are buttons (tap → the
    reasoning + actions expand inline).
    ══════════════════════════════════════════════════════════════════════════ */
+.today-outlook-rows[hidden] {
+  display: none;
+}
 .today-outlook-rows {
-  --outlook-label-w: 200px;
+  --outlook-label-w: 240px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2831,21 +2937,12 @@ code {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* WP-TODAY-3BANDS — the one-appearance receipt under the needs-attention board:
-   rows absorbed by Next two weeks leave this quiet count behind. */
-.today-dedup-note {
-  margin: 6px 0 0;
-  font-size: 11.5px;
-  color: var(--glass-text-faint);
-}
 
 /* WP-TODAY-READ-ACT — quiet report: Today's strata empty-lines sit flush under
    their section titles (left-aligned, tight) so an all-quiet morning reads as a
    compact report, not centered labels floating in section-sized voids. Scoped
    to Today's strata — other views keep the centered .log-empty. */
-.today-queue .log-empty,
-.today-nextweeks .log-empty,
-#log-attention-empty {
+.today-brief-section .log-empty {
   text-align: left;
   padding: 4px 0 6px;
 }
@@ -6692,87 +6789,16 @@ button.rec-source {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   WP-TODAY-3BANDS — two-column Today at ≥1200px. Below the breakpoint
-   #view-log stays plain block flow: the DOM order IS the band order
-   (Needs you → Next two weeks → Where things stand).
-
-   Wide composition (Ross-approved Concept B mockup, 2026-07-11):
-
-     ROW 3, LEFT  (col 1, ≈43%): ① Needs you — the act band.
-     ROW 3, RIGHT (col 2, ≈57%): ② Next two weeks + ③'s narrative, ONE
-           flowing #today-right wrapper (the bars want the wider track; the
-           narrative fills the space under the short watch box).
-     BELOW (full width): the Needs-attention board; the worklist packs
-           into responsive ≥420px columns (amendment-1 floor respected).
-
-   NOTHING spans rows (the WP-R-c2 lesson stands): the two bands sit in ONE
-   row-3 band as siblings, so neither can inflate the other's rows or paint
-   over the board. The hidden #today-plan-slot holds row 2 for Concept A.
+   WP-TODAY-BRIEF — ONE centered column at every width (Ross 2026-07-12: the
+   brief replaces the dashboard; the two-column grid and the full-width board
+   left Today with the archives). The 560px single-column cap lifts to a
+   comfortable reading measure; nothing else about the page geometry varies
+   with the viewport.
    ══════════════════════════════════════════════════════════════════════════ */
-@media (min-width: 1200px) {
-  #view-log:not([hidden]) {
-    /* Lift the 560px single-column cap (set on .view-log) so the two-column
-       layout can actually use the width. Held to 1480px + centered so an
-       ultra-wide monitor doesn't sprawl edge-to-edge. The SoP prose keeps its
-       own ~72ch measure inside the read band. */
-    max-width: 1480px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
-    column-gap: 28px;
-    row-gap: 0;
-    align-items: start;
-  }
-
-  /* Full-width strata: header on top; the board + status at the bottom,
-     below the taller of the two columns. Priority/Stalled are VIEW_DEBUG-only
-     containers (empty otherwise) and keep their own rows. */
-  #view-log:not([hidden]) > .log-header,
-  #view-log:not([hidden]) > #today-plan-slot,
-  #view-log:not([hidden]) > #log-priority-sections,
-  #view-log:not([hidden]) > #log-stalled-sections,
-  #view-log:not([hidden]) > #log-everything-section,
-  #view-log:not([hidden]) > #log-status {
-    grid-column: 1 / -1;
-  }
-  #view-log:not([hidden]) > .log-header { grid-row: 1; }
-  #view-log:not([hidden]) > #today-plan-slot { grid-row: 2; }
-  #view-log:not([hidden]) > #today-queue-section { grid-column: 1; grid-row: 3; }
-  /* The right column — Next two weeks + the narrative as ONE flowing item, so
-     the shorter watch box can't strand dead space beside a tall queue. */
-  #view-log:not([hidden]) > #today-right {
-    grid-column: 2;
-    grid-row: 3;
-    display: flex;
-    flex-direction: column;
-    align-self: start;
-    min-width: 0;
-  }
-  #view-log:not([hidden]) > #log-priority-sections { grid-row: 4; }
-  #view-log:not([hidden]) > #log-stalled-sections { grid-row: 5; }
-  #view-log:not([hidden]) > #log-everything-section { grid-row: 6; }
-  #view-log:not([hidden]) > #log-status { grid-row: 7; }
-
-  #view-log:not([hidden]) #today-sop-section {
-    min-height: 2.5em;
-  }
-
-  /* Needs-attention header row: keep the "Needs attention" title on one line
-     and let the state-count chips wrap below it as a unit when the row
-     is tight (amendment 1) — never squeeze the title into vertical text. */
-  #view-log:not([hidden]) .log-collapse-head-row {
-    flex-wrap: wrap;
-  }
-
-  /* Needs-attention density (WP-TODAY-READ-ACT): the full-width worklist packs
-     project groups into responsive columns — each ≥420px (clear of the 400px
-     amendment floor), 3 across at the 1480px cap. Grid (not CSS multi-column)
-     so each group stays intact and rows top-align. */
-  #view-log:not([hidden]) #log-attention-groups {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-    gap: 14px 22px;
-    align-items: start;
-  }
+#view-log:not([hidden]) {
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* (The former ≥1500px column-count rule for #log-attention-groups is
