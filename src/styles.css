@@ -6829,8 +6829,9 @@ button.rec-source {
   margin-bottom: 12px;
 }
 .routine-row { display: flex; align-items: center; gap: 10px; }
-/* The reminder toggle must shed the .field input text-field chrome. */
-.routine-row .routine-toggle {
+/* The reminder + master toggles must shed the .field input text-field chrome. */
+.routine-row .routine-toggle,
+.routine-master-row .routine-toggle {
   flex: 0 0 auto;
   width: 15px;
   height: 15px;
@@ -6841,6 +6842,24 @@ button.rec-source {
   border: none;
   box-shadow: none;
 }
+/* Prework has no local toggle (its enablement is the master switch) — hold
+   the column so times align. */
+.routine-toggle-slot { flex: 0 0 auto; width: 15px; }
+/* The unattended-preparation master switch (no display rule on the hidden
+   container itself — [hidden] must keep working). */
+.routine-master-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.routine-master-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.routine-master-note { margin: 4px 0 10px 25px; }
+.routine-master-note:empty { display: none; }
 /* Engine captions — the quiet line under a row carrying verified workspace
    state (prework status; the derived delta/closure prep times). Indented past
    the toggle column so it reads as the row's annotation. */
