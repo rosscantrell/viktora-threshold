@@ -6947,22 +6947,38 @@ async fn fetch_followed_threads(cfg: &AppConfig) -> Result<FollowedThreadsRespon
     Ok(FollowedThreadsResponse::Threads(threads))
 }
 
-/// Outcome of a single `POST /api/email/import`.
+/// Outcome of a single import POST (`/api/email/import` or `/api/teams/import` —
+/// both share the `{ok}` / `{ok,duplicate}` / `{enabled:false}` response shape).
 enum EmailImportOutcome {
     /// `{ok:true, documentId}` — a NEW message was ingested.
     Imported,
     /// `{ok:true, duplicate:true}` — the engine already had it.
     Duplicate,
-    /// `{enabled:false}` — the flag flipped OFF mid-sweep. Stop the loop calmly.
+    /// `{enabled:false}` — the import lane is OFF server-side.
     Disabled,
     /// Any failure (network / 4xx-5xx). Don't advance the watermark past it.
     Failed(String),
 }
 
-/// POST one normalized message to `/api/email/import` (bearer stays in Rust).
-/// Non-throwing: every expected failure folds into `EmailImportOutcome`.
+/// POST one normalized email message to `/api/email/import` (bearer stays in
+/// Rust). Non-throwing: every expected failure folds into `EmailImportOutcome`.
 async fn import_one_email(cfg: &AppConfig, body: serde_json::Value) -> EmailImportOutcome {
-    let url = format!("{}/api/email/import", cfg.base_url.trim_end_matches('/'));
+    post_import(cfg, "/api/email/import", body).await
+}
+
+/// POST one normalized Teams channel message to `/api/teams/import` (bearer stays
+/// in Rust). Same response contract as the email import, so it reuses the shared
+/// `post_import` helper + `EmailImportOutcome`.
+async fn import_one_teams(cfg: &AppConfig, body: serde_json::Value) -> EmailImportOutcome {
+    post_import(cfg, "/api/teams/import", body).await
+}
+
+/// POST one import body to a bearer-lane import endpoint (`path`). The two import
+/// endpoints (`/api/email/import`, `/api/teams/import`) share the exact response
+/// contract: `{ok:true,...}` ⇒ Imported, `{ok:true,duplicate:true}` ⇒ Duplicate,
+/// `{enabled:false}` ⇒ Disabled, non-2xx / network ⇒ Failed. Non-throwing.
+async fn post_import(cfg: &AppConfig, path: &str, body: serde_json::Value) -> EmailImportOutcome {
+    let url = format!("{}{}", cfg.base_url.trim_end_matches('/'), path);
     let client = match reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(30))
@@ -7323,16 +7339,23 @@ async fn email_follow_sweep(
 //   3. Scan the folder for top-level `*.json`; order oldest-first by mtime; cap
 //      at ONEDRIVE_MAIL_FILE_CAP with LOGGED truncation (`processed/`+`failed/`
 //      subdirs are never recursed).
-//   4. Per file: read + parse/validate. Malformed / wrong-schema / missing-
-//      required ⇒ MOVE to `failed/` (quarantine, logged, never re-read).
-//   5. Valid ⇒ map to the import body and POST /api/email/import (same bearer
-//      plumbing as email_follow, via `import_one_email`). `ok` OR `duplicate`
-//      ⇒ MOVE to `processed/` (never re-import). `{enabled:false}` ⇒ the lane
-//      flag is OFF ⇒ stop calmly, leave the file for when it's on. A transient
-//      failure (engine unreachable / 4xx-5xx) ⇒ LEAVE the file in place so the
-//      next tick retries (the folder itself is the watermark).
-// A sweep failure NEVER aborts the tick: every class folds into the summary or
-// a quiet log (mirrors push_availability / the OneNote + email-follow sweeps).
+//   4. Per file: read + parse/validate via the schema-v2 dispatcher
+//      (`parse_swept_file`). Malformed / wrong-schema / wrong-kind / missing-
+//      required / invalid-capture ⇒ MOVE to `failed/` (quarantine, logged, never
+//      re-read).
+//   5. Valid ⇒ route by kind to the matching import endpoint with the file's
+//      `capture` passed through: email ⇒ POST /api/email/import (via
+//      `import_one_email`); Teams ⇒ POST /api/teams/import (via
+//      `import_one_teams`). `ok` OR `duplicate` ⇒ MOVE to `processed/` (never
+//      re-import; Teams receipts are teams-prefixed). `{enabled:false}` ⇒ that
+//      lane is OFF ⇒ MOVE to `skipped/` (durable config state, bounded drain, NOT
+//      re-scanned each tick — see the sweep-module header). A transient failure
+//      (engine unreachable / 4xx-5xx / locked file) ⇒ LEAVE the file in place so
+//      the next tick retries (the folder itself is the watermark).
+// Each file routes independently — a disabled email lane never stops the Teams
+// lane (no whole-sweep abort). A sweep failure NEVER aborts the tick: every class
+// folds into the summary or a quiet log (mirrors push_availability / the OneNote
+// + email-follow sweeps).
 
 /// Structured outcome of one OneDrive mail sweep, returned to the `email-files`
 /// callee (widget.js) for a concise receipt. Counts/flags only — no bodies.
@@ -7346,8 +7369,9 @@ pub struct OneDriveMailSweepSummary {
     /// A folder is configured but doesn't exist / isn't a directory (OneDrive
     /// not installed, wrong path, not yet synced). Calm skip, fail-VISIBLE log.
     pub folder_not_found: bool,
-    /// Engine flag `EMAIL_THREAD_FOLLOW_ENABLED` (same lane) state. `false` ⇒
-    /// the import endpoint returned `{enabled:false}` (calm no-op).
+    /// `true` unless an import lane returned `{enabled:false}` this sweep. When
+    /// `false`, `skipped_lane_off` counts the files set aside in `skipped/`.
+    /// (Both email and Teams lanes feed this — a single flag off flips it.)
     pub enabled: bool,
     /// `*.json` files found at the folder root this sweep (pre-cap).
     pub found: usize,
@@ -7356,8 +7380,12 @@ pub struct OneDriveMailSweepSummary {
     /// Files the engine already had (`{ok:true,duplicate:true}`) — still a
     /// success ⇒ moved to `processed/`.
     pub duplicates: usize,
-    /// Files quarantined to `failed/` (malformed / wrong-schema / missing field).
+    /// Files quarantined to `failed/` (malformed / wrong-schema / wrong-kind /
+    /// missing field / invalid capture).
     pub quarantined: usize,
+    /// Files moved to `skipped/` because their import lane is OFF server-side
+    /// (`{enabled:false}`). Fail-VISIBLE: retained + counted, not re-scanned.
+    pub skipped_lane_off: usize,
     /// Files whose import POST failed transiently (network / 4xx-5xx) ⇒ LEFT in
     /// place for a later tick.
     pub failed: usize,
@@ -7429,8 +7457,8 @@ async fn onedrive_mail_sweep(app: tauri::AppHandle) -> Result<OneDriveMailSweepS
         );
     }
 
-    // ── 3. Per-file: parse → quarantine-or-import → move ──
-    let mut disabled_midway = false;
+    // ── 3. Per-file: parse → route by kind → quarantine / import / skip / leave ──
+    let mut any_lane_disabled = false;
     for path in &ordered {
         let contents = match std::fs::read_to_string(path) {
             Ok(c) => c,
@@ -7446,8 +7474,8 @@ async fn onedrive_mail_sweep(app: tauri::AppHandle) -> Result<OneDriveMailSweepS
                 continue;
             }
         };
-        let parsed = match ods::parse_mail_file(&contents) {
-            Ok(m) => m,
+        let record = match ods::parse_swept_file(&contents) {
+            Ok(r) => r,
             Err(e) => {
                 // Bad file: quarantine to failed/ so it's never re-read.
                 summary.quarantined += 1;
@@ -7463,61 +7491,89 @@ async fn onedrive_mail_sweep(app: tauri::AppHandle) -> Result<OneDriveMailSweepS
             }
         };
 
-        let body = ods::build_import_body(&parsed);
-        match import_one_email(&cfg, body).await {
+        // Route by kind to the matching import endpoint, capture passed through
+        // (folded into the body per-arm).
+        let kind = record.kind();
+        let (outcome, desc) = match &record {
+            ods::SweptRecord::Email { mail, capture } => {
+                let body = ods::build_import_body(mail, *capture);
+                (
+                    import_one_email(&cfg, body).await,
+                    format!("email/{}", ods::mailbox_label(mail)),
+                )
+            }
+            ods::SweptRecord::Teams { msg, capture } => {
+                let body = ods::build_teams_import_body(msg, *capture);
+                (
+                    import_one_teams(&cfg, body).await,
+                    format!("teams/{}", msg.channel_id),
+                )
+            }
+        };
+
+        match outcome {
             EmailImportOutcome::Imported => {
                 summary.imported += 1;
-                move_processed(&folder, path);
+                move_receipt_logged(&folder, path, ods::PROCESSED_DIR, kind);
             }
             EmailImportOutcome::Duplicate => {
                 summary.duplicates += 1;
-                move_processed(&folder, path);
+                move_receipt_logged(&folder, path, ods::PROCESSED_DIR, kind);
             }
             EmailImportOutcome::Disabled => {
-                // Flag OFF (server-side lane disabled). Stop calmly; LEAVE the
-                // file so it imports once the flag flips on.
-                disabled_midway = true;
-                break;
+                // Lane OFF server-side: a durable config state, not transient.
+                // MOVE to skipped/ (bounded drain, retained + fail-VISIBLE) so we
+                // never re-scan/re-probe it every tick. This kind's lane being off
+                // does NOT stop the other kind — keep going.
+                any_lane_disabled = true;
+                summary.skipped_lane_off += 1;
+                log::info!(
+                    "WP-INTAKE odrive: {} lane disabled server-side; file set aside in {}/",
+                    desc,
+                    ods::SKIPPED_DIR
+                );
+                move_receipt_logged(&folder, path, ods::SKIPPED_DIR, kind);
             }
             EmailImportOutcome::Failed(e) => {
                 // Transient — LEAVE in place, retry next tick (no move).
                 summary.failed += 1;
                 log::info!(
                     "WP-INTAKE odrive: import failed for {} ({}); left in place",
-                    ods::mailbox_label(&parsed),
+                    desc,
                     e
                 );
             }
         }
     }
 
-    summary.enabled = !disabled_midway;
-    if disabled_midway {
-        log::info!("WP-INTAKE odrive: import lane disabled server-side; stopped calmly");
-    }
+    summary.enabled = !any_lane_disabled;
     log::info!(
-        "WP-INTAKE odrive: mail sweep ran (found={} imported={} duplicates={} quarantined={} failed={} deferred={})",
+        "WP-INTAKE odrive: sweep ran (found={} imported={} duplicates={} quarantined={} skippedLaneOff={} failed={} deferred={})",
         summary.found,
         summary.imported,
         summary.duplicates,
         summary.quarantined,
+        summary.skipped_lane_off,
         summary.failed,
         summary.deferred
     );
     Ok(summary)
 }
 
-/// Move a successfully-imported file to `processed/`; a move failure is logged
-/// but never fatal (the engine already has the message — worst case the file is
-/// re-POSTed next tick and the engine dedupes it).
-fn move_processed(folder: &std::path::Path, path: &std::path::Path) {
-    if let Err(e) = onedrive_mail_sweep::move_into_subdir(
-        path,
-        folder,
-        onedrive_mail_sweep::PROCESSED_DIR,
-    ) {
+/// Move a file into a receipt subfolder (`processed/` on success, `skipped/` on a
+/// disabled lane), applying the kind's filename prefix. A move failure is logged
+/// but never fatal (worst case: for a processed file the engine already has the
+/// message and dedupes it on a re-POST next tick).
+fn move_receipt_logged(
+    folder: &std::path::Path,
+    path: &std::path::Path,
+    subdir: &str,
+    kind: onedrive_mail_sweep::SweptKind,
+) {
+    if let Err(e) = onedrive_mail_sweep::move_receipt(path, folder, subdir, kind) {
         log::warn!(
-            "WP-INTAKE odrive: processed-move failed for {:?} (engine already has it; dedup on retry): {}",
+            "WP-INTAKE odrive: {}-move failed for {:?} (engine dedups on retry): {}",
+            subdir,
             path,
             e
         );

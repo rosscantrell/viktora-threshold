@@ -825,21 +825,23 @@ async function emailFollowSweep() {
 registerChannelCallee("email", emailFollowSweep);
 
 // ───────────────────────────────────────────────────────────────────────────
-// WP-INTAKE — OneDrive folder-sweep mail import (registered as "email-files").
+// WP-INTAKE — OneDrive folder-sweep import (registered as "email-files").
 // ───────────────────────────────────────────────────────────────────────────
 //
 // The New-Outlook-safe SIBLING of the "email" (Outlook COM) callee. The whole
 // sweep lives in Rust (`onedrive_mail_sweep`): a Power Automate flow in the
-// user's tenant writes each arriving/sent email as a JSON file into a OneDrive
-// folder; the OneDrive sync client mirrors that folder to local disk; the Rust
-// command scans the folder, validates each file, and pushes it through the SAME
-// engine POST /api/email/import the "email" callee feeds (bearer stays in Rust).
-// Successful files move to processed/; malformed ones to failed/; transient
-// failures stay put for the next tick. Pure filesystem + HTTP ⇒ this callee is
-// NOT platform-gated — it runs on macOS AND Windows.
+// user's tenant writes each arriving/sent email — and, as of schema v2, each new
+// Teams channel message — as a JSON file into a OneDrive folder; the OneDrive
+// sync client mirrors that folder to local disk; the Rust command scans the
+// folder, validates + routes each file by kind, and pushes it through the SAME
+// engine import endpoints the COM sweeps feed (POST /api/email/import for mail,
+// POST /api/teams/import for Teams; bearer stays in Rust). Successful files move
+// to processed/; malformed ones to failed/; files whose lane is OFF move to
+// skipped/; transient failures stay put for the next tick. Pure filesystem +
+// HTTP ⇒ this callee is NOT platform-gated — it runs on macOS AND Windows.
 //
 // This callee is a thin driver: invoke the command, log a concise receipt
-// (imported / duplicates / quarantined / failed), distinguish the calm
+// (imported / duplicates / quarantined / skipped / failed), distinguish the calm
 // not-configured / folder-missing states, and NEVER rethrow into the shared tick.
 
 async function oneDriveMailSweep() {
@@ -863,17 +865,17 @@ async function oneDriveMailSweep() {
     console.warn("[email-files] configured OneDrive mail folder not found (check the path)");
     return;
   }
-  if (!summary.enabled) {
-    // Engine import lane (EMAIL_THREAD_FOLLOW_ENABLED) is OFF — calm no-op.
-    console.log("[email-files] import lane disabled server-side (calm no-op)");
-    return;
-  }
   const parts = [
     `imported=${summary.imported}`,
     `duplicates=${summary.duplicates}`,
     `quarantined=${summary.quarantined}`,
     `failed=${summary.failed}`,
   ];
+  if (summary.skippedLaneOff) {
+    // Fail-VISIBLE: a lane (email or Teams) is OFF server-side; those files were
+    // set aside in skipped/ (bounded, recoverable) rather than re-scanned forever.
+    parts.push(`laneOff=${summary.skippedLaneOff} (disabled → skipped/)`);
+  }
   if (summary.truncated) parts.push(`deferred=${summary.deferred} (file cap)`);
   console.log(`[email-files] ${parts.join(" · ")} of ${summary.found} file(s) found`);
 }
