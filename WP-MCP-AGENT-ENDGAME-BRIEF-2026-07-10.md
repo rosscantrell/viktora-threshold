@@ -233,6 +233,20 @@ check-ins.
   scheduled run that reads the minted plan from substrate (claude.ai sessions
   can't keep working an idle chat; the capture is the only handoff channel —
   the plan IS the substrate, no in-memory handoff).
+- **AUTHORIZATION GRADIENT (pinned 2026-07-12, resolving a contract ambiguity
+  raised by the Today-view session): what an unattended run may write is set
+  by the FRESHNESS of the human agreement authorizing it.** (1) Attended
+  session — the human is live: every lane, all HITL-gated. (2) POST-CLOSE
+  async wing — authorized by the minutes-old captured plan: the full §C1 list
+  above, outbox included (each queued item was just agreed). (3) SCHEDULED
+  pre-brief passes (prework/delta/closure — the headless runner): no fresh
+  agreement exists, so STAGING + FILED QUESTIONS ONLY — no outbox, no ratify
+  proposals, no capture, no mark_seen. A draft the human never discussed
+  belongs in staging for the next attended session to present, not in an
+  outbox lane. Enforced STRUCTURALLY in the runner (tool whitelist), not by
+  prompt. Corollary for surfaces: overnight production fills the prework
+  STAGING (packet `prework` section), not the outbox — notification copy and
+  "Prepared for you"-style strata must count from the matching source.
 - **Every check-in gets an async wing, same shape.** Morning's approvals
   finalize → outbox before midday; midday presents morning's results; the
   evening wing additionally stages tomorrow's prework (the cycle's hinge —
