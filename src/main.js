@@ -832,7 +832,7 @@ function doctorCard({ name, detail, pill, pillState, actions = [] }) {
     actionsEl.appendChild(btn);
   }
 
-  row.append(main, pillEl, actionsEl);
+  row.append(main, actionsEl, pillEl);
   card.appendChild(row);
   return card;
 }
@@ -855,9 +855,155 @@ function buildDoctorCards(report, ics) {
   }
   cards.push(buildCalendarCard(report, ics));
   cards.push(buildEmailFilesCard(report));
+  cards.push(buildTeamsCard(report));
   cards.push(buildPlaudCard(report));
   cards.push(buildOneNoteCard(report));
+  cards.push(buildJumpstartCard(report));
   return cards;
+}
+
+// Teams channel messages ride the same OneDrive file pipeline as email —
+// one flow per channel, built from the generated recipe. Presence signal is
+// the doctor's teams receipt count (first message lands ⇒ green); no Teams
+// API is ever probed.
+function buildTeamsCard(report) {
+  const mail = report?.onedriveMail ?? {};
+  const teamsCount = mail.teamsProcessedCount ?? 0;
+
+  if (teamsCount > 0) {
+    return doctorCard({
+      name: "Teams channels",
+      detail: `Flowing from your Teams flows · ${teamsCount} ${teamsCount === 1 ? "message" : "messages"} imported so far`,
+      pill: "Ready",
+      pillState: "ready",
+      actions: [{ label: "Add a channel", link: true, onClick: (card) => openTeamsSetup(card, mail) }],
+    });
+  }
+
+  if (mail.state !== "ready") {
+    const noOneDrive = !(report?.oneDriveRoot?.found);
+    return doctorCard({
+      name: "Teams channels",
+      detail: noOneDrive
+        ? "Needs OneDrive on this computer (same as Email). Channel messages can still be captured on your work PC."
+        : "Set up Email first — Teams messages ride the same capture folder.",
+      pill: noOneDrive ? "Unavailable" : "After email",
+      pillState: "blocked",
+    });
+  }
+
+  return doctorCard({
+    name: "Teams channels",
+    detail: "Pick a channel and build its flow from the recipe — a minute each. Turns green when the first message lands.",
+    pill: "1 min each",
+    pillState: "action",
+    actions: [{ label: "Set up", primary: true, onClick: (card) => openTeamsSetup(card, mail) }],
+  });
+}
+
+async function openTeamsSetup(card, mail) {
+  try {
+    const parent = (mail?.folder || "").replace(/[\\/]mail[\\/]?$/, "");
+    if (!parent) return;
+    const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent });
+    const links = await tauri.core.invoke("integration_doctor_links");
+    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries it */ }
+    card.querySelector(".doctor-expand")?.remove();
+    const expand = document.createElement("div");
+    expand.className = "doctor-expand";
+    expand.appendChild(doctorNote("ok",
+      "Recipe refreshed in your OneDrive (Apps/Threshold — see TEAMS-RECIPE). In Power Automate: build the channel's flow from the recipe, turn it on, then post something in the channel. This card turns green when the message arrives."));
+    const row = document.createElement("div");
+    row.className = "doctor-expand-row";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn btn-secondary btn-compact";
+    copyBtn.textContent = "Copy recipe location";
+    copyBtn.addEventListener("click", async () => {
+      try { await tauri.core.invoke("copy_text", { text: pkg?.recipePath || parent }); copyBtn.textContent = "Copied"; } catch { /* non-fatal */ }
+    });
+    row.appendChild(copyBtn);
+    expand.appendChild(row);
+    card.appendChild(expand);
+  } catch (err) {
+    showToast({ kind: "error", title: "Couldn't prepare the Teams recipe", body: String(err) });
+  }
+}
+
+// One-time cold-start booster. Completion is user-declared ("Mark done") —
+// there is no reliable machine signal for "the backfill flow ran", and the
+// receipts surface in check-ins either way. Older items file as background
+// context (engine recency gate), never as overdue to-dos.
+const JUMPSTART_DONE_KEY = "thresholdJumpstartDone";
+
+function buildJumpstartCard(report) {
+  const mail = report?.onedriveMail ?? {};
+
+  if (localStorage.getItem(JUMPSTART_DONE_KEY)) {
+    return doctorCard({
+      name: "Jump-start",
+      detail: "Backfill imported — older items are filed as background context, and everything is searchable.",
+      pill: "Done",
+      pillState: "ready",
+    });
+  }
+
+  if (mail.state !== "ready") {
+    const noOneDrive = !(report?.oneDriveRoot?.found);
+    return doctorCard({
+      name: "Jump-start",
+      detail: noOneDrive
+        ? "Warm up your field with your last 30 days — runs from the machine where Email is set up."
+        : "Warm up your field with your last 30 days. Available after Email is set up.",
+      pill: noOneDrive ? "Unavailable" : "After email",
+      pillState: "blocked",
+    });
+  }
+
+  return doctorCard({
+    name: "Jump-start",
+    detail: "Import your last 30 days (Sent mail recommended) so Threshold is useful on day one. Runs once in the background — older items file as context, not to-dos.",
+    pill: "10 min · once",
+    pillState: "action",
+    actions: [{ label: "Jump-start", primary: true, onClick: (card) => openJumpstartSetup(card, mail) }],
+  });
+}
+
+async function openJumpstartSetup(card, mail) {
+  try {
+    const parent = (mail?.folder || "").replace(/[\\/]mail[\\/]?$/, "");
+    if (!parent) return;
+    const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent });
+    const links = await tauri.core.invoke("integration_doctor_links");
+    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries it */ }
+    card.querySelector(".doctor-expand")?.remove();
+    const expand = document.createElement("div");
+    expand.className = "doctor-expand";
+    expand.appendChild(doctorNote("ok",
+      "Recipe refreshed in your OneDrive (Apps/Threshold — see BACKFILL-RECIPE). In Power Automate: build \"Threshold backfill — Sent mail 30d\", run it once, then delete it. Optional: the all-mail and Teams-history variants. Receipts show up in your check-ins as items land."));
+    const row = document.createElement("div");
+    row.className = "doctor-expand-row";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn btn-secondary btn-compact";
+    copyBtn.textContent = "Copy recipe location";
+    copyBtn.addEventListener("click", async () => {
+      try { await tauri.core.invoke("copy_text", { text: pkg?.recipePath || parent }); copyBtn.textContent = "Copied"; } catch { /* non-fatal */ }
+    });
+    const doneBtn = document.createElement("button");
+    doneBtn.type = "button";
+    doneBtn.className = "btn btn-primary btn-compact";
+    doneBtn.textContent = "Mark done";
+    doneBtn.addEventListener("click", () => {
+      localStorage.setItem(JUMPSTART_DONE_KEY, "1");
+      renderIntegrationDoctor();
+    });
+    row.append(copyBtn, doneBtn);
+    expand.appendChild(row);
+    card.appendChild(expand);
+  } catch (err) {
+    showToast({ kind: "error", title: "Couldn't prepare the backfill recipe", body: String(err) });
+  }
 }
 
 function buildCalendarCard(report, ics) {
