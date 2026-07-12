@@ -5418,7 +5418,9 @@ function renderTodayPlanSection(tp) {
     const text = document.createElement("span");
     text.className = "today-planrec-text";
     text.textContent = (ref.side === "companion" ? "✦ " : "") + (ref.summary || ref.recordId);
-    text.title = text.textContent;
+    // Tooltip only where ellipsis is plausible — on short rows the native
+    // tooltip reads as a stray chip (Ross render pass, 2026-07-12).
+    if (text.textContent.length > 64) text.title = text.textContent;
     row.appendChild(text);
     if (opts.tag) {
       const tag = document.createElement("span");
