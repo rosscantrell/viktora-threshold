@@ -1735,6 +1735,153 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
   });
 })();
 
+// ── Daily routines (WP-CHECKIN-ROUTINES) ────────────────────────────────────
+// One button sets up the four daily companion check-ins. claude.ai has no
+// external API for creating scheduled tasks, so Threshold cannot create them
+// silently — the button opens the companion URL (same localStorage store as
+// the Standup chip) with ONE prefilled message asking Claude to create all
+// four schedules; the user reviews and sends it there. The routine prompts
+// stay deliberately thin — all protocol engineering is server-side in
+// get_checkin_packet — and carry tz_offset_minutes computed from this
+// machine's clock (packet convention: minutes east of UTC, the reverse sign
+// of getTimezoneOffset), never hardcoded. Threshold can't read the
+// companion's schedule back, so the status line only claims what the app
+// verified: that it opened.
+const ROUTINE_TIMES_KEY = "threshold.routineTimes";
+const ROUTINES = [
+  {
+    key: "prework",
+    name: "Pre-work session",
+    desc: "unattended — stages drafts before you start",
+    time: "07:00",
+    prompt: (tz) =>
+      "Run my pre-work session: call get_checkin_packet with mode:'prework' and tz_offset_minutes:" +
+      tz +
+      ", follow its protocol exactly — investigate each candidate via the navigation recipe, " +
+      "prepare drafts where preparable, classify PREPARED / PREPARABLE-BUT-BLOCKED / NOT-MINE — " +
+      "then stage everything via stage_prework and stop. Do not capture, do not mark_seen, " +
+      "do not message anyone.",
+  },
+  {
+    key: "morning",
+    name: "Morning standup",
+    desc: "leads with the staged pre-work",
+    time: "08:30",
+    prompt: (tz) =>
+      "Run my morning standup: call get_checkin_packet with tz_offset_minutes:" +
+      tz +
+      " and follow its protocol. Lead with the staged pre-work drafts, reconcile todaysPlan, " +
+      "surface the incoming/watching/intake sections before plan work. We'll divide the work; " +
+      "at close, capture the session per the protocol's session-close step — the agreed plan " +
+      "and both our commitments mint from that capture.",
+  },
+  {
+    key: "midday",
+    name: "Midday check-in",
+    desc: "short — what moved since morning",
+    time: "12:30",
+    prompt: (tz) =>
+      "Run my midday check-in: get_checkin_packet with tz_offset_minutes:" +
+      tz +
+      ", follow its protocol. Reconcile todaysPlan against what moved since morning; lead with " +
+      "anything new/incoming since we last spoke. Max 3 decision points. Capture at close.",
+  },
+  {
+    key: "evening",
+    name: "Evening debrief",
+    desc: "closes the day, seeds tomorrow",
+    time: "17:30",
+    prompt: (tz) =>
+      "Run my evening debrief: get_checkin_packet with tz_offset_minutes:" +
+      tz +
+      ", follow its protocol. Reconcile the day against todaysPlan — what closed " +
+      "(propose_record_edit for anything I confirm done), what carries forward, what you'll " +
+      "queue via propose_to_outbox for my morning send. Capture at close; that capture is " +
+      "tomorrow's plan seed.",
+  },
+];
+
+function composeRoutineSetupMessage(times) {
+  const tz = -new Date().getTimezoneOffset();
+  const abs = Math.abs(tz);
+  const utc =
+    "UTC" +
+    (tz < 0 ? "-" : "+") +
+    String(Math.floor(abs / 60)).padStart(2, "0") +
+    ":" +
+    String(abs % 60).padStart(2, "0");
+  const lines = [
+    "Set up my four daily Threshold check-in routines as scheduled tasks — all four from " +
+      "this one message. (I can still edit the times below before sending this.)",
+    "",
+    "My timezone is " + utc + "; the times below are local, every weekday (Mon–Fri). The " +
+      "tz_offset_minutes values in the prompts are already computed for my clock.",
+    "",
+  ];
+  ROUTINES.forEach((r, i) => {
+    lines.push(i + 1 + ". " + r.name + " — " + (times[r.key] || r.time) + ". Task prompt:");
+    lines.push('"' + r.prompt(tz) + '"');
+    lines.push("");
+  });
+  lines.push("Create all four now, then list back exactly what you created with each schedule.");
+  return lines.join("\n");
+}
+
+(function initRoutineSetup() {
+  const list = document.getElementById("routine-list");
+  const btn = document.getElementById("routine-setup");
+  if (!list || !btn) return;
+
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(ROUTINE_TIMES_KEY)) || {};
+  } catch (_e) { /* corrupt store ⇒ defaults */ }
+
+  list.innerHTML = ROUTINES.map(
+    (r) =>
+      '<div class="routine-row">' +
+      '<input type="time" class="routine-time" data-routine="' + r.key + '" value="' +
+      (saved[r.key] || r.time) +
+      '" aria-label="' + r.name + ' time" />' +
+      '<span class="routine-name">' + r.name + "</span>" +
+      '<span class="routine-desc">' + r.desc + "</span>" +
+      "</div>"
+  ).join("");
+
+  const readTimes = () => {
+    const out = {};
+    for (const input of list.querySelectorAll(".routine-time")) {
+      const r = ROUTINES.find((x) => x.key === input.dataset.routine);
+      out[input.dataset.routine] = input.value || (r && r.time);
+    }
+    return out;
+  };
+  list.addEventListener("change", () => {
+    localStorage.setItem(ROUTINE_TIMES_KEY, JSON.stringify(readTimes()));
+  });
+
+  btn.addEventListener("click", async () => {
+    const status = document.getElementById("routine-setup-status");
+    const msg = composeRoutineSetupMessage(readTimes());
+    let url = (localStorage.getItem(COMPANION_URL_KEY) || "https://claude.ai/new").trim();
+    // Same prefill rule as the Standup chip: ?q= is a claude.ai nicety; other
+    // companions get the message on the clipboard instead.
+    const canPrefill = /^https:\/\/(www\.)?claude\.ai\/new\/?$/.test(url);
+    if (canPrefill) url += "?q=" + encodeURIComponent(msg);
+    try {
+      if (!canPrefill) await tauri.core.invoke("copy_text", { text: msg });
+      await tauri.core.invoke("plugin:opener|open_url", { url });
+      status.textContent = canPrefill
+        ? "Opened in Claude — review the message, send it, and confirm the four routines " +
+          "there. Threshold can't see your Claude schedule."
+        : "Opened your companion — the setup message is on your clipboard: paste it, send " +
+          "it, and confirm the routines there.";
+    } catch (err) {
+      showToast({ kind: "failure", title: "Couldn't open your companion", body: String(err) });
+    }
+  });
+})();
+
 /** "3d ago" / "just now" for a grant's lastUsedAt; "" when absent. */
 function grantLastUsed(iso) {
   if (!iso) return "never used";

@@ -6624,6 +6624,32 @@ button.rec-source {
 .ai-steps-list li { margin-bottom: 4px; }
 .ai-connect-gemini { margin-top: 2px; }
 
+/* Daily routines — the AI companion card's setup rows (initRoutineSetup). */
+.routine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.routine-row { display: flex; align-items: center; gap: 10px; }
+/* No fixed width: the control sizes to its locale's format (12-hour adds an
+   AM/PM segment; a pinned width clips it and 17:30 reads as "05:30"). */
+.routine-row .routine-time { flex: 0 0 auto; width: auto; }
+.routine-name {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.routine-desc {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.routine-status { color: var(--text-secondary); }
+.routine-status:empty { display: none; }
+.routine-actions { margin-top: 2px; }
+
 .ec-sender-remove {
   flex: 0 0 auto;
   background: transparent;
