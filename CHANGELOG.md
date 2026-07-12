@@ -9,6 +9,27 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-07-12
+
+### Added
+- **Today is now a daily brief** — reorganized into focused strata: *Don't
+  miss* (curated at-risk items), *Due this week*, *Prepared for you* (drafts
+  awaiting your review), and *One question for you* (a single ask at a time,
+  with the items to review before deciding).
+- **Companion drafts in Awaiting send** — drafts your AI companion prepares
+  now show the full message body (with Show full draft), who they're addressed
+  to, and a ✦ "Drafted by your companion" marker. New actions: **Copy draft**
+  (paste into your mail app), **Mark sent**, and per-attachment **Download**
+  and **Replace** — replacing keeps the previous version for the record.
+- **Routines in Settings** — set your daily rhythm (pre-work, morning
+  standup, midday check-in, evening debrief) in Settings → Integrations →
+  AI companion. Threshold reminds you at your chosen times; the ✦ chip opens
+  your companion with the right session ready to go.
+
+### Changed
+- Notification reminders pulse the widget; opening the brief is the reliable
+  path to your session (notification click handling varies by platform).
+
 ## [0.10.2] — 2026-07-09
 
 Follow-on fixes from Trisha's live pilot use — the frontend half of the
