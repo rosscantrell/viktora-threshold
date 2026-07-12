@@ -733,12 +733,25 @@
            fire-and-forget off the critical path (< 1s cold first paint, §2.6).
            ══════════════════════════════════════════════════════════════════ -->
 
-      <!-- Reserved slot — Concept A's plan-reconciliation content (todaysPlan
-           via the check-in packet) lands INSIDE ③ when the packet IPC ships;
-           this top slot stays for a future morning-report banner. -->
-      <div id="today-plan-slot" hidden></div>
+      <!-- ① Your plan — the morning plan-of-record reconciliation (todaysPlan
+           via fetch_checkin_brief: what we agreed, what moved, what stalled,
+           what opened up; yours vs the companion's ✦). HONESTLY HIDDEN when
+           no plan was captured today (present:false) — never fabricated.
+           Populated by loadTodayPlan. -->
+      <section class="today-brief-section" id="today-planrec-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Your plan</h2>
+          <span class="today-section-count" id="today-planrec-count"></span>
+          <span class="today-planrec-when" id="today-planrec-when"></span>
+        </div>
+        <div class="today-planrec-panel">
+          <div id="today-planrec-list"></div>
+          <button type="button" class="today-log-line" id="today-planrec-open" aria-expanded="false" hidden></button>
+          <div id="today-planrec-open-list" hidden></div>
+        </div>
+      </section>
 
-      <!-- ① Don't miss — the curated might-slip list: obligations that arrived
+      <!-- ② Don't miss — the curated might-slip list: obligations that arrived
            without acknowledgement, promises others are waiting on, due-soon
            items with nothing moving behind them. Sources: primary vigilance
            voids + readiness no-precursor joins (loadTodayMiss). Capped at
@@ -755,7 +768,7 @@
         <button type="button" class="today-log-line" id="today-miss-more" hidden></button>
       </section>
 
-      <!-- ② Your week — every OPEN commitment due through Friday as a runway
+      <!-- ③ Your week — every OPEN commitment due through Friday as a runway
            row (summary + state + today→due bar + workback tick; click to
            expand reasoning + actions). The rest of the fortnight sits behind
            one collapsed line. "Nothing due" is affirmative information — the
@@ -775,23 +788,27 @@
         <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
       </section>
 
-      <!-- ③ Prepared for you — AI-prepared work products awaiting the user's
+      <!-- ④ Prepared for you — AI-prepared work products awaiting the user's
            review (drafts from the Draft-follow-up lane and the companion's
            proposals; ✦ marks companion work; some still need a recipient or
            an edit — "ready to send" overclaimed, Ross 2026-07-12). NOT the
            day plan — "Your plan" stays reserved for the todaysPlan
            reconciliation (the slot above ①) when the packet IPC lands.
            Compact rows; the full draft + artifacts + verbs expand. -->
-      <section class="today-brief-section" id="today-plan-section">
+      <section class="today-brief-section" id="today-prepared-section">
         <div class="today-section-head">
           <h2 class="today-section-title">Prepared for you</h2>
-          <span class="today-section-count" id="today-plan-count"></span>
+          <span class="today-section-count" id="today-prepared-count"></span>
         </div>
+        <!-- Staged pre-work (the scheduled pass writes ONLY here — the
+             authorization gradient, pinned 2026-07-12): "awaiting your review". -->
+        <div class="today-outbox-list" id="today-prework-list"></div>
+        <!-- Outbox drafts (attended / post-close lanes): "approved, awaiting send". -->
         <div class="today-outbox-list" id="today-outbox-list"></div>
-        <p class="log-empty" id="today-plan-empty" hidden>Nothing prepared right now.</p>
+        <p class="log-empty" id="today-prepared-empty" hidden>Nothing prepared right now.</p>
       </section>
 
-      <!-- ④ One question for you — the single next question that keeps the
+      <!-- ⑤ One question for you — the single next question that keeps the
            workspace organized (duplicate-workstream asks, name-this asks,
            looks-done confirmations, filed-automatically reviews). ONE card at
            a time; the rest wait behind an honest count. -->
