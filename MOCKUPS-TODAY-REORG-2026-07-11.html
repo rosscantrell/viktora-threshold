@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Threshold — Today reorganization concepts (2026-07-11)</title>
+<style>
+  body { background:#0e0f13; color:#c9ccd1; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:32px; }
+  .note { max-width:940px; margin:0 auto 28px; font-size:14px; line-height:1.6; color:#9aa0a6; }
+  .note strong { color:#e8eaed; }
+  .mock { max-width:940px; margin:0 auto 40px; background:#171921; border-radius:12px; padding:16px; }
+  .mock > p { font-size:13px; color:#9aa0a6; margin:0 0 10px; line-height:1.5; }
+  .mock > p b { color:#e8eaed; font-weight:600; }
+  table.inv { max-width:940px; margin:0 auto 36px; border-collapse:collapse; font-size:12px; width:100%; }
+  table.inv th { text-align:left; color:#e8eaed; font-weight:600; padding:6px 10px; border-bottom:0.5px solid #33363f; }
+  table.inv td { padding:6px 10px; border-bottom:0.5px solid #23252d; color:#c6c9ce; vertical-align:top; line-height:1.45; }
+  table.inv td.src { color:#9aa0a6; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  table.inv td.dup { color:#ffc440; }
+  .tag { border:0.5px solid #3a3d46; border-radius:999px; padding:1px 8px; font-size:10.5px; color:#9aa0a6; white-space:nowrap; }
+  .verdict { max-width:940px; margin:0 auto 36px; font-size:13px; line-height:1.65; color:#c6c9ce; background:#171921; border-radius:12px; padding:16px 18px; }
+  .verdict b { color:#e8eaed; }
+  h2.sec { max-width:940px; margin:36px auto 12px; font-size:15px; color:#e8eaed; font-weight:600; }
+</style>
+</head>
+<body>
+
+<div class="note"><strong>Today reorganization — proposal for Ross (2026-07-11)</strong> —
+Ross's ruling after the outbox companion-card pass: Today "has become way too crowded — we need
+to rethink how we organize everything there." This doc is the required propose-before-code step:
+first the inventory of everything Today renders today, then three organization concepts.
+Design language per the binding rubric: deep glass, 0.5px hairlines, ghost chips, amber only on
+urgency/primary action, quiet metadata, sentence case. Nothing here is code; Ross picks the shape.</div>
+
+<h2 class="sec">Inventory — what Today renders right now (with identity, all sources live)</h2>
+<table class="inv">
+<tr><th>#</th><th>Section</th><th>Question it answers</th><th>Data source</th><th>Overlap / density notes</th></tr>
+<tr><td>1</td><td>Corpus State of play panel (auto-opens)</td><td>Where do things stand? (all work)</td><td class="src">fetch_sop (forest)</td><td class="dup">Second narrative of the same corpus as #2 — two LLM syntheses stacked when an identity exists</td></tr>
+<tr><td>2</td><td>Person-lens SoP + Your jobs/All work toggle</td><td>Where do MY things stand?</td><td class="src">fetch_sop + personLens</td><td class="dup">↑ same</td></tr>
+<tr><td>3</td><td>Deadline outlook (runway bars, ≥1200px only)</td><td>What's coming? (visual)</td><td class="src">fetch_decision_log_full (derived)</td><td class="dup">Same records as #4 and #6, third rendering</td></tr>
+<tr><td>4</td><td>This week (short-fuse pick list)</td><td>What's coming? (&lt;7d)</td><td class="src">fetch_decision_log_full (derived)</td><td class="dup">Subset of #3/#6</td></tr>
+<tr><td>5</td><td>Waiting on you (proxy cards + QE card + void chase cards) + Filed automatically (demoted line)</td><td>What needs my decision?</td><td class="src">fetch_proxy_queue + fetch_question + fetch_vigilance_voids</td><td>The true action queue — three sources, one card family (good)</td></tr>
+<tr><td>6</td><td>Coming up (due ≤14d, by project)</td><td>What's coming? (list)</td><td class="src">fetch_decision_log_full (derived)</td><td class="dup">Same records as #3/#4</td></tr>
+<tr><td>7</td><td>Awaiting send tray (companion cards, PR #150)</td><td>What's staged to go out?</td><td class="src">fetch_outbox</td><td>Much richer since #150: body previews, artifact pills, three buttons</td></tr>
+<tr><td>8</td><td>Focus / Watch (two collapsibles)</td><td>What's hot? (priority operator)</td><td class="src">GET /api/decision-log/priority</td><td class="dup">Focus items are usually also in #6 and #10</td></tr>
+<tr><td>9</td><td>Stalled / Chasing chase-list</td><td>What went quiet?</td><td class="src">/api/vigilance/voids?grouped=1 + log join</td><td class="dup">Chase cards for the same voids already appear in #5</td></tr>
+<tr><td>10</td><td>Needs attention rollup (+ Conflicts, Workload, states strip)</td><td>What's overdue &amp; silent? (+ everything else)</td><td class="src">fetch_decision_log</td><td class="dup">Overdue items here also show in #3/#6/#8</td></tr>
+</table>
+
+<div class="verdict">
+<b>The diagnosis in one line:</b> ten strata, eight data sources, and one urgent commitment can
+legitimately render in up to six of them (outlook, this-week, coming-up, focus, stalled,
+needs-attention). The crowding isn't card styling — it's that sections are organized by
+<i>which engine surface produced them</i>, not by <i>what the user is trying to do</i>. Also:
+two full LLM narratives of the same corpus stack at the top whenever the viewer has an identity.
+</div>
+
+<!-- ═══════════════════════ CONCEPT A ═══════════════════════ -->
+<div class="mock">
+<p><b>Concept A · "The plan is the spine"</b> — Today becomes the reconciliation view Part C designed
+(WP-MCP-AGENT-ENDGAME §C1–C3). Anchor = today's captured plan (engine <span style="font-family:ui-monospace,Menlo,monospace">todaysPlan</span>, PR #440, already live
+server-side). Standing first section = incoming triage (§C2). Everything read-side demotes to one
+collapsed field report. Per OPERATOR-INVENTORY-2026-07-11.md: the check-in packet ALREADY bundles
+todaysPlan + the focus rank digest + watching — ONE new IPC (fetch the packet) feeds this whole view;
+honest fallback when no plan was captured (present:false → Concept B's layout).</p>
+<div style="background:#16181f; border-radius:10px; border:0.5px solid #33363f; padding:14px;">
+  <div style="display:flex; align-items:baseline; gap:10px;">
+    <span style="color:#e8eaed; font-size:15px; font-weight:500;">Today</span>
+    <span style="color:#9aa0a6; font-size:11px;">Plan of record · 11 items · captured 8:42 from your debrief</span>
+    <span style="margin-left:auto;" class="tag">State of play</span>
+    <span class="tag">Refresh</span>
+  </div>
+
+  <!-- C2 standing first section -->
+  <div style="margin-top:12px; color:#e8eaed; font-size:12px; font-weight:500;">Since this morning <span style="color:#6b7178; font-weight:400;">2 new</span></div>
+  <div style="margin-top:6px; background:rgba(255,196,64,0.06); border:0.5px solid #4a4436; border-radius:8px; padding:8px 10px;">
+    <div style="color:#c6c9ce; font-size:11.5px;">New obligation on you — client asked for the Q3 readout <b style="color:#ffc440; font-weight:500;">by Thursday</b> (email, 11:04)</div>
+    <div style="margin-top:5px; display:flex; gap:6px;">
+      <span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:7px; padding:2px 9px; font-size:10.5px;">Add to plan</span>
+      <span class="tag">Not mine</span><span class="tag">Snooze</span>
+    </div>
+  </div>
+  <div style="margin-top:5px; color:#6b7178; font-size:11px;">1 more arrived that doesn't need you before midday — held for the next check-in ›</div>
+
+  <!-- Plan reconciliation -->
+  <div style="margin-top:14px; display:grid; grid-template-columns:1.5fr 1fr; gap:12px;">
+    <div>
+      <div style="color:#e8eaed; font-size:12px; font-weight:500;">Today's plan <span style="color:#6b7178; font-weight:400;">3 moved · 1 stalled · 7 open</span></div>
+      <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:7px 10px;">
+        <div style="color:#8f939a; font-size:11.5px;"><span style="color:#6fbf82;">✓</span> Maria call — happened; notes landed 11:20 <span style="color:#6b7178;">(Plaud)</span></div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:7px 10px;">
+        <div style="color:#8f939a; font-size:11.5px;"><span style="color:#6fbf82;">✓</span> Deck v2 draft — in Awaiting send, ready for your eye</div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-left:2px solid #ffc440; border-radius:0 8px 8px 0; padding:7px 10px;">
+        <div style="color:#c6c9ce; font-size:11.5px;">Vendor numbers for the readout — <span style="color:#ffc440;">stalled: Brian hasn't sent the data</span></div>
+        <div style="margin-top:4px;"><span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:7px; padding:2px 9px; font-size:10.5px;">Draft a nudge</span></div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:7px 10px;">
+        <div style="color:#c6c9ce; font-size:11.5px;">Newly workable — legal signed off, the consent copy is unblocked</div>
+      </div>
+      <div style="margin-top:8px; color:#9aa0a6; font-size:11px;">Still open — yours <span style="color:#6b7178;">4</span> · companion's <span style="color:#6b7178;">3</span> <span style="color:#6b7178;">▸</span></div>
+    </div>
+    <!-- The act rail survives unchanged -->
+    <div>
+      <div style="color:#e8eaed; font-size:12px; font-weight:500;">Waiting on you <span style="color:#6b7178; font-weight:400;">2</span></div>
+      <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">A commitment looks done — close it?</div>
+      <div style="margin-top:12px; color:#e8eaed; font-size:12px; font-weight:500;">Awaiting send <span style="color:#6b7178; font-weight:400;">1</span></div>
+      <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="color:#c6c9ce; font-size:11.5px;">Deck v2 + pre-read to client</div>
+        <div style="color:#9aa0a6; font-size:11px; margin-top:2px;">2 attachments · drafted 11:35</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- everything read-side demotes to ONE line -->
+  <div style="margin-top:14px; border-top:0.5px solid #23252d; padding-top:9px; color:#9aa0a6; font-size:11.5px;">
+    ▸ Field report — state of play, next two weeks, needs attention <span style="color:#6b7178;">25 · 1 conflict</span>
+  </div>
+</div>
+<p style="margin-top:10px;">Pro: this IS the product thesis — two workers, one field, check-ins as reconciliation; incoming
+triage gets the standing first slot §C2 demands; the packet also carries the doctrine's per-moment
+framing, so morning Today (plan + triage) can legitimately differ from evening Today (results +
+tomorrow's staging) with zero extra plumbing. Con: only real when a day-plan capture exists (live on
+Ross's corpus since 2026-07-11, not yet in Trisha's workflow) — the no-plan fallback is load-bearing,
+and shipping the fallback IS Concept B.</p>
+</div>
+
+<!-- ═══════════════════════ CONCEPT B ═══════════════════════ -->
+<div class="mock">
+<p><b>Concept B · "Three questions, one appearance per item"</b> — no new plumbing; same eight sources,
+reorganized by user intent into three bands: <b>Needs you</b> (act) · <b>Next two weeks</b> (watch) ·
+<b>Where things stand</b> (read). Hard rule: a record renders ONCE, in the band of its strongest signal,
+with quiet chips instead of re-renders. Kills the double SoP (one narrative, lens toggle), merges
+outlook + this-week + coming-up into one runway list, folds Focus/Stalled into sort order + chips on
+that list, demotes the needs-attention rollup into the read band.</p>
+<div style="background:#16181f; border-radius:10px; border:0.5px solid #33363f; padding:14px;">
+  <div style="display:flex; align-items:baseline; gap:10px;">
+    <span style="color:#e8eaed; font-size:15px; font-weight:500;">Today</span>
+    <span style="color:#9aa0a6; font-size:11px;">3 need you · 5 due this week · 25 tracked</span>
+    <span style="margin-left:auto;" class="tag">Everyone · Mine</span><span class="tag">Refresh</span>
+  </div>
+  <div style="margin-top:12px; display:grid; grid-template-columns:1fr 1.35fr; gap:12px;">
+    <!-- ACT band -->
+    <div>
+      <div style="color:#e8eaed; font-size:12px; font-weight:500;">Needs you <span style="color:#6b7178; font-weight:400;">3</span></div>
+      <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; gap:6px; align-items:baseline;"><span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:6px; padding:1px 7px; font-size:10px;">Send</span><span style="color:#c6c9ce; font-size:11.5px;">Deck v2 + pre-read to client</span></div>
+        <div style="color:#9aa0a6; font-size:11px; margin-top:3px;">2 attachments · drafted 11:35</div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; gap:6px; align-items:baseline;"><span class="tag" style="font-size:10px;">Confirm</span><span style="color:#c6c9ce; font-size:11.5px;">A commitment looks done — close it?</span></div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; gap:6px; align-items:baseline;"><span class="tag" style="font-size:10px;">Chase</span><span style="color:#c6c9ce; font-size:11.5px;">Brian's data — 12 days quiet, readout depends on it</span></div>
+      </div>
+      <div style="margin-top:7px; color:#6b7178; font-size:11px;">▸ Filed automatically 6 · 1 question when you have a minute</div>
+    </div>
+    <!-- WATCH band: ONE runway list -->
+    <div>
+      <div style="color:#e8eaed; font-size:12px; font-weight:500;">Next two weeks <span style="color:#6b7178; font-weight:400;">5</span></div>
+      <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <span style="color:#c6c9ce; font-size:11.5px;">Narrative refresh v2 to client</span>
+          <span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:6px; padding:1px 7px; font-size:10px;">focus</span>
+          <span style="margin-left:auto; color:#ffc440; font-size:11px;">due in 2 days</span>
+        </div>
+        <div style="margin-top:5px; height:4px; border-radius:2px; background:linear-gradient(to right, rgba(255,196,64,0.55) 0 62%, rgba(255,255,255,0.06) 62% 100%); position:relative;"><span style="position:absolute; left:38%; top:-2px; width:1px; height:8px; background:#ffc440;"></span></div>
+        <div style="color:#9aa0a6; font-size:10.5px; margin-top:3px;">should have started · quiet 9d</div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <span style="color:#c6c9ce; font-size:11.5px;">CRT submission window opens</span>
+          <span style="margin-left:auto; color:#9aa0a6; font-size:11px;">Jul 15 · on track</span>
+        </div>
+        <div style="margin-top:5px; height:4px; border-radius:2px; background:linear-gradient(to right, rgba(255,255,255,0.14) 0 28%, rgba(255,255,255,0.06) 28% 100%);"></div>
+      </div>
+      <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px;">
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <span style="color:#c6c9ce; font-size:11.5px;">PV training numbers to client</span>
+          <span style="background:rgba(240,149,149,0.12); color:#f09595; border-radius:6px; padding:1px 7px; font-size:10px;">stalled</span>
+          <span style="margin-left:auto; color:#9aa0a6; font-size:11px;">Jul 18</span>
+        </div>
+      </div>
+      <div style="margin-top:7px; color:#6b7178; font-size:11px;">2 more with runway ▸</div>
+    </div>
+  </div>
+  <!-- READ band -->
+  <div style="margin-top:12px; background:rgba(255,255,255,0.03); border:0.5px solid #2e313a; border-radius:9px; padding:11px 13px;">
+    <div style="display:flex; align-items:baseline; gap:8px;">
+      <span style="color:#e8eaed; font-size:12px; font-weight:500;">Where things stand</span>
+      <span class="tag" style="font-size:10px;">Your jobs · All work</span>
+    </div>
+    <div style="color:#c6c9ce; font-size:11.5px; line-height:1.55; margin-top:6px;">Across your work, 6 commitments are blocked and 35 are overdue, the oldest back to May 27. The heaviest load sits on the above-brand leader deck…</div>
+    <div style="margin-top:8px; color:#9aa0a6; font-size:11px;">▸ Needs attention <span style="color:#6b7178;">25</span> · conflicts <span style="color:#6b7178;">1</span> · workload · open 214 / resolved 58</div>
+  </div>
+</div>
+<p style="margin-top:10px;">Pro: pure reorganization of data the app already holds — every user benefits now, and each band
+has one honest empty state. The dedup rule is the real space win (six renders → one + chips). Con: the
+strongest-signal routing is a real design decision (precedence: needs-you &gt; stalled &gt; due-soon &gt; attention);
+Focus/Watch stop being sections and become emphasis, which changes how the priority operator reads.</p>
+</div>
+
+<!-- ═══════════════════════ CONCEPT C ═══════════════════════ -->
+<div class="mock">
+<p><b>Concept C · "Digest strip + uniform collapse"</b> — the conservative option: keep every section,
+add a jump-chip digest under the header, expand only Waiting on you by default, give every other
+section the same one-line collapsed header with its count (fail-closed-but-visible everywhere).
+Cheapest to ship; changes nothing about what renders.</p>
+<div style="background:#16181f; border-radius:10px; border:0.5px solid #33363f; padding:14px;">
+  <div style="display:flex; align-items:baseline; gap:10px;">
+    <span style="color:#e8eaed; font-size:15px; font-weight:500;">Today</span>
+    <span style="margin-left:auto;" class="tag">Refresh</span>
+  </div>
+  <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+    <span style="background:rgba(255,196,64,0.14); color:#ffc440; border-radius:999px; padding:2px 10px; font-size:11px;">Waiting on you 3</span>
+    <span class="tag">Awaiting send 1</span><span class="tag">Due this week 5</span><span class="tag">Stalled 2</span><span class="tag">Conflicts 1</span><span class="tag">State of play</span>
+  </div>
+  <div style="margin-top:12px; color:#e8eaed; font-size:12px; font-weight:500;">Waiting on you <span style="color:#6b7178; font-weight:400;">3</span></div>
+  <div style="margin-top:6px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">A commitment looks done — close it?</div>
+  <div style="margin-top:5px; background:rgba(255,255,255,0.02); border:0.5px solid #2e313a; border-radius:8px; padding:8px 10px; color:#c6c9ce; font-size:11.5px;">Wants your eye — meeting note filed to Vaccines refresh</div>
+  <div style="margin-top:12px; color:#9aa0a6; font-size:11.5px; line-height:2.1;">
+    ▸ Awaiting send <span style="color:#6b7178;">1</span><br>
+    ▸ State of play<br>
+    ▸ Deadline outlook &amp; this week <span style="color:#6b7178;">5</span><br>
+    ▸ Coming up <span style="color:#6b7178;">3</span><br>
+    ▸ Focus <span style="color:#6b7178;">2</span> · Watch <span style="color:#6b7178;">4</span><br>
+    ▸ Stalled / chasing <span style="color:#6b7178;">2</span><br>
+    ▸ Needs attention <span style="color:#6b7178;">25</span> · conflicts <span style="color:#6b7178;">1</span>
+  </div>
+</div>
+<p style="margin-top:10px;">Pro: tiny, safe, ships in a day inside the render-look loop. Con: it papers over the
+actual problem — the six-way duplication and double narrative all survive, one click away; the
+collapsed stack is still ten strata to reason about. Included honestly as the floor, not a recommendation.</p>
+</div>
+
+<div class="verdict">
+<b>Recommendation:</b> B now, A as the destination — and they compose. Ship Concept B's three-band
+reorganization this cycle on data the app already fetches (with the one-appearance dedup rule and the
+single-narrative fix). Reserve the slot above the bands: when the packet IPC lands, Concept A's
+plan-reconciliation + since-we-last-spoke bands drop in on top, and B's layout is exactly the honest
+present:false fallback A needs for corpora with no captured day-plan. Concept C is the fallback floor
+if this cycle can't absorb a reorg.
+<br><br>
+<b>OPERATOR-INVENTORY-2026-07-11.md alignment</b> (landed on main after this doc was first drafted):
+its redesign note names the same two levers — anchor on the PLAN via the packet's todaysPlan, and
+"rank, don't list" via the packet's focus digest. That settles former open question 1: Focus/Watch
+stop being sections and become the RANK — Concept B's "Needs you" and "Next two weeks" bands order by
+the focus digest (composition recipe: focus × due/effectiveDue × todaysPlan-stalled), with focus as a
+quiet chip, not a stratum. Voicing per the license ladder: assert facts on every row (dues, silentDays,
+void receipts), opine only the ordering — and never alarm on readiness-unobservable items.
+<br><br>
+Remaining open questions for Ross: (1) which narrative wins when identity exists — person lens
+(recommended) or corpus, (2) does the Relationships/edges button stay in the Today header,
+(3) adopt the doctrine's per-moment framing now (morning Today ≠ evening Today) or keep one layout
+until the A slice lands.
+</div>
+
+</body>
+</html>
