@@ -25,10 +25,30 @@
 //! confirmed the definitions drop straight in.
 //!
 //! ── The FROZEN contract ──────────────────────────────────────────────────────
-//! The `File Content` expression is what `onedrive_mail_sweep` schema v1 parses.
-//! It is FROZEN and asserted byte-exact by the unit tests against a literal copy
-//! of the brief's spec. Changing it here without changing the parser (and the
-//! flow schemaVersion) is a break.
+//! The `File Content` expression is what `onedrive_mail_sweep` parses. It is
+//! FROZEN and asserted byte-exact by the unit tests against a literal copy of the
+//! brief's spec. Changing it here without changing the parser (and the flow
+//! schemaVersion) is a break.
+//!
+//! ── v2 flows (WP-INTAKE TEAMS + COLDSTART) ───────────────────────────────────
+//! Three additional flows write SCHEMA-v2 JSON (`schemaVersion:2` + `kind` +
+//! `capture`) the same sweep now routes by kind:
+//!   * Teams LIVE — "when a new channel message is added" → kind teams-channel,
+//!     capture live (one flow per channel).
+//!   * Mail BACKFILL 30d — a manual/instant flow, "Get emails (V3)" over Sent
+//!     Items, last 30 days → kind email, capture backfill (the DEFAULT coldstart;
+//!     runs once, then delete).
+//!   * Teams BACKFILL 30d — a manual/instant flow, "Get messages" for a channel,
+//!     last 30 days → kind teams-channel, capture backfill.
+//!
+//! ── Capture-boundary law (WP-FORMATTING-SEMANTICS) ───────────────────────────
+//! EVERY flow maps the source's HTML body token → the schema `bodyHtml` field and
+//! NEVER introduces a flow-side html-to-text step or uses a text preview as the
+//! primary body. Formatting (strikethrough/color/indent) is SEMANTICS in this
+//! product — a struck-through commitment reads as cancelled — so stripping HTML at
+//! capture would kill it before any engine code runs, and the messageId dedupe
+//! would make the flat copy permanent. The drift-guard tests assert this invariant
+//! (HTML token → `bodyHtml`, no preview/`bodyText` substitution) for every flow.
 
 use serde::Serialize;
 use serde_json::json;
@@ -241,6 +261,438 @@ receive.
     )
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 flows — WP-INTAKE TEAMS (live channel messages) + COLDSTART (30d backfill).
+// Each writes schema-v2 JSON (schemaVersion:2 + kind + capture) via the same
+// string(createObject(...)) escaping pattern the sweep's v2 dispatcher parses.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The Create-file folder for Teams captures — the SAME swept folder as mail
+/// (one sweep, kind-discriminated). Kept as its own const for recipe clarity.
+pub const CREATE_FILE_FOLDER_PATH_TEAMS: &str = CREATE_FILE_FOLDER_PATH;
+
+/// FROZEN `File Content` for the Teams LIVE flow (kind teams-channel, capture
+/// live). Tokens come from the "When a new channel message is added" trigger's
+/// message body. `bodyHtml` carries the HTML `body/content` (capture-boundary
+/// law — never a text preview). `channelName`/`teamName` are cosmetic and left
+/// empty (the trigger payload has ids, not display names; the flow NAME carries
+/// the channel — a user may hard-code a literal name if they want a prettier
+/// title). The engine derives the thread key from `channelId` + `replyToId`.
+pub fn teams_live_file_content_expression() -> String {
+    "string(createObject(\
+'schemaVersion',2,\
+'kind','teams-channel',\
+'capture','live',\
+'channelId',triggerBody()?['channelIdentity']?['channelId'],\
+'channelName','',\
+'teamName','',\
+'author',triggerBody()?['from']?['user']?['displayName'],\
+'messageId',triggerBody()?['id'],\
+'replyToId',coalesce(triggerBody()?['replyToId'],''),\
+'dateTimeCreated',triggerBody()?['createdDateTime'],\
+'bodyHtml',coalesce(triggerBody()?['body']?['content'],'')))"
+        .to_string()
+}
+
+/// FROZEN `File Content` for the mail BACKFILL flow (kind email, capture
+/// backfill), evaluated inside an Apply-to-each over "Get emails (V3)" `value`.
+/// `mailbox` is `sent` (the default coldstart scope). `bodyHtml` carries the HTML
+/// `body` token (capture-boundary law). Mirrors the live-mail field set so the
+/// sweep parses it identically, plus the v2 discriminators.
+pub fn email_backfill_file_content_expression() -> String {
+    "string(createObject(\
+'schemaVersion',2,\
+'kind','email',\
+'capture','backfill',\
+'mailbox','sent',\
+'from',item()?['from'],\
+'to',coalesce(item()?['toRecipients'],''),\
+'cc',coalesce(item()?['ccRecipients'],''),\
+'subject',coalesce(item()?['subject'],''),\
+'dateTimeCreated',item()?['receivedDateTime'],\
+'bodyHtml',coalesce(item()?['body'],''),\
+'internetMessageId',item()?['internetMessageId']))"
+        .to_string()
+}
+
+/// FROZEN `File Content` for the Teams BACKFILL flow (kind teams-channel, capture
+/// backfill), evaluated inside an Apply-to-each over "Get messages" `value`. Same
+/// field set as the Teams live flow but sourced from `item()`.
+pub fn teams_backfill_file_content_expression() -> String {
+    "string(createObject(\
+'schemaVersion',2,\
+'kind','teams-channel',\
+'capture','backfill',\
+'channelId',item()?['channelIdentity']?['channelId'],\
+'channelName','',\
+'teamName','',\
+'author',item()?['from']?['user']?['displayName'],\
+'messageId',item()?['id'],\
+'replyToId',coalesce(item()?['replyToId'],''),\
+'dateTimeCreated',item()?['createdDateTime'],\
+'bodyHtml',coalesce(item()?['body']?['content'],'')))"
+        .to_string()
+}
+
+/// Flow names for the v2 flows (match the brief).
+pub const TEAMS_LIVE_FLOW_NAME: &str = "Threshold Teams — <channel>";
+pub const MAIL_BACKFILL_FLOW_NAME: &str = "Threshold backfill — Sent mail 30d";
+pub const TEAMS_BACKFILL_FLOW_NAME: &str = "Threshold backfill — Teams channel 30d";
+
+/// The Teams LIVE flow definition — standard Teams trigger → Create file.
+pub fn build_teams_live_flow_definition() -> serde_json::Value {
+    let file_content = format!("@{{{}}}", teams_live_file_content_expression());
+    json!({
+        "name": TEAMS_LIVE_FLOW_NAME,
+        "properties": {
+            "displayName": TEAMS_LIVE_FLOW_NAME,
+            "definition": {
+                "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                    "$connections": { "defaultValue": {}, "type": "Object" },
+                    "$authentication": { "defaultValue": {}, "type": "SecureObject" }
+                },
+                "triggers": {
+                    "When_a_new_channel_message_is_added": {
+                        "type": "OpenApiConnectionNotification",
+                        "inputs": {
+                            "host": {
+                                "connectionName": "shared_teams",
+                                "operationId": "OnNewChannelMessage",
+                                "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+                            },
+                            "parameters": {
+                                // User picks Team + Channel here in the designer.
+                                "poller/channel/groupId": "",
+                                "poller/channel/channelId": ""
+                            },
+                            "authentication": "@parameters('$authentication')"
+                        }
+                    }
+                },
+                "actions": {
+                    "Create_file": teams_create_file_action(&file_content)
+                }
+            }
+        },
+        "connectionReferences": {
+            "shared_teams": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_teams" }
+            },
+            "shared_onedriveforbusiness": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_onedriveforbusiness" }
+            }
+        }
+    })
+}
+
+/// The mail BACKFILL flow definition — manual trigger → Get emails (V3) over Sent
+/// Items (last 30 days, paged) → Apply-to-each → Create file (kind email,
+/// capture backfill).
+pub fn build_email_backfill_flow_definition() -> serde_json::Value {
+    let file_content = format!("@{{{}}}", email_backfill_file_content_expression());
+    json!({
+        "name": MAIL_BACKFILL_FLOW_NAME,
+        "properties": {
+            "displayName": MAIL_BACKFILL_FLOW_NAME,
+            "definition": {
+                "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                    "$connections": { "defaultValue": {}, "type": "Object" },
+                    "$authentication": { "defaultValue": {}, "type": "SecureObject" }
+                },
+                "triggers": {
+                    "manual": {
+                        "type": "Request",
+                        "kind": "Button",
+                        "inputs": {}
+                    }
+                },
+                "actions": {
+                    "Get_emails_V3": {
+                        "type": "OpenApiConnection",
+                        "runAfter": {},
+                        "inputs": {
+                            "host": {
+                                "connectionName": "shared_office365",
+                                "operationId": "GetEmailsV3",
+                                "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
+                            },
+                            "parameters": {
+                                "folderPath": "SentItems",
+                                "fetchOnlyUnread": false,
+                                "includeAttachments": false,
+                                "importance": "Any",
+                                // Last 30 days, paged (the designer exposes both).
+                                "searchQuery": "received:>=@{addDays(utcNow(),-30)}",
+                                "top": 250
+                            },
+                            "authentication": "@parameters('$authentication')",
+                            "runtimeConfiguration": {
+                                "paginationPolicy": { "minimumItemCount": 5000 }
+                            }
+                        }
+                    },
+                    "Apply_to_each_email": {
+                        "type": "Foreach",
+                        "foreach": "@outputs('Get_emails_V3')?['body/value']",
+                        "runAfter": { "Get_emails_V3": ["Succeeded"] },
+                        "actions": {
+                            "Create_file": mail_create_file_action(&file_content)
+                        }
+                    }
+                }
+            }
+        },
+        "connectionReferences": {
+            "shared_office365": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_office365" }
+            },
+            "shared_onedriveforbusiness": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_onedriveforbusiness" }
+            }
+        }
+    })
+}
+
+/// The Teams BACKFILL flow definition — manual trigger → Get messages for a
+/// chosen channel → Apply-to-each (filter last 30d client-side is documented in
+/// the recipe) → Create file (kind teams-channel, capture backfill).
+pub fn build_teams_backfill_flow_definition() -> serde_json::Value {
+    let file_content = format!("@{{{}}}", teams_backfill_file_content_expression());
+    json!({
+        "name": TEAMS_BACKFILL_FLOW_NAME,
+        "properties": {
+            "displayName": TEAMS_BACKFILL_FLOW_NAME,
+            "definition": {
+                "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                    "$connections": { "defaultValue": {}, "type": "Object" },
+                    "$authentication": { "defaultValue": {}, "type": "SecureObject" }
+                },
+                "triggers": {
+                    "manual": {
+                        "type": "Request",
+                        "kind": "Button",
+                        "inputs": {}
+                    }
+                },
+                "actions": {
+                    "Get_messages": {
+                        "type": "OpenApiConnection",
+                        "runAfter": {},
+                        "inputs": {
+                            "host": {
+                                "connectionName": "shared_teams",
+                                "operationId": "GetMessagesFromChannel",
+                                "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+                            },
+                            "parameters": {
+                                // User picks Team + Channel here in the designer.
+                                "groupId": "",
+                                "channelId": ""
+                            },
+                            "authentication": "@parameters('$authentication')",
+                            "runtimeConfiguration": {
+                                "paginationPolicy": { "minimumItemCount": 5000 }
+                            }
+                        }
+                    },
+                    "Apply_to_each_message": {
+                        "type": "Foreach",
+                        "foreach": "@outputs('Get_messages')?['body/value']",
+                        "runAfter": { "Get_messages": ["Succeeded"] },
+                        "actions": {
+                            // Only keep messages from the last 30 days.
+                            "Only_last_30_days": {
+                                "type": "If",
+                                "expression": {
+                                    "greaterOrEquals": [
+                                        "@item()?['createdDateTime']",
+                                        "@addDays(utcNow(),-30)"
+                                    ]
+                                },
+                                "actions": {
+                                    "Create_file": teams_create_file_action(&file_content)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "connectionReferences": {
+            "shared_teams": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_teams" }
+            },
+            "shared_onedriveforbusiness": {
+                "runtimeSource": "embedded", "connection": {}, "api": { "name": "shared_onedriveforbusiness" }
+            }
+        }
+    })
+}
+
+/// The shared OneDrive Create-file action for a mail file (guid name, sweep
+/// folder, the given File Content expression).
+fn mail_create_file_action(file_content: &str) -> serde_json::Value {
+    json!({
+        "type": "OpenApiConnection",
+        "runAfter": {},
+        "inputs": {
+            "host": {
+                "connectionName": "shared_onedriveforbusiness",
+                "operationId": "CreateFile",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness"
+            },
+            "parameters": {
+                "folderPath": CREATE_FILE_FOLDER_PATH,
+                "name": CREATE_FILE_NAME_EXPRESSION,
+                "body": file_content
+            },
+            "authentication": "@parameters('$authentication')"
+        }
+    })
+}
+
+/// The shared OneDrive Create-file action for a Teams file (identical shape; kept
+/// separate for readability + the teams folder const).
+fn teams_create_file_action(file_content: &str) -> serde_json::Value {
+    json!({
+        "type": "OpenApiConnection",
+        "runAfter": {},
+        "inputs": {
+            "host": {
+                "connectionName": "shared_onedriveforbusiness",
+                "operationId": "CreateFile",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_onedriveforbusiness"
+            },
+            "parameters": {
+                "folderPath": CREATE_FILE_FOLDER_PATH_TEAMS,
+                "name": CREATE_FILE_NAME_EXPRESSION,
+                "body": file_content
+            },
+            "authentication": "@parameters('$authentication')"
+        }
+    })
+}
+
+/// The Teams live + backfill setup recipe (paste-ready, frozen expressions
+/// inline). Deterministic — the unit test asserts the frozen expressions appear.
+pub fn build_teams_recipe() -> String {
+    let live_expr = teams_live_file_content_expression();
+    format!(
+        r#"# Threshold Teams flow — live channel capture (1 flow per channel)
+
+This flow quietly copies each new message in ONE Teams channel into
+`OneDrive → Apps → Threshold → mail` as a small JSON file. Threshold's app sweeps
+that folder and pulls each message into your workspace. Build one flow per channel
+you want followed. Standard connectors only — no admin rights.
+
+> Prefer to import? The definition is provided as `threshold-teams-live.flow.json`
+> next to this file. The manual build below is the reliable path (~1 minute).
+
+**Step 1 — New flow.** Power Automate → **Create** → **Automated cloud flow**.
+Name it after the channel, e.g. `Threshold Teams — Renewals`.
+
+**Step 2 — Trigger.** Choose **Microsoft Teams → When a new channel message is
+added**. Pick the **Team** and **Channel** you want followed.
+
+**Step 3 — Action.** Add **OneDrive for Business → Create file**.
+- **Folder Path:** `{folder}`
+- **File Name:** switch to expression and paste: `concat(guid(),'.json')`
+
+**Step 4 — File Content (the important one).** Switch the **File Content** field to
+the expression editor and paste EXACTLY:
+
+    {live_expr}
+
+This maps the message's **HTML body** (`body/content`) into `bodyHtml` — do NOT
+add any "HTML to text" step; formatting like strikethrough carries meaning and is
+interpreted engine-side. (Optional: replace the two empty `''` after `channelName`
+and `teamName` with your channel / team name in quotes for prettier titles.)
+
+**Step 5 — Save + test.** Save. Post a test message in the channel; within a
+minute a `.json` file appears in `OneDrive/Apps/Threshold/mail` and the channel
+flips green on Threshold's next sweep.
+
+---
+If a step is blocked ("your admin hasn't allowed this connector"), that's an org
+policy — Threshold's doctor records it. For a one-time history import of the same
+channel, see `BACKFILL-RECIPE.md`.
+"#,
+        folder = CREATE_FILE_FOLDER_PATH_TEAMS,
+        live_expr = live_expr,
+    )
+}
+
+/// The COLDSTART 30-day backfill recipe (default = Sent mail; plus Teams-channel
+/// history). One-time, manually-triggered flows; delete after they run.
+pub fn build_backfill_recipe() -> String {
+    let mail_expr = email_backfill_file_content_expression();
+    let teams_expr = teams_backfill_file_content_expression();
+    format!(
+        r#"# Threshold coldstart — import your last 30 days (one-time)
+
+These are **instant** flows: you run each ONCE (a **Run** button in Power
+Automate), it imports the last 30 days, then you can delete it. Everything lands
+as the same JSON files Threshold sweeps, and the engine dedupes against anything
+already captured. Backfilled items are filed as background context (searchable
+everywhere) and won't crowd today's agenda.
+
+## Recommended: Sent mail, last 30 days ({mail_name})
+
+Your sent mail is dense signal with low noise — the best jump-start.
+
+**Step 1 — New flow.** Power Automate → **Create** → **Instant cloud flow** →
+**Manually trigger a flow**. Name it `{mail_name}`.
+
+**Step 2 — Get emails.** Add **Office 365 Outlook → Get emails (V3)**.
+- **Folder:** `Sent Items`
+- **Fetch Only Unread:** No · **Include Attachments:** No
+- **Top:** `250` and turn **Pagination** ON (Settings → Pagination) so it pages
+  through the full 30 days.
+- **Search Query:** `received:>=@{{addDays(utcNow(),-30)}}`
+
+**Step 3 — Loop + Create file.** Add **Apply to each** over the **value** output
+of Get emails. Inside it add **OneDrive for Business → Create file**:
+- **Folder Path:** `{folder}` · **File Name:** `concat(guid(),'.json')` (expression)
+- **File Content** (expression editor), paste EXACTLY:
+
+    {mail_expr}
+
+This maps the email's **HTML Body** into `bodyHtml` — never use **Body Preview**
+as the body and never add an html-to-text step (formatting is meaning here).
+
+**Step 4 — Run once.** Save → **Test** → **Manually** → **Run flow**. Watch the
+files land in `OneDrive/Apps/Threshold/mail`. When it finishes, **delete the flow**
+(it has done its one job).
+
+## Optional: Teams channel history, last 30 days ({teams_name})
+
+Same idea for one Teams channel. Instant flow → **Microsoft Teams → Get messages**
+(pick Team + Channel, Pagination ON) → **Apply to each** over **value** → a
+**Condition** keeping only `createdDateTime` ≥ 30 days ago → **Create file** with:
+
+    {teams_expr}
+
+Same capture-boundary rule: the message **HTML** `body/content` → `bodyHtml`, no
+text conversion. Run once, then delete.
+
+---
+Import instead? The definitions are provided as `threshold-mail-backfill-30d.flow.json`
+and `threshold-teams-backfill-30d.flow.json` next to this file.
+"#,
+        mail_name = MAIL_BACKFILL_FLOW_NAME,
+        teams_name = TEAMS_BACKFILL_FLOW_NAME,
+        folder = CREATE_FILE_FOLDER_PATH,
+        mail_expr = mail_expr,
+        teams_expr = teams_expr,
+    )
+}
+
 /// The files `generate_flow_package` wrote, returned to the UI so it can reveal /
 /// copy them.
 #[derive(Debug, Serialize, PartialEq)]
@@ -252,8 +704,18 @@ pub struct GeneratedPackage {
     pub inbox_definition: String,
     /// Absolute path to the Sent flow definition.
     pub sent_definition: String,
-    /// Absolute path to the recipe markdown.
+    /// Absolute path to the (live-mail) recipe markdown.
     pub recipe: String,
+    /// Absolute path to the Teams LIVE flow definition (WP-INTAKE TEAMS).
+    pub teams_live_definition: String,
+    /// Absolute path to the mail BACKFILL flow definition (WP-INTAKE COLDSTART).
+    pub mail_backfill_definition: String,
+    /// Absolute path to the Teams BACKFILL flow definition (WP-INTAKE COLDSTART).
+    pub teams_backfill_definition: String,
+    /// Absolute path to the Teams setup recipe markdown.
+    pub teams_recipe: String,
+    /// Absolute path to the coldstart/backfill recipe markdown.
+    pub backfill_recipe: String,
     /// True — signals the UI this is the definition+recipe fallback, not a
     /// one-click `.zip` package (so it renders the "build in ~1 min" guidance,
     /// not "import this zip").
@@ -270,21 +732,36 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
     let inbox_path = pkg_dir.join(Mailbox::Inbox.definition_filename());
     let sent_path = pkg_dir.join(Mailbox::Sent.definition_filename());
     let recipe_path = pkg_dir.join("IMPORT-RECIPE.md");
+    // v2 flows (WP-INTAKE TEAMS + COLDSTART).
+    let teams_live_path = pkg_dir.join("threshold-teams-live.flow.json");
+    let mail_backfill_path = pkg_dir.join("threshold-mail-backfill-30d.flow.json");
+    let teams_backfill_path = pkg_dir.join("threshold-teams-backfill-30d.flow.json");
+    let teams_recipe_path = pkg_dir.join("TEAMS-RECIPE.md");
+    let backfill_recipe_path = pkg_dir.join("BACKFILL-RECIPE.md");
 
-    let inbox_json = serde_json::to_string_pretty(&build_flow_definition(Mailbox::Inbox))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    let sent_json = serde_json::to_string_pretty(&build_flow_definition(Mailbox::Sent))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let pretty = |v: &serde_json::Value| -> std::io::Result<String> {
+        serde_json::to_string_pretty(v).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    };
 
-    std::fs::write(&inbox_path, inbox_json)?;
-    std::fs::write(&sent_path, sent_json)?;
+    std::fs::write(&inbox_path, pretty(&build_flow_definition(Mailbox::Inbox))?)?;
+    std::fs::write(&sent_path, pretty(&build_flow_definition(Mailbox::Sent))?)?;
     std::fs::write(&recipe_path, build_recipe())?;
+    std::fs::write(&teams_live_path, pretty(&build_teams_live_flow_definition())?)?;
+    std::fs::write(&mail_backfill_path, pretty(&build_email_backfill_flow_definition())?)?;
+    std::fs::write(&teams_backfill_path, pretty(&build_teams_backfill_flow_definition())?)?;
+    std::fs::write(&teams_recipe_path, build_teams_recipe())?;
+    std::fs::write(&backfill_recipe_path, build_backfill_recipe())?;
 
     Ok(GeneratedPackage {
         dir: pkg_dir.to_string_lossy().into_owned(),
         inbox_definition: path_string(&inbox_path),
         sent_definition: path_string(&sent_path),
         recipe: path_string(&recipe_path),
+        teams_live_definition: path_string(&teams_live_path),
+        mail_backfill_definition: path_string(&mail_backfill_path),
+        teams_backfill_definition: path_string(&teams_backfill_path),
+        teams_recipe: path_string(&teams_recipe_path),
+        backfill_recipe: path_string(&backfill_recipe_path),
         is_fallback: true,
     })
 }
@@ -387,6 +864,114 @@ mod tests {
         assert!(r.contains(Mailbox::Sent.flow_name()));
     }
 
+    // ── v2 flows (WP-INTAKE TEAMS + COLDSTART): frozen-expression drift guards ──
+    // Independent literal copies of the v2 File Content expressions. If a
+    // generator drifts from what `onedrive_mail_sweep`'s v2 dispatcher parses,
+    // THESE fail.
+    const FROZEN_TEAMS_LIVE: &str = "string(createObject('schemaVersion',2,'kind','teams-channel','capture','live','channelId',triggerBody()?['channelIdentity']?['channelId'],'channelName','','teamName','','author',triggerBody()?['from']?['user']?['displayName'],'messageId',triggerBody()?['id'],'replyToId',coalesce(triggerBody()?['replyToId'],''),'dateTimeCreated',triggerBody()?['createdDateTime'],'bodyHtml',coalesce(triggerBody()?['body']?['content'],'')))";
+    const FROZEN_MAIL_BACKFILL: &str = "string(createObject('schemaVersion',2,'kind','email','capture','backfill','mailbox','sent','from',item()?['from'],'to',coalesce(item()?['toRecipients'],''),'cc',coalesce(item()?['ccRecipients'],''),'subject',coalesce(item()?['subject'],''),'dateTimeCreated',item()?['receivedDateTime'],'bodyHtml',coalesce(item()?['body'],''),'internetMessageId',item()?['internetMessageId']))";
+    const FROZEN_TEAMS_BACKFILL: &str = "string(createObject('schemaVersion',2,'kind','teams-channel','capture','backfill','channelId',item()?['channelIdentity']?['channelId'],'channelName','','teamName','','author',item()?['from']?['user']?['displayName'],'messageId',item()?['id'],'replyToId',coalesce(item()?['replyToId'],''),'dateTimeCreated',item()?['createdDateTime'],'bodyHtml',coalesce(item()?['body']?['content'],'')))";
+
+    #[test]
+    fn v2_file_content_expressions_are_frozen_byte_exact() {
+        assert_eq!(teams_live_file_content_expression(), FROZEN_TEAMS_LIVE);
+        assert_eq!(email_backfill_file_content_expression(), FROZEN_MAIL_BACKFILL);
+        assert_eq!(teams_backfill_file_content_expression(), FROZEN_TEAMS_BACKFILL);
+    }
+
+    #[test]
+    fn v2_expressions_carry_schema_v2_discriminators_and_kind_keys() {
+        // Every v2 expression declares schemaVersion 2, a kind, and a capture.
+        for (expr, kind, capture) in [
+            (FROZEN_TEAMS_LIVE, "'kind','teams-channel'", "'capture','live'"),
+            (FROZEN_MAIL_BACKFILL, "'kind','email'", "'capture','backfill'"),
+            (FROZEN_TEAMS_BACKFILL, "'kind','teams-channel'", "'capture','backfill'"),
+        ] {
+            assert!(expr.contains("'schemaVersion',2"), "must be schema v2: {expr}");
+            assert!(expr.contains(kind), "must carry {kind}");
+            assert!(expr.contains(capture), "must carry {capture}");
+        }
+        // Teams expressions carry the engine's required Teams keys.
+        for expr in [FROZEN_TEAMS_LIVE, FROZEN_TEAMS_BACKFILL] {
+            for key in ["'channelId'", "'author'", "'messageId'", "'replyToId'"] {
+                assert!(expr.contains(key), "teams expr must carry {key}");
+            }
+        }
+        // The email backfill carries the same v1 email keys the sweep reads.
+        for key in ["'from'", "'to'", "'cc'", "'subject'", "'internetMessageId'"] {
+            assert!(FROZEN_MAIL_BACKFILL.contains(key), "mail expr must carry {key}");
+        }
+    }
+
+    /// The capture-boundary invariant (WP-FORMATTING-SEMANTICS): every generated
+    /// File Content expression MUST map an HTML body token into `bodyHtml`, and
+    /// must NEVER introduce an html-to-text step or use a text preview as the
+    /// primary body. Locks the INVARIANT, not just the current bytes.
+    #[test]
+    fn every_expression_maps_html_into_bodyhtml_and_never_flattens() {
+        // (expression, the exact HTML token expected right after 'bodyHtml',)
+        let cases = [
+            (FROZEN_INBOX, "'bodyHtml',coalesce(triggerBody()?['body'],''"),
+            (FROZEN_SENT, "'bodyHtml',coalesce(triggerBody()?['body'],''"),
+            (FROZEN_TEAMS_LIVE, "'bodyHtml',coalesce(triggerBody()?['body']?['content'],''"),
+            (FROZEN_MAIL_BACKFILL, "'bodyHtml',coalesce(item()?['body'],''"),
+            (FROZEN_TEAMS_BACKFILL, "'bodyHtml',coalesce(item()?['body']?['content'],''"),
+        ];
+        for (expr, html_into_bodyhtml) in cases {
+            // The HTML body token is mapped straight into bodyHtml.
+            assert!(
+                expr.contains(html_into_bodyhtml),
+                "expr must map HTML body → bodyHtml ({html_into_bodyhtml}): {expr}"
+            );
+            // No text-preview substitution and no flow-side html-to-text step.
+            assert!(!expr.to_lowercase().contains("preview"), "no body preview: {expr}");
+            assert!(!expr.to_lowercase().contains("htmltotext"), "no html-to-text: {expr}");
+            assert!(!expr.to_lowercase().contains("html_to_text"), "no html-to-text: {expr}");
+            // bodyText is never emitted as a key by any generated flow (it would
+            // only ever be an auxiliary field, never a substitute for bodyHtml).
+            assert!(!expr.contains("'bodyText'"), "no bodyText key: {expr}");
+        }
+    }
+
+    #[test]
+    fn v2_flow_definitions_parse_and_carry_frozen_expression() {
+        for (def, frozen, connector) in [
+            (build_teams_live_flow_definition(), FROZEN_TEAMS_LIVE, "shared_teams"),
+            (build_email_backfill_flow_definition(), FROZEN_MAIL_BACKFILL, "shared_office365"),
+            (build_teams_backfill_flow_definition(), FROZEN_TEAMS_BACKFILL, "shared_teams"),
+        ] {
+            // Round-trips through JSON.
+            let s = serde_json::to_string(&def).unwrap();
+            let reparsed: serde_json::Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(reparsed, def);
+            // The File Content expression appears verbatim somewhere in the def,
+            // wrapped @{...} (nested under an Apply-to-each for the backfills).
+            assert!(
+                s.contains(&format!("@{{{}}}", frozen).replace('"', "\\\"")) || s.contains(frozen),
+                "definition must carry the frozen expression"
+            );
+            // The source connector + OneDrive Create-file connector are referenced.
+            assert!(def["connectionReferences"].get(connector).is_some());
+            assert!(def["connectionReferences"]
+                .get("shared_onedriveforbusiness")
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn v2_recipes_carry_frozen_expressions_and_names() {
+        let teams = build_teams_recipe();
+        assert!(teams.contains(FROZEN_TEAMS_LIVE));
+        assert!(teams.contains(CREATE_FILE_FOLDER_PATH_TEAMS));
+        assert!(teams.contains("concat(guid(),'.json')"));
+
+        let backfill = build_backfill_recipe();
+        assert!(backfill.contains(FROZEN_MAIL_BACKFILL));
+        assert!(backfill.contains(FROZEN_TEAMS_BACKFILL));
+        assert!(backfill.contains(MAIL_BACKFILL_FLOW_NAME));
+        assert!(backfill.contains(TEAMS_BACKFILL_FLOW_NAME));
+    }
+
     /// Eyeball smoke — writes a real package to a chosen dir + prints paths.
     /// `#[ignore]` (writes outside tempdir on demand):
     ///   `cargo test --lib flow_package_live_smoke -- --ignored --nocapture`
@@ -414,11 +999,24 @@ mod tests {
         let pkg = generate_flow_package(&root).unwrap();
         assert!(pkg.is_fallback);
 
-        // All three exist under the grouped subfolder.
+        // All artifacts exist under the grouped subfolder (v1 mail + v2 flows).
         assert!(Path::new(&pkg.inbox_definition).exists());
         assert!(Path::new(&pkg.sent_definition).exists());
         assert!(Path::new(&pkg.recipe).exists());
+        assert!(Path::new(&pkg.teams_live_definition).exists());
+        assert!(Path::new(&pkg.mail_backfill_definition).exists());
+        assert!(Path::new(&pkg.teams_backfill_definition).exists());
+        assert!(Path::new(&pkg.teams_recipe).exists());
+        assert!(Path::new(&pkg.backfill_recipe).exists());
         assert!(pkg.dir.ends_with("Threshold-PowerAutomate"));
+
+        // A written v2 definition parses + carries its frozen expression.
+        let teams: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&pkg.teams_live_definition).unwrap())
+                .unwrap();
+        let tbody = &teams["properties"]["definition"]["actions"]["Create_file"]["inputs"]
+            ["parameters"]["body"];
+        assert_eq!(tbody, &format!("@{{{}}}", FROZEN_TEAMS_LIVE));
 
         // The written definitions parse + carry the frozen expression.
         let inbox: serde_json::Value =

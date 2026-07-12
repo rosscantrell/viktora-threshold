@@ -153,9 +153,10 @@ each message as a small JSON file into `OneDrive → Apps → Threshold → mail
 Threshold's app sweeps that folder on its channel tick. This works even with
 New Outlook (which has no add-in/COM surface).
 
-The onboarding **integration doctor** generates the two flows for you (a
+The onboarding **integration doctor** generates the flows for you (a
 `Threshold-PowerAutomate/` folder with `threshold-mail-inbox.flow.json`,
-`threshold-mail-sent.flow.json`, and `IMPORT-RECIPE.md`) and prepares the
+`threshold-mail-sent.flow.json`, `IMPORT-RECIPE.md`, plus the Teams + backfill
+artifacts described in the next two sections) and prepares the
 `Apps/Threshold/mail` sweep folder under your detected OneDrive root. Building
 the flows is a one-minute, no-admin step.
 
@@ -178,6 +179,60 @@ the flows is a one-minute, no-admin step.
 > A blocked connector ("your admin hasn't allowed this") is an org policy, not a
 > bug — the doctor records "blocked by org" and falls back to the classic-Outlook
 > or add-in path. Nothing here exposes more than the email you already receive.
+
+---
+
+## Passive Teams intake — channel-message flow (optional, one flow per channel)
+
+The same file-drop pattern carries **Teams channel messages** into your
+workspace. One Power Automate flow per channel you want followed; the doctor's
+generated package includes `threshold-teams-live.flow.json` and the paste-ready
+`TEAMS-RECIPE.md`.
+
+**5-step build** (repeat per channel):
+
+1. **New flow.** Power Automate → **Create → Automated cloud flow**. Name it
+   after the channel, e.g. `Threshold Teams — Renewals`.
+2. **Trigger.** **Microsoft Teams → When a new channel message is added** — pick
+   the **Team** and **Channel** in the trigger.
+3. **Action.** **OneDrive for Business → Create file**. **Folder Path:**
+   `/Apps/Threshold/mail` (same swept folder as mail — the sweep routes by
+   kind). **File Name** (expression): `concat(guid(),'.json')`.
+4. **File Content** (expression editor) — paste the exact expression from
+   `TEAMS-RECIPE.md` (it starts `string(createObject('schemaVersion',2,'kind','teams-channel',…`).
+   It maps the message's **HTML body** (`body/content`) into `bodyHtml` — do NOT
+   add any "Html to text" step; formatting like strikethrough carries meaning
+   and is interpreted engine-side.
+5. **Save + test.** Post a test message in the channel; within ~1 minute a
+   `.json` file appears in the folder and the Teams channel flips green on the
+   next sweep (the doctor's `teamsProcessedCount` starts counting).
+
+---
+
+## Coldstart backfill — import your last 30 days (optional, one-time)
+
+After the doctor goes green, you can jump-start your field with the last 30
+days of history. These are **instant** (manually-triggered) flows: run each
+ONCE, watch the files land, then **delete the flow**. The engine dedupes
+against anything already captured, and backfilled items are stamped
+`capture: backfill` (filed as background context — they won't crowd today's
+agenda).
+
+- **Recommended: `Threshold backfill — Sent mail 30d`** (dense signal, low
+  noise). Instant flow → **Office 365 Outlook → Get emails (V3)** with
+  **Folder** = `Sent Items`, **Pagination ON**, search query limiting to the
+  last 30 days → **Apply to each** over `value` → **Create file** with the
+  expression from `BACKFILL-RECIPE.md` (`'kind','email','capture','backfill'`).
+- **Optional: `Threshold backfill — Teams channel 30d`** per channel. Instant
+  flow → **Microsoft Teams → Get messages** (pick Team + Channel, Pagination
+  ON) → **Apply to each** → a **Condition** keeping only messages from the
+  last 30 days → **Create file** with the Teams backfill expression from
+  `BACKFILL-RECIPE.md`.
+
+Both recipes follow the same capture rule as live flows: the source's **HTML
+body** token → `bodyHtml`, never a text preview, never an html-to-text step.
+The generated `threshold-mail-backfill-30d.flow.json` /
+`threshold-teams-backfill-30d.flow.json` definitions mirror these steps.
 
 ---
 

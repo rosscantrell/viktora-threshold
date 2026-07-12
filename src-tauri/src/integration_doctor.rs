@@ -274,10 +274,22 @@ pub struct OneDriveMailProbe {
     /// The configured folder (absolute path), if set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
-    /// Count of receipts in `processed/` (successful imports). 0 when not ready.
+    /// Count of receipts in `processed/` (successful imports, ALL kinds). 0 when
+    /// not ready.
     pub processed_count: usize,
     /// Count of quarantined files in `failed/`. 0 when not ready.
     pub failed_count: usize,
+    /// Count of files set aside in `skipped/` because their import lane is OFF
+    /// server-side (`{enabled:false}`). Fail-VISIBLE: a nonzero here means a lane
+    /// (email or Teams) needs enabling and those items are waiting, recoverable.
+    pub skipped_count: usize,
+    /// Cheap, honest Teams presence: the count of `processed/` receipts that are
+    /// Teams-kind (classified by the `teams-` receipt filename prefix at zero
+    /// extra I/O — a directory listing + name check, no file contents read, no
+    /// ledger). This is the self-detect signal for the Teams channel flipping
+    /// green in onboarding. 0 when not ready or no Teams message has arrived. We
+    /// do NOT probe Teams itself (no API surface without consent).
+    pub teams_processed_count: usize,
 }
 
 // ── plaud (config state) ─────────────────────────────────────────────────────
@@ -447,20 +459,23 @@ pub fn probe_onedrive_mail_public(cfg: &OneDriveMailConfig) -> OneDriveMailProbe
 }
 
 fn probe_onedrive_mail(cfg: &OneDriveMailConfig) -> OneDriveMailProbe {
-    use onedrive_mail_sweep::SweepGate;
+    use onedrive_mail_sweep::{count_receipts, SweepGate, FAILED_DIR, PROCESSED_DIR, SKIPPED_DIR};
     let gate = onedrive_mail_sweep::gate(cfg);
     let folder = cfg.folder_path().map(|p| p.to_string_lossy().into_owned());
-    let (state, processed_count, failed_count) = match gate {
-        SweepGate::NotConfigured => ("notConfigured", 0, 0),
-        SweepGate::FolderNotFound => ("folderNotFound", 0, 0),
+    let (state, processed_count, failed_count, skipped_count, teams_processed_count) = match gate {
+        SweepGate::NotConfigured => ("notConfigured", 0, 0, 0, 0),
+        SweepGate::FolderNotFound => ("folderNotFound", 0, 0, 0, 0),
         SweepGate::Ready => {
-            // Ready ⇒ folder_path is Some.
+            // Ready ⇒ folder_path is Some. All counts are a single directory
+            // listing each (+ a filename check for the Teams classification) —
+            // cheap + honest, no file contents read, no ledger.
             let base = cfg.folder_path().expect("ready gate ⇒ folder set");
-            let processed =
-                onedrive_mail_sweep::scan_inbox(&base.join(onedrive_mail_sweep::PROCESSED_DIR)).len();
-            let failed =
-                onedrive_mail_sweep::scan_inbox(&base.join(onedrive_mail_sweep::FAILED_DIR)).len();
-            ("ready", processed, failed)
+            let processed_dir = base.join(PROCESSED_DIR);
+            let processed = count_receipts(&processed_dir, false);
+            let teams = count_receipts(&processed_dir, true);
+            let failed = count_receipts(&base.join(FAILED_DIR), false);
+            let skipped = count_receipts(&base.join(SKIPPED_DIR), false);
+            ("ready", processed, failed, skipped, teams)
         }
     };
     OneDriveMailProbe {
@@ -468,6 +483,8 @@ fn probe_onedrive_mail(cfg: &OneDriveMailConfig) -> OneDriveMailProbe {
         folder,
         processed_count,
         failed_count,
+        skipped_count,
+        teams_processed_count,
     }
 }
 
@@ -1127,19 +1144,34 @@ ACCT name=Business2 folder= display=Empty
         ));
         std::fs::create_dir_all(root.join(onedrive_mail_sweep::PROCESSED_DIR)).unwrap();
         std::fs::create_dir_all(root.join(onedrive_mail_sweep::FAILED_DIR)).unwrap();
+        std::fs::create_dir_all(root.join(onedrive_mail_sweep::SKIPPED_DIR)).unwrap();
+        // One email receipt (guid name) + one Teams receipt (teams- prefix).
         std::fs::write(
             root.join(onedrive_mail_sweep::PROCESSED_DIR).join("a.json"),
             "{}",
         )
         .unwrap();
+        std::fs::write(
+            root.join(onedrive_mail_sweep::PROCESSED_DIR).join("teams-c.json"),
+            "{}",
+        )
+        .unwrap();
         std::fs::write(root.join(onedrive_mail_sweep::FAILED_DIR).join("b.json"), "{}").unwrap();
+        // A lane-off Teams file set aside in skipped/ (prefixed).
+        std::fs::write(
+            root.join(onedrive_mail_sweep::SKIPPED_DIR).join("teams-d.json"),
+            "{}",
+        )
+        .unwrap();
         let ready = OneDriveMailConfig {
             folder: Some(root.to_string_lossy().into_owned()),
         };
         let p = probe_onedrive_mail(&ready);
         assert_eq!(p.state, "ready");
-        assert_eq!(p.processed_count, 1);
+        assert_eq!(p.processed_count, 2, "email + teams receipts counted");
+        assert_eq!(p.teams_processed_count, 1, "only the teams- receipt classified");
         assert_eq!(p.failed_count, 1);
+        assert_eq!(p.skipped_count, 1, "lane-off file counted in skipped/");
         let _ = std::fs::remove_dir_all(&root);
     }
 
