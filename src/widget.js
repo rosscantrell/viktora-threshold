@@ -574,10 +574,33 @@ async function maybeFireCheckins() {
   if (localStorage.getItem(ck)) return; // current check-in already pinged today
   localStorage.setItem(ck, "1");
   try {
-    await maybeShowNotification({ title: current.ping.title, body: current.ping.body });
+    await maybeShowNotification({
+      title: current.ping.title,
+      body: (await checkinCountBody()) || current.ping.body,
+    });
     pulseWidget();
   } catch (err) {
     console.warn("[widget] check-in ping failed:", err);
+  }
+}
+
+// Ping counts must come from the IDENTICAL data path Today renders, read at
+// notification time — never a separate derivation, never a cached number
+// (WP-CHECKIN pin). Today's "awaiting send" count is fetch_outbox items;
+// the prework-staging count joins when the packet IPC lands. Any failure —
+// or zero — degrades to the routine's countless copy: a wrong number burns
+// trust faster than no number.
+async function checkinCountBody() {
+  try {
+    const data = await invoke("fetch_outbox");
+    const n = Array.isArray(data && data.items) ? data.items.length : 0;
+    if (n < 1) return null;
+    return (
+      (n === 1 ? "1 draft awaits" : n + " drafts await") +
+      " your review — open the brief to start."
+    );
+  } catch (_err) {
+    return null; // countless copy; the brief itself is the truthful surface
   }
 }
 
