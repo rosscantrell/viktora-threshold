@@ -10,6 +10,8 @@
 // completion timestamp yet), and the real "what am I missing" (inbound-with-no-
 // response) is the engine North Star tracked separately.
 
+import { ROUTINES, tzOffsetMinutes } from "./routines.js";
+
 const tauri = window.__TAURI__;
 const invoke = tauri.core.invoke;
 
@@ -77,24 +79,26 @@ function currentLens(now) {
 // ───────────────────────────────────────────────────────────────────────────
 // Standup — run this check-in WITH the AI companion (WP-CHECKIN-STANDUP).
 // Opens the configured AI surface (Settings → Integrations → AI companion,
-// localStorage — same window, so the store is shared). The Apolla MCP standup
-// prompt carries the ritual + the packet; the ?q= prefill is a claude.ai
-// nicety, not the mechanism.
+// localStorage — same window, so the store is shared). The ?q= prefill now
+// carries the routine's canonical thin prompt (routines.js, tz computed at
+// click time) — this chip IS the reliable click path for the check-in ping,
+// so it opens the session exactly the way a scheduled routine would.
 // ───────────────────────────────────────────────────────────────────────────
 const COMPANION_URL_KEY = "threshold.companionUrl";
 const COMPANION_DEFAULT_URL = "https://claude.ai/new";
-const STANDUP = {
-  morning: { label: "Standup", prompt: "Run my morning standup" },
-  midday: { label: "Check-in", prompt: "Run my mid-day check-in" },
-  evening: { label: "Debrief", prompt: "Run my end-of-day debrief" },
-};
+const STANDUP_LABELS = { morning: "Standup", midday: "Check-in", evening: "Debrief" };
 let _lens = null; // current lens; renderLens keeps it + the button label in sync
 
+function standupLabel(lensKey) {
+  return STANDUP_LABELS[lensKey] || STANDUP_LABELS.morning;
+}
+
 async function openStandup() {
-  const st = STANDUP[_lens] || STANDUP.morning;
+  const routine =
+    ROUTINES.find((r) => r.key === _lens) || ROUTINES.find((r) => r.key === "morning");
   let url = (localStorage.getItem(COMPANION_URL_KEY) || COMPANION_DEFAULT_URL).trim();
   if (/^https:\/\/(www\.)?claude\.ai\/new\/?$/.test(url)) {
-    url += "?q=" + encodeURIComponent(st.prompt);
+    url += "?q=" + encodeURIComponent(routine.prompt(tzOffsetMinutes()));
   }
   try {
     await invoke("plugin:opener|open_url", { url });
@@ -304,7 +308,7 @@ function renderLens(lensKey, buckets, now) {
   const t0ms = t0.getTime();
   const lens = LENSES[lensKey];
   _lens = lensKey;
-  document.getElementById("brief-standup-label").textContent = (STANDUP[lensKey] || STANDUP.morning).label;
+  document.getElementById("brief-standup-label").textContent = standupLabel(lensKey);
   document.getElementById("brief-tagline").textContent = lens.tagline;
   for (const tab of document.querySelectorAll(".brief-tab")) {
     tab.setAttribute("aria-selected", tab.dataset.lens === lensKey ? "true" : "false");

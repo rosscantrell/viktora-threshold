@@ -479,6 +479,37 @@
                   the standup prompt is pre-filled for you.
                 </span>
               </label>
+
+              <!-- Daily routines — native-first (see routines.js for the
+                   architecture). The attended rows drive the widget's
+                   check-in pings; the prework row is engine-side (config
+                   endpoint pending — the copy says so). The claude.ai
+                   one-message setup is the optional cloud tier, and its
+                   status line only ever claims what the app verified: that
+                   it opened. Rows + wiring from initRoutineSetup() in
+                   main.js. -->
+              <div class="field">
+                <span class="field-label">Daily routines</span>
+                <div class="routine-list" id="routine-list"></div>
+                <span class="field-help">
+                  While Threshold is running it reminds you at these times —
+                  open the brief and the ✦ button starts the session with your
+                  companion. The pre-work session runs on your workspace
+                  before you're up; setting its schedule from here is coming
+                  with the workspace runner.
+                </span>
+                <div class="ec-actions routine-actions">
+                  <button type="button" class="btn btn-secondary" id="routine-setup">
+                    Set up in Claude instead
+                  </button>
+                </div>
+                <p class="field-help routine-status" id="routine-setup-status"></p>
+                <span class="field-help">
+                  Optional: create the four as claude.ai scheduled tasks — one
+                  message, you review and send it there. Useful if you want
+                  the check-ins to run cloud-side instead of from reminders.
+                </span>
+              </div>
             </section>
 
             <!-- ── Privacy panel ──

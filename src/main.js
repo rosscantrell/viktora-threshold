@@ -16,6 +16,13 @@
 //     renders a structured toast (D-12-18 schema: kind/title/body/cta)
 //   • "Capture Screen" → stub until increment 5 (screenshot subprocess)
 
+import {
+  ROUTINES,
+  loadRoutines,
+  saveRoutines,
+  composeRoutineSetupMessage,
+} from "./routines.js";
+
 const tauri = window.__TAURI__;
 
 // WP-ONENOTE-EXPORT-03 — default global hotkey for "send current OneNote
@@ -1732,6 +1739,73 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
     const v = input.value.trim();
     if (v) localStorage.setItem(COMPANION_URL_KEY, v);
     else localStorage.removeItem(COMPANION_URL_KEY);
+  });
+})();
+
+// ── Daily routines (WP-CHECKIN-ROUTINES) ────────────────────────────────────
+// The Settings face of the routines architecture (definitions + rationale in
+// routines.js). Attended check-ins are native: the always-resident widget
+// pings at the times set here (persist-on-change, like the companion URL —
+// no global-Save dependency), and the brief's ✦ chip opens the companion.
+// The prework row is engine-side; until the engine runner exposes its config
+// endpoint the row shows the time honestly but schedules nothing — say so,
+// never pretend. The claude.ai one-message setup remains below as the
+// optional cloud tier.
+(function initRoutineSetup() {
+  const list = document.getElementById("routine-list");
+  const btn = document.getElementById("routine-setup");
+  if (!list || !btn) return;
+
+  const cfg = loadRoutines();
+
+  list.innerHTML = ROUTINES.map((r) => {
+    const c = cfg[r.key];
+    const toggle = r.attended
+      ? '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
+        (c.enabled ? " checked" : "") + ' aria-label="Remind me for ' + r.name + '" />'
+      : '<span class="routine-toggle-slot" aria-hidden="true"></span>';
+    return (
+      '<div class="routine-row">' +
+      toggle +
+      '<input type="time" class="routine-time" data-routine="' + r.key + '" value="' +
+      c.time + '" aria-label="' + r.name + ' time" />' +
+      '<span class="routine-name">' + r.name + "</span>" +
+      '<span class="routine-desc">' + r.desc + "</span>" +
+      "</div>"
+    );
+  }).join("");
+
+  const readConfig = () => {
+    const out = loadRoutines();
+    for (const input of list.querySelectorAll(".routine-time")) {
+      if (input.value) out[input.dataset.routine].time = input.value;
+    }
+    for (const box of list.querySelectorAll(".routine-toggle")) {
+      out[box.dataset.routine].enabled = box.checked;
+    }
+    return out;
+  };
+  list.addEventListener("change", () => saveRoutines(readConfig()));
+
+  btn.addEventListener("click", async () => {
+    const status = document.getElementById("routine-setup-status");
+    const msg = composeRoutineSetupMessage(readConfig());
+    let url = (localStorage.getItem(COMPANION_URL_KEY) || "https://claude.ai/new").trim();
+    // Same prefill rule as the Standup chip: ?q= is a claude.ai nicety; other
+    // companions get the message on the clipboard instead.
+    const canPrefill = /^https:\/\/(www\.)?claude\.ai\/new\/?$/.test(url);
+    if (canPrefill) url += "?q=" + encodeURIComponent(msg);
+    try {
+      if (!canPrefill) await tauri.core.invoke("copy_text", { text: msg });
+      await tauri.core.invoke("plugin:opener|open_url", { url });
+      status.textContent = canPrefill
+        ? "Opened in Claude — review the message, send it, and confirm the four routines " +
+          "there. Threshold can't see your Claude schedule."
+        : "Opened your companion — the setup message is on your clipboard: paste it, send " +
+          "it, and confirm the routines there.";
+    } catch (err) {
+      showToast({ kind: "failure", title: "Couldn't open your companion", body: String(err) });
+    }
   });
 })();
 
