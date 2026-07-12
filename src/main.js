@@ -2942,7 +2942,7 @@ async function openSourcePanel(documentId, verbatim, extraVerbatims, opts) {
     }
   }
 
-  const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others);
+  const nMarks = renderSourceBody(bodyEl, displayBody, verbatim, others, detail.formatSpans);
   if (metaEl && nMarks > 1) {
     metaEl.textContent = (metaEl.textContent ? metaEl.textContent + " · " : "") + nMarks + " highlighted";
   }
@@ -2982,7 +2982,56 @@ function findVerbatimRange(haystack, needle) {
  *  same source) dimmed — so the source shows all its decisions/commitments in
  *  context. `text` is assumed already reflowed. textContent + DOM nodes (no
  *  innerHTML). Returns the count of highlights actually placed. */
-function renderSourceBody(bodyEl, text, primary, others) {
+function lightenSourceColor(hex) {
+  // Lighten a captured `#rrggbb` author color for the dark glass background:
+  // keeps the hue identity (Trisha's blue stays blue) while staying readable.
+  const m = /^#([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return "";
+  const n = parseInt(m[1], 16);
+  const rf = ((n >> 16) & 255) / 255, gf = ((n >> 8) & 255) / 255, bf = (n & 255) / 255;
+  const max = Math.max(rf, gf, bf), min = Math.min(rf, gf, bf);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === rf) h = ((gf - bf) / d + (gf < bf ? 6 : 0)) / 6;
+    else if (max === gf) h = ((bf - rf) / d + 2) / 6;
+    else h = ((rf - gf) / d + 4) / 6;
+  }
+  return `hsl(${Math.round(h * 360)}, ${Math.round(s * 100)}%, ${Math.round(Math.max(l, 0.7) * 100)}%)`;
+}
+
+/** Content-anchor the doc's preserved formatting spans (strike/insert/color/
+ *  highlight; offsets are into the STORED content) onto the REFLOWED display
+ *  text. The reflow inserts newlines so stored offsets shift; instead each span
+ *  is re-located by its verbatim `text`, whitespace-insensitively, with a
+ *  monotonic cursor (the reflow preserves document order). Unlocatable spans
+ *  are dropped: a missing strike beats a misplaced one. */
+function anchorFormatSpans(text, formatSpans) {
+  const out = [];
+  if (!Array.isArray(formatSpans)) return out;
+  let cursor = 0;
+  for (const s of formatSpans) {
+    const raw = s && typeof s.text === "string" ? s.text.replace(/ /g, " ").trim() : "";
+    if (!raw || !s.kind) continue;
+    const pattern = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+    let m = null;
+    try {
+      const re = new RegExp(pattern, "gi");
+      re.lastIndex = Math.max(0, Math.min(cursor, text.length));
+      m = re.exec(text);
+    } catch {
+      continue;
+    }
+    if (!m) continue;
+    out.push({ start: m.index, end: m.index + m[0].length, kind: s.kind, color: s.color || "" });
+    cursor = m.index; // monotonic-ish: same-line sibling spans may share a start
+  }
+  return out;
+}
+
+function renderSourceBody(bodyEl, text, primary, others, formatSpans) {
   if (!bodyEl) return 0;
   bodyEl.textContent = "";
   if (!text) {
@@ -3002,10 +3051,6 @@ function renderSourceBody(bodyEl, text, primary, others) {
   add(primary, true);
   for (const q of Array.isArray(others) ? others : []) add(q, false);
 
-  if (!ranges.length) {
-    bodyEl.textContent = text;
-    return 0;
-  }
   // Earliest first; at a tie the primary wins. Then drop any overlaps greedily.
   ranges.sort((a, b) => a.start - b.start || (b.primary === true) - (a.primary === true));
   const placed = [];
@@ -3015,18 +3060,74 @@ function renderSourceBody(bodyEl, text, primary, others) {
     placed.push(r);
     lastEnd = r.end;
   }
-  let cursor = 0;
+
+  // The doc's preserved formatting (WP-FORMATTING-SEMANTICS), content-anchored.
+  const fmts = anchorFormatSpans(text, formatSpans);
+  const hlAt = (i) => placed.find((r) => r.start <= i && i < r.end) || null;
+  const fmtsAt = (i) => fmts.filter((f) => f.start <= i && i < f.end);
+
+  // Line-structured emit: each line is a .source-line whose leading spaces
+  // become a hanging indent (wrapped bullet lines keep their hierarchy), and
+  // each line is walked in segments so highlights + formatting compose.
   let primaryMark = null;
-  for (const r of placed) {
-    if (r.start > cursor) bodyEl.appendChild(document.createTextNode(text.slice(cursor, r.start)));
-    const mark = document.createElement("mark");
-    mark.className = r.primary ? "source-hl source-hl-primary" : "source-hl source-hl-dim";
-    mark.textContent = text.slice(r.start, r.end);
-    bodyEl.appendChild(mark);
-    if (r.primary) primaryMark = mark;
-    cursor = r.end;
+  const lines = text.split("\n");
+  let offset = 0;
+  for (const lineText of lines) {
+    const lineStart = offset;
+    const lineEnd = offset + lineText.length;
+    offset = lineEnd + 1; // + '\n'
+    const line = document.createElement("div");
+    line.className = "source-line";
+    const indent = (lineText.match(/^ */) || [""])[0].length;
+    if (indent > 0) line.style.paddingLeft = `${indent}ch`;
+    const contentStart = lineStart + indent; // leading spaces render as padding
+
+    const bounds = new Set([contentStart, lineEnd]);
+    for (const arr of [placed, fmts]) {
+      for (const r of arr) {
+        if (r.end > contentStart && r.start < lineEnd) {
+          bounds.add(Math.max(r.start, contentStart));
+          bounds.add(Math.min(r.end, lineEnd));
+        }
+      }
+    }
+    const cuts = [...bounds].sort((a, b) => a - b);
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      const a = cuts[k], b = cuts[k + 1];
+      if (b <= a) continue;
+      const seg = text.slice(a, b);
+      const hl = hlAt(a);
+      const active = fmtsAt(a);
+      let el;
+      if (hl) {
+        el = document.createElement("mark");
+        el.className = hl.primary ? "source-hl source-hl-primary" : "source-hl source-hl-dim";
+        if (hl.primary && !primaryMark) primaryMark = el;
+      } else if (active.length) {
+        el = document.createElement("span");
+      } else {
+        line.appendChild(document.createTextNode(seg));
+        continue;
+      }
+      for (const f of active) {
+        if (f.kind === "strike") el.classList.add("source-fmt-strike");
+        else if (f.kind === "insert") el.classList.add("source-fmt-insert");
+        else if (f.kind === "color") {
+          const c = lightenSourceColor(f.color);
+          if (c) { el.classList.add("source-fmt-color"); el.style.color = c; }
+        } else if (f.kind === "highlight") {
+          const c = lightenSourceColor(f.color);
+          el.classList.add("source-fmt-mark");
+          if (c) el.style.textDecorationColor = c;
+        }
+      }
+      el.appendChild(document.createTextNode(seg));
+      line.appendChild(el);
+    }
+    if (!line.childNodes.length) line.appendChild(document.createTextNode(" ")); // keep blank lines
+    bodyEl.appendChild(line);
   }
-  if (cursor < text.length) bodyEl.appendChild(document.createTextNode(text.slice(cursor)));
+
   const target = primaryMark || bodyEl.querySelector("mark");
   if (target) requestAnimationFrame(() => target.scrollIntoView({ block: "center", behavior: "smooth" }));
   return placed.length;
@@ -4931,6 +5032,7 @@ async function loadTodayQueueProxy(settle) {
 // filling the section only when a real card is surfaced).
 async function loadTodayQueueQuestion(settle) {
   const slot = document.getElementById("today-question-slot");
+  await loadDocsMap(); // the card's "View in your notes" row resolves via _docsById (same as void cards)
   await refreshQuestionCard(); // sets _questionCard / _questionEngineOff (fail-safe)
   const section = buildQuestionSection(); // null when the engine is off
   if (slot) {
@@ -10701,7 +10803,12 @@ async function pullQuestion(btn, noteEl) {
 function questionSource(card) {
   const src = card && card.source;
   const docId = src && typeof src.docId === "string" ? src.docId : "";
-  if (!docId || !_docsById || !_docsById.get(docId)) return null;
+  if (!docId) return null;
+  // Only drop the row when the docs map is LOADED and the doc is definitively
+  // absent. A not-yet-loaded map must not hide the row (fresh-launch race:
+  // Today can render the card before fetch_documents resolves); the source
+  // panel resolves the doc itself on open and fails visibly if truly missing.
+  if (_docsById && !_docsById.get(docId)) return null;
   const rawItems = Array.isArray(src.items) ? src.items : [];
   const items = rawItems
     .map((it) => {
@@ -10770,7 +10877,7 @@ function buildQuestionCard(card) {
   // card carries no source, or its doc isn't in _docsById.
   const qsrc = questionSource(card);
   if (qsrc) {
-    const doc = _docsById.get(qsrc.docId);
+    const doc = _docsById ? _docsById.get(qsrc.docId) : null;
     const label = qsrc.docTitle || (doc ? sourceFromDoc(doc).label : "your notes");
     const allTexts = qsrc.items.flatMap(itemHighlightStrings);
     // The authored hot-list source, via the ONE receipt component's authored-

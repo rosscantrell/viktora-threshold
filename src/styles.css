@@ -5844,6 +5844,40 @@ mark.source-hl-dim {
   color: var(--text-secondary);
 }
 
+/* ── Source formatting (WP-FORMATTING-SEMANTICS) — render the doc the way its
+   author formatted it. Each body line is a .source-line whose leading spaces
+   became a hanging indent (padding-left set inline), so wrapped bullet lines
+   keep their hierarchy. ── */
+.source-line {
+  min-height: 1.6em;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Struck-through in the source: shown struck + receded — the strongest signal
+   in Trisha's docs (done / dropped / edited), previously invisible. */
+.source-fmt-strike {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  opacity: 0.55;
+}
+mark.source-hl .source-fmt-strike,
+mark.source-fmt-strike { opacity: 0.75; } /* keep struck text legible inside a highlight */
+/* Track-change insertions — dotted underline, quiet. */
+.source-fmt-insert {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+/* Captured author color (e.g. Trisha's blue revisions) — the color itself is
+   applied inline (lightened for the dark glass); this class just steadies it. */
+.source-fmt-color { font-weight: 500; }
+/* Captured highlight in the source doc — underline tint (distinct from our own
+   amber search highlights, which stay background marks). */
+.source-fmt-mark {
+  text-decoration: underline;
+  text-decoration-thickness: 3px;
+  text-underline-offset: 2px;
+}
+
 /* Source-type chip on record cards / receipts rows. Clickable → opens the panel. */
 .source-badge {
   display: inline-flex;
