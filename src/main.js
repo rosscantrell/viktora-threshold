@@ -16595,7 +16595,9 @@ function renderOutboxCard(item) {
     card.appendChild(meta);
   }
 
-  if (item.source && item.source.label) {
+  // Source attribution — suppressed when it just repeats the subject (agent-
+  // proposed items stamp source.label = subject; the line would be noise).
+  if (item.source && item.source.label && item.source.label !== item.subject) {
     const src = document.createElement("p");
     src.className = "record-meta";
     src.textContent = "From: " + item.source.label;
