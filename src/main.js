@@ -16545,6 +16545,15 @@ function outboxTypeLabel(t) {
   return t === "new-email" ? "New email" : t === "meeting-invite" ? "Meeting invite" : "Reply";
 }
 
+/** Plain text from a bodyHtml payload (agent drafts are usually plain text or
+ *  trivial HTML; render as TEXT always — never inject markup into the card). */
+function outboxBodyText(html) {
+  if (!html) return "";
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  return (div.textContent || "").trim();
+}
+
 function renderOutboxCard(item) {
   const card = document.createElement("div");
   card.className = "record-card";
@@ -16557,6 +16566,14 @@ function renderOutboxCard(item) {
   chip.dataset.type = item.type || "";
   chip.textContent = outboxTypeLabel(item.type);
   header.appendChild(chip);
+  // WP-OUTBOX-COMPANION-CARD — provenance: agent-drafted items say so (the
+  // ✦ glyph is the companion's mark everywhere else in the app).
+  if (item.proposedBy === "mcp-agent") {
+    const prov = document.createElement("span");
+    prov.className = "record-chip outbox-companion-chip";
+    prov.textContent = "✦ Drafted by your companion";
+    header.appendChild(prov);
+  }
   card.appendChild(header);
 
   const summary = document.createElement("p");
@@ -16585,6 +16602,113 @@ function renderOutboxCard(item) {
     card.appendChild(src);
   }
 
+  // Body preview + expand. The draft IS the payload — hiding it made the card
+  // undecidable without leaving the app.
+  const bodyText = outboxBodyText(item.bodyHtml);
+  if (bodyText) {
+    const PREVIEW_CHARS = 220;
+    const bodyWrap = document.createElement("div");
+    bodyWrap.className = "outbox-body";
+    const bodyP = document.createElement("p");
+    bodyP.className = "outbox-body-text";
+    const needsToggle = bodyText.length > PREVIEW_CHARS;
+    let expanded = false;
+    const preview = needsToggle ? bodyText.slice(0, PREVIEW_CHARS).trimEnd() + "…" : bodyText;
+    bodyP.textContent = preview;
+    bodyWrap.appendChild(bodyP);
+    if (needsToggle) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "btn-inline-link";
+      toggle.textContent = "Show full draft";
+      toggle.addEventListener("click", () => {
+        expanded = !expanded;
+        bodyP.textContent = expanded ? bodyText : preview;
+        toggle.textContent = expanded ? "Hide full draft" : "Show full draft";
+      });
+      bodyWrap.appendChild(toggle);
+    }
+    card.appendChild(bodyWrap);
+  }
+
+  // Held artifacts — download (edit in your own tool) + replace (attach the
+  // edited version back; the server mints a NEW version, never in-place).
+  // `artifacts` metadata comes from the engine; fall back to bare ids so the
+  // card degrades honestly against an older server.
+  const artifacts = Array.isArray(item.artifacts)
+    ? item.artifacts
+    : (item.artifactIds || []).map((id) => ({ id, filename: "attachment" }));
+  if (artifacts.length) {
+    const row = document.createElement("div");
+    row.className = "outbox-artifacts";
+    for (const art of artifacts) {
+      const pill = document.createElement("span");
+      pill.className = "outbox-artifact-pill";
+      const name = document.createElement("span");
+      name.className = "outbox-artifact-name";
+      name.textContent =
+        (art.filename || "attachment") + (art.version > 1 ? ` (v${art.version})` : "");
+      pill.appendChild(name);
+
+      const dl = document.createElement("button");
+      dl.type = "button";
+      dl.className = "btn-inline-link outbox-artifact-act";
+      dl.title = "Download to edit in your own tool";
+      dl.textContent = "Download";
+      dl.addEventListener("click", async () => {
+        try {
+          const saved = await tauri.core.invoke("outbox_artifact_save", {
+            itemId: item.id,
+            artifactId: art.id,
+            defaultName: art.filename || "attachment",
+          });
+          if (saved) showToast({ kind: "success", title: "Saved", body: saved });
+        } catch (err) {
+          showToast({ kind: "error", title: "Download failed", body: String(err) });
+        }
+      });
+      pill.appendChild(dl);
+
+      const rep = document.createElement("button");
+      rep.type = "button";
+      rep.className = "btn-inline-link outbox-artifact-act";
+      rep.title = "Attach your edited version (kept as a new version)";
+      rep.textContent = "Replace";
+      rep.addEventListener("click", async () => {
+        try {
+          const res = await tauri.core.invoke("outbox_artifact_replace", {
+            itemId: item.id,
+            artifactId: art.id,
+          });
+          if (!res) return; // picker cancelled
+          const v = res.artifact && res.artifact.version;
+          name.textContent =
+            ((res.artifact && res.artifact.filename) || art.filename || "attachment") +
+            (v > 1 ? ` (v${v})` : "");
+          if (res.artifact && res.artifact.id) art.id = res.artifact.id;
+          showToast({
+            kind: "success",
+            title: "New version attached",
+            body: "The previous version is kept for the audit trail.",
+          });
+        } catch (err) {
+          showToast({ kind: "error", title: "Replace failed", body: String(err) });
+        }
+      });
+      pill.appendChild(rep);
+      row.appendChild(pill);
+    }
+    card.appendChild(row);
+  }
+
+  if (Array.isArray(item.linkedRecordIds) && item.linkedRecordIds.length) {
+    const link = document.createElement("p");
+    link.className = "record-meta outbox-linked";
+    const n = item.linkedRecordIds.length;
+    link.textContent = `Discharges ${n} linked commitment${n === 1 ? "" : "s"} — resolve on send`;
+    card.appendChild(link);
+  }
+
   const actions = document.createElement("div");
   actions.className = "record-actions";
   const dismissBtn = document.createElement("button");
@@ -16593,6 +16717,34 @@ function renderOutboxCard(item) {
   dismissBtn.textContent = "Dismiss";
   dismissBtn.addEventListener("click", () => outboxDecide(item.id, "dismiss", card));
   actions.appendChild(dismissBtn);
+
+  if (bodyText || who.length) {
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "btn btn-secondary btn-compact";
+    copyBtn.textContent = "Copy draft";
+    copyBtn.addEventListener("click", async () => {
+      const parts = [];
+      if (who.length) parts.push("To: " + who.join(", "));
+      if (item.subject) parts.push("Subject: " + item.subject);
+      if (bodyText) parts.push("", bodyText);
+      try {
+        await tauri.core.invoke("copy_text", { text: parts.join("\n") });
+        showToast({ kind: "success", title: "Draft copied", body: "Paste into Mail or Outlook." });
+      } catch (err) {
+        showToast({ kind: "error", title: "Copy failed", body: String(err) });
+      }
+    });
+    actions.appendChild(copyBtn);
+  }
+
+  const sentBtn = document.createElement("button");
+  sentBtn.type = "button";
+  sentBtn.className = "btn btn-primary btn-compact";
+  sentBtn.textContent = "Mark sent";
+  sentBtn.addEventListener("click", () => outboxDecide(item.id, "sent", card));
+  actions.appendChild(sentBtn);
+
   card.appendChild(actions);
 
   return card;

@@ -2081,6 +2081,133 @@ async fn outbox_decide(
         .map_err(|e| format!("outbox_decide: parse response failed: {e}"))
 }
 
+/// WP-OUTBOX-COMPANION-CARD — download a held outbox artifact. Fetches raw
+/// bytes from GET /api/outbox/:item/artifacts/:artifact, then opens a native
+/// save dialog seeded with `default_name` (save_text_file's oneshot pattern,
+/// binary-safe). Returns the saved path, or None if the user cancelled.
+#[tauri::command]
+async fn outbox_artifact_save(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    item_id: String,
+    artifact_id: String,
+    default_name: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/outbox/{}/artifacts/{}",
+        cfg.base_url.trim_end_matches('/'),
+        item_id,
+        artifact_id
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("artifact download failed: {e}"))?;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let chosen = rx.await.ok().flatten();
+    let Some(fp) = chosen else {
+        return Ok(None);
+    };
+    let path = fp
+        .into_path()
+        .map_err(|e| format!("invalid save path: {e}"))?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("failed to write file: {e}"))?;
+    Ok(Some(path.display().to_string()))
+}
+
+/// WP-OUTBOX-COMPANION-CARD — replace a held artifact with an edited local
+/// file. Opens a native open dialog (any type — the user edited it in their
+/// own tool), reads the chosen file, and PUTs it base64-encoded to
+/// /api/outbox/:item/artifacts/:artifact. The engine mints a NEW artifact
+/// version (supersession, never in-place) — the response carries the new
+/// artifact + updated item. Returns Null if the user cancelled the picker.
+#[tauri::command]
+async fn outbox_artifact_replace(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    item_id: String,
+    artifact_id: String,
+) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+    use tauri_plugin_dialog::DialogExt;
+    let cfg = current_config(&state)?;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_file(move |path| {
+        let _ = tx.send(path);
+    });
+    let chosen = rx.await.ok().flatten();
+    let Some(fp) = chosen else {
+        return Ok(serde_json::Value::Null);
+    };
+    let path = fp
+        .into_path()
+        .map_err(|e| format!("invalid file path: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("failed to read file: {e}"))?;
+    let filename = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "attachment".to_string());
+    let content = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+    let url = format!(
+        "{}/api/outbox/{}/artifacts/{}",
+        cfg.base_url.trim_end_matches('/'),
+        item_id,
+        artifact_id
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::json!({
+            "filename": filename,
+            "encoding": "base64",
+            "content": content,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("outbox_artifact_replace: parse response failed: {e}"))
+}
+
 /// POST /api/outbox/propose with { items }. `items` is the producer input
 /// array (ProducerActionItem[]) built frontend-side from a decision-log record.
 #[tauri::command]
@@ -9348,6 +9475,8 @@ pub fn run() {
             fetch_decision_log,
             fetch_outbox,
             outbox_decide,
+            outbox_artifact_save,
+            outbox_artifact_replace,
             outbox_propose,
             outbox_heads_up,
             workback_gesture,

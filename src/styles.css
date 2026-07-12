@@ -3160,6 +3160,44 @@ code {
   gap: 8px;
 }
 
+/* WP-OUTBOX-COMPANION-CARD — the companion-lane outbox card. */
+.outbox-companion-chip {
+  background: var(--glass-success-soft, rgba(93, 202, 165, 0.14));
+  color: var(--glass-success);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.outbox-body {
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0;
+  padding: 2px 0 2px 10px;
+}
+.outbox-body-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--glass-text);
+  white-space: pre-wrap;
+}
+.outbox-artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.outbox-artifact-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+}
+.outbox-artifact-name { color: var(--glass-text); }
+.outbox-artifact-act { font-size: 11px; }
+.outbox-linked { font-size: 11px; color: var(--glass-text-faint); }
+
 /* Contradictions — compact inline warning chips, not panels. */
 .log-contradictions-list {
   display: flex;
