@@ -2005,6 +2005,56 @@ async fn fetch_decision_log(
         .map_err(|e| format!("fetch_decision_log: parse response failed: {e}"))
 }
 
+/// WP-TODAY-BRIEF "Your plan" — the check-in packet for the Today view.
+/// Proxies GET /api/checkin-brief (Threshold bearer lane; the same packet the
+/// companion's check-ins read — one computation, every surface renders the
+/// same numbers). Carries buckets/counts plus, when the engine serves them,
+/// `todaysPlan` (the plan-anchor reconciliation) and `prework` (the scheduled
+/// pre-brief run's staging). Both are honestly ABSENT on engines/corpora
+/// without them — the frontend hides the strata rather than fabricating.
+/// `lens` optionally pins morning/midday/evening; omitted ⇒ server local hour.
+/// `tz_offset_minutes` lets the server compute the viewer's prework date.
+#[tauri::command]
+async fn fetch_checkin_brief(
+    state: tauri::State<'_, AppState>,
+    lens: Option<String>,
+    tz_offset_minutes: Option<i32>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let mut url = format!("{}/api/checkin-brief", cfg.base_url.trim_end_matches('/'));
+    let mut params: Vec<String> = Vec::new();
+    if let Some(l) = lens.as_deref() {
+        if matches!(l, "morning" | "midday" | "evening") {
+            params.push(format!("lens={l}"));
+        }
+    }
+    if let Some(tz) = tz_offset_minutes {
+        params.push(format!("tz_offset_minutes={tz}"));
+    }
+    if !params.is_empty() {
+        url = format!("{url}?{}", params.join("&"));
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_checkin_brief: parse response failed: {e}"))
+}
+
 // ── WP-Outlook-Writeback — staged-outbox IPCs ──
 //
 // The desktop SURFACES the staged outbox (drafts Threshold composed) for
@@ -9545,6 +9595,7 @@ pub fn run() {
             undo_void,
             // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
             fetch_decision_log_full,
+            fetch_checkin_brief,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
             patch_edge_status,
             // WP-THRESHOLD-RECORD-HITL — server-side record disposition

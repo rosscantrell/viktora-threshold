@@ -2647,6 +2647,82 @@ code {
   display: none;
 }
 
+/* ③ Your plan — reconciliation rows: quiet mark (✓ done, · open) + text +
+   quiet tag; ✦ rides the text for companion-side items. No amber (① owns it). */
+#today-planrec-list, #today-planrec-open-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Fifth instance of the class-display-vs-[hidden] trap — guard on creation. */
+#today-planrec-open-list[hidden] {
+  display: none;
+}
+.today-planrec-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+.today-planrec-mark {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--glass-text-faint);
+}
+.today-planrec-mark.is-done {
+  color: var(--glass-success);
+}
+.today-planrec-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-planrec-row .today-planrec-mark.is-done + .today-planrec-text {
+  color: var(--glass-text-dim);
+}
+.today-planrec-tag {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+.today-planrec-omitted {
+  margin: 0 0 0 22px;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+
+/* ④ prework detail blocks (known / missing / questions / draft). */
+.today-prework-label {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-dim);
+}
+.today-prework-line {
+  margin: 0 0 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--glass-text);
+}
+.today-prework-draft {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--glass-text);
+  background: var(--surface-inset);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  white-space: pre-wrap;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    The Next-two-weeks runway rows (formerly the wide-only Deadline outlook —
    now THE forward surface at every width). Rows are buttons (tap → the

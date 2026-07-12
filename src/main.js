@@ -4476,7 +4476,11 @@ async function enterLogView() {
   //    readiness half when the full records land).
   loadTodayMissVoids().catch((e) => console.warn("[main] Don't miss (voids):", e));
 
-  // ③ Prepared for you — AI-prepared work awaiting the user's review.
+  // ③ Your plan + ④'s staged half — ONE packet fetch feeds both (the same
+  //    packet the companion's check-ins read; the drift rule, 2026-07-12).
+  loadTodayPlan().catch((e) => console.warn("[main] Your plan:", e));
+
+  // ④ Prepared for you — the outbox half (approved, awaiting send).
   loadTodayPlanDrafts().catch((e) => console.warn("[main] Prepared for you:", e));
 
   // ④ One question — the organizing-question queue, one at a time.
@@ -4523,15 +4527,30 @@ function renderTodaySkeleton() {
   const nextWeeksCount = document.getElementById("today-nextweeks-count");
   if (nextWeeksCount) nextWeeksCount.textContent = "";
 
-  // ③ Your plan — drafts clear; the Log line waits for the summary counts.
-  const outboxList = document.getElementById("today-outbox-list");
-  if (outboxList) outboxList.innerHTML = "";
-  const planEmpty = document.getElementById("today-plan-empty");
-  if (planEmpty) planEmpty.hidden = true;
+  // ③ Your plan — hidden until the packet lands with present:true.
+  const planSection = document.getElementById("today-planrec-section");
+  if (planSection) planSection.hidden = true;
+  const planList = document.getElementById("today-planrec-list");
+  if (planList) planList.innerHTML = "";
+  const planOpen = document.getElementById("today-planrec-open");
+  if (planOpen) { planOpen.hidden = true; planOpen.setAttribute("aria-expanded", "false"); }
+  const planOpenList = document.getElementById("today-planrec-open-list");
+  if (planOpenList) { planOpenList.innerHTML = ""; planOpenList.hidden = true; }
+  const planCount = document.getElementById("today-planrec-count");
+  if (planCount) planCount.textContent = "";
+
+  // ④ Prepared for you — both lists clear; the Log line waits for the summary.
+  for (const id of ["today-prework-list", "today-outbox-list"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
+  const preparedEmpty = document.getElementById("today-prepared-empty");
+  if (preparedEmpty) preparedEmpty.hidden = true;
   const planLine = document.getElementById("today-plan-log-line");
   if (planLine) planLine.hidden = true;
-  const planCount = document.getElementById("today-plan-count");
-  if (planCount) planCount.textContent = "";
+  const preparedCount = document.getElementById("today-prepared-count");
+  if (preparedCount) preparedCount.textContent = "";
+  _preparedSettled = { prework: false, outbox: false };
 
   // ④ One question — clear both slots; the filed line hides until data.
   const qSlot = document.getElementById("today-question-slot");
@@ -5329,37 +5348,246 @@ async function loadTodayMissVoids() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// WP-TODAY-BRIEF ③ (drafts half) — staged drafts are what today's plan has
-// produced for the user's send. Compact rows (subject + provenance + "ready to
-// send"); the full companion card (body, artifacts, verbs — PR #150 anatomy
-// unchanged) expands in place. Empty ⇒ the affirmative quiet line.
+// WP-TODAY-BRIEF ③ "Your plan" — the morning plan-of-record reconciliation,
+// read from the check-in packet (fetch_checkin_brief — the SAME computation
+// the companion's check-ins and the notifier read; drift rule 2026-07-12).
+// present:false ⇒ the stratum stays hidden (honest no-morning-plan cue,
+// never fabricated). The packet's prework staging also renders here-adjacent:
+// stratum ④ rows tagged "awaiting your review" (the authorization gradient —
+// the scheduled pass may write ONLY staging + questions).
+// ══════════════════════════════════════════════════════════════════════════
+let _preparedSettled = { prework: false, outbox: false };
+
+async function loadTodayPlan() {
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_checkin_brief", {
+      lens: null,
+      // Minutes EAST of UTC (JS reports west-positive) — the server computes
+      // the viewer-local plan/prework day from this.
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    });
+  } catch (err) {
+    // Old server / unreachable — the stratum stays hidden, staging settles
+    // empty so ④'s empty-state math still resolves.
+    console.warn("[main] fetch_checkin_brief failed:", err);
+    renderPreworkStaging(null);
+    return;
+  }
+  try { renderTodayPlanSection(data && data.todaysPlan); }
+  catch (e) { console.warn("[main] Your plan render:", e); }
+  try { renderPreworkStaging(data && data.prework); }
+  catch (e) { console.warn("[main] prework render:", e); renderPreworkStaging(null); }
+}
+
+// The reconciliation stratum. Buckets render in the mockup-D grammar: moved
+// (✓, quiet), stalled + newly-possible (tags), still-open behind one quiet
+// yours/companion's line. ✦ marks companion-side items everywhere.
+function renderTodayPlanSection(tp) {
+  const section = document.getElementById("today-planrec-section");
+  const list = document.getElementById("today-planrec-list");
+  const countEl = document.getElementById("today-planrec-count");
+  const openLine = document.getElementById("today-planrec-open");
+  const openList = document.getElementById("today-planrec-open-list");
+  if (!section || !list) return;
+  if (!tp || tp.present !== true) {
+    section.hidden = true; // honest: no plan captured today
+    return;
+  }
+
+  const when = (() => {
+    const iso = tp.anchors && tp.anchors[0] && tp.anchors[0].capturedAt;
+    const ms = iso ? Date.parse(iso) : NaN;
+    return Number.isNaN(ms)
+      ? "from today's capture"
+      : "captured " + new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  })();
+  if (countEl) {
+    countEl.textContent =
+      `${when} · ${tp.moved.count} moved · ${tp.stalled.count} stalled` +
+      (tp.newlyActionable.count ? ` · ${tp.newlyActionable.count} newly possible` : "");
+  }
+
+  const planRow = (ref, opts) => {
+    const row = document.createElement("div");
+    row.className = "today-planrec-row";
+    const mark = document.createElement("span");
+    mark.className = "today-planrec-mark" + (opts.done ? " is-done" : "");
+    mark.textContent = opts.done ? "✓" : "·";
+    row.appendChild(mark);
+    const text = document.createElement("span");
+    text.className = "today-planrec-text";
+    text.textContent = (ref.side === "companion" ? "✦ " : "") + (ref.summary || ref.recordId);
+    text.title = text.textContent;
+    row.appendChild(text);
+    if (opts.tag) {
+      const tag = document.createElement("span");
+      tag.className = "today-planrec-tag";
+      tag.textContent = opts.tag;
+      row.appendChild(tag);
+    }
+    return row;
+  };
+  const omittedLine = (bucket, label) => {
+    if (!bucket.omitted) return null;
+    const p = document.createElement("p");
+    p.className = "today-planrec-omitted";
+    p.textContent = `+${bucket.omitted} more ${label}`;
+    return p;
+  };
+
+  list.innerHTML = "";
+  for (const ref of tp.moved.items) list.appendChild(planRow(ref, { done: true }));
+  const mo = omittedLine(tp.moved, "moved"); if (mo) list.appendChild(mo);
+  for (const ref of tp.stalled.items) list.appendChild(planRow(ref, { tag: "stalled" }));
+  const so = omittedLine(tp.stalled, "stalled"); if (so) list.appendChild(so);
+  for (const ref of tp.newlyActionable.items) list.appendChild(planRow(ref, { tag: "newly possible" }));
+  const no = omittedLine(tp.newlyActionable, "newly possible"); if (no) list.appendChild(no);
+
+  // Still-open behind one quiet line (the division of labor).
+  if (openLine && openList) {
+    openList.innerHTML = "";
+    if (tp.stillOpen.count > 0) {
+      const by = tp.byOwner || { user: 0, companion: 0 };
+      const closed = `▸ still open: yours ${by.user} · companion's ${by.companion}`;
+      openLine.textContent = closed;
+      openLine.dataset.closedLabel = closed;
+      openLine.hidden = false;
+      openLine.setAttribute("aria-expanded", "false");
+      openList.hidden = true; // collapsed on every fresh render
+      for (const ref of tp.stillOpen.items) openList.appendChild(planRow(ref, {}));
+      const oo = omittedLine(tp.stillOpen, "open"); if (oo) openList.appendChild(oo);
+      if (!openLine.dataset.wired) {
+        openLine.dataset.wired = "1";
+        openLine.addEventListener("click", () => {
+          const open = openList.hidden;
+          openList.hidden = !open;
+          openLine.setAttribute("aria-expanded", open ? "true" : "false");
+          openLine.textContent = open ? "▾ still open" : (openLine.dataset.closedLabel || "▸ still open");
+        });
+      }
+    } else {
+      openLine.hidden = true;
+      openList.hidden = true;
+    }
+  }
+  section.hidden = false;
+}
+
+// ④'s staged half — prework items from the scheduled pass. Rows expand to the
+// full prework detail: what's known (receipted), what's missing, the targeted
+// questions, and the draft (bracketed blanks where unknowns survived).
+function renderPreworkStaging(prework) {
+  const list = document.getElementById("today-prework-list");
+  if (list) {
+    list.innerHTML = "";
+    const items = prework && Array.isArray(prework.items) ? prework.items : [];
+    for (const item of items) {
+      try { list.appendChild(renderPreworkRow(item)); }
+      catch (e) { console.warn("[main] renderPreworkRow:", e); }
+    }
+  }
+  _preparedSettled.prework = true;
+  reconcilePreparedState();
+}
+
+function renderPreworkRow(item) {
+  const wrap = document.createElement("div");
+  wrap.className = "today-draft-item";
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "today-draft-row";
+  row.setAttribute("aria-expanded", "false");
+  const text = document.createElement("span");
+  text.className = "today-draft-text";
+  text.textContent = (item.stagedBy === "mcp-agent" ? "✦ " : "") + (item.title || "(untitled)");
+  text.title = item.title || "";
+  row.appendChild(text);
+  const tag = document.createElement("span");
+  tag.className = "today-draft-tag";
+  tag.textContent = "awaiting your review";
+  row.appendChild(tag);
+  const detail = document.createElement("div");
+  detail.className = "today-draft-detail";
+  detail.hidden = true;
+  row.addEventListener("click", () => {
+    const open = detail.hidden;
+    if (open && !detail.childNodes.length) {
+      const block = (label, lines) => {
+        if (!lines || !lines.length) return;
+        const h = document.createElement("p");
+        h.className = "today-prework-label";
+        h.textContent = label;
+        detail.appendChild(h);
+        for (const line of lines) {
+          const li = document.createElement("p");
+          li.className = "today-prework-line";
+          li.textContent = line;
+          detail.appendChild(li);
+        }
+      };
+      block("What the field already establishes", item.known);
+      block("Still missing", item.unknown);
+      block("Questions that would close the gaps", item.questions);
+      if (item.draft) {
+        const h = document.createElement("p");
+        h.className = "today-prework-label";
+        h.textContent = item.draftComplete ? "Draft — complete" : "Draft — blanks remain";
+        detail.appendChild(h);
+        const d = document.createElement("p");
+        d.className = "today-prework-draft";
+        d.textContent = item.draft;
+        detail.appendChild(d);
+      }
+    }
+    detail.hidden = !open;
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(detail);
+  return wrap;
+}
+
+// ④'s shared count/empty math — both halves (staged + outbox) settle here.
+function reconcilePreparedState() {
+  const countEl = document.getElementById("today-prepared-count");
+  const emptyEl = document.getElementById("today-prepared-empty");
+  const staged = document.querySelectorAll("#today-prework-list .today-draft-item").length;
+  const drafts = document.querySelectorAll("#today-outbox-list .today-draft-item").length;
+  const n = staged + drafts;
+  if (countEl) {
+    const parts = [];
+    if (staged) parts.push(`${staged} awaiting review`);
+    if (drafts) parts.push(`${drafts} to send`);
+    countEl.textContent = parts.join(" · ");
+  }
+  if (emptyEl) emptyEl.hidden = !(n === 0 && _preparedSettled.prework && _preparedSettled.outbox);
+}
+
+// WP-TODAY-BRIEF ④ (outbox half) — drafts from the AUTHORIZED lanes (attended
+// sessions + post-close wings). Compact rows; the full companion card (body,
+// artifacts, verbs — PR #150 anatomy unchanged) expands in place.
 // ══════════════════════════════════════════════════════════════════════════
 async function loadTodayPlanDrafts() {
   const list = document.getElementById("today-outbox-list");
-  const emptyEl = document.getElementById("today-plan-empty");
-  const countEl = document.getElementById("today-plan-count");
   if (!list) return;
   let data;
   try {
     data = await tauri.core.invoke("fetch_outbox");
   } catch (err) {
-    console.warn("[main] fetch_outbox failed (Your plan):", err);
-    if (emptyEl) emptyEl.hidden = false; // calm — never an error surface
+    console.warn("[main] fetch_outbox failed (Prepared for you):", err);
+    _preparedSettled.outbox = true;
+    reconcilePreparedState(); // calm — never an error surface
     return;
   }
   const items = Array.isArray(data && data.items) ? data.items : [];
   list.innerHTML = "";
-  if (!items.length) {
-    if (emptyEl) emptyEl.hidden = false;
-    if (countEl) countEl.textContent = "";
-    return;
-  }
-  if (emptyEl) emptyEl.hidden = true;
-  if (countEl) countEl.textContent = `${items.length} draft${items.length === 1 ? "" : "s"}`;
   for (const item of items) {
     try { list.appendChild(renderDraftRow(item)); }
-    catch (e) { console.warn("[main] renderDraftRow (Your plan):", e); }
+    catch (e) { console.warn("[main] renderDraftRow (Prepared for you):", e); }
   }
+  _preparedSettled.outbox = true;
+  reconcilePreparedState();
 }
 
 // One compact draft row: ✦ when companion-drafted, the subject, a quiet
@@ -5379,7 +5607,7 @@ function renderDraftRow(item) {
   row.appendChild(text);
   const tag = document.createElement("span");
   tag.className = "today-draft-tag";
-  tag.textContent = "for your review";
+  tag.textContent = "approved, awaiting send";
   row.appendChild(tag);
   const detail = document.createElement("div");
   detail.className = "today-draft-detail";
