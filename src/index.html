@@ -491,6 +491,19 @@
                    wiring from initRoutineSetup() in main.js. -->
               <div class="field">
                 <span class="field-label">Daily routines</span>
+                <!-- The pilot's no-ssh off switch: gates all three unattended
+                     passes. Hidden until a GET verifies engine state (older
+                     engines never show it); disabled when the operator's env
+                     master switch is off — the client can't override that.
+                     NOTE: keep #routine-master free of any CSS display rule
+                     ([hidden] loses to display — the ×4 trap). -->
+                <div id="routine-master" hidden>
+                  <label class="routine-master-row">
+                    <input type="checkbox" id="routine-unattended-toggle" class="routine-toggle" />
+                    <span class="routine-master-label">Unattended preparation</span>
+                  </label>
+                  <p class="field-help routine-master-note" id="routine-master-note"></p>
+                </div>
                 <div class="routine-list" id="routine-list"></div>
                 <span class="field-help">
                   While Threshold is running it reminds you at these times —

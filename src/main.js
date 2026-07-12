@@ -1755,12 +1755,18 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
 //
 // The unattended side is ENGINE state: the runner executes THREE passes —
 // prework (morning staging), delta (pre-midday), closure (pre-evening) — and
-// serves GET/POST /api/prework/config over the bearer lane. The prework row
-// edits its pass directly; delta/closure are DERIVED (each runs 15 min before
-// its attended check-in — a caption, not a third time picker). Every render
-// of engine state comes from a server response (verified), never a local
-// echo; unreachable ⇒ the captions say so. The claude.ai one-message setup
-// remains below as the optional cloud tier.
+// serves GET/POST /api/prework/config over the bearer lane. ONE prominent
+// "Unattended preparation" toggle gates all three passes (the pilot's no-ssh
+// off switch; per-pass control can come later): OFF posts all three
+// enabled:false immediately, ON restores them. The prework row edits its
+// pass's time; delta/closure are DERIVED (each runs 15 min before its
+// attended check-in — a caption, not a third time picker). Every render of
+// engine state comes from a server response (verified), never a local echo:
+// the toggle stays HIDDEN until a GET succeeds (an older engine simply never
+// shows it), and the env master switch (`enabled:false` from the operator)
+// renders it disabled — the client cannot override the kill switch, by
+// design. The claude.ai one-message setup remains below as the optional
+// cloud tier.
 let refreshRoutineEngineState = () => {};
 
 (function initRoutineSetup() {
@@ -1772,12 +1778,14 @@ let refreshRoutineEngineState = () => {};
 
   list.innerHTML = ROUTINES.map((r) => {
     const c = cfg[r.key];
-    // Every row gets a toggle now: attended rows gate the local ping,
-    // the prework row gates its engine pass (synced below).
-    const toggle =
-      '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
-      (c.enabled ? " checked" : "") +
-      ' aria-label="' + (r.attended ? "Remind me for " : "Run ") + r.name + '" />';
+    // Attended rows: the toggle gates the LOCAL check-in ping. Prework has no
+    // local surface — its enablement is the master unattended toggle — so it
+    // holds the column with a spacer.
+    const toggle = r.attended
+      ? '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
+        (c.enabled ? " checked" : "") +
+        ' aria-label="Remind me for ' + r.name + '" />'
+      : '<span class="routine-toggle-slot" aria-hidden="true"></span>';
     // The routine's door — where engaging it lands (WP-CHECKIN pin: per-routine,
     // user-overridable). Prework is unattended, engine-side: no door.
     const door = r.attended
@@ -1826,13 +1834,23 @@ let refreshRoutineEngineState = () => {};
 
   // ── Engine sync ──
   const cap = (key) => document.getElementById("routine-caption-" + key);
+  const masterBlock = document.getElementById("routine-master");
+  const masterToggle = document.getElementById("routine-unattended-toggle");
+  const masterNote = document.getElementById("routine-master-note");
+
+  // The verified master state: null = never confirmed by a GET (toggle stays
+  // hidden AND we never write blind — an edit before first contact must not
+  // silently disable the passes).
+  let unattendedOn = null;
 
   // eff = the server's effective config (the only thing we ever render);
-  // err ⇒ fail-visible captions with the locally-derived times marked
-  // unconfirmed.
+  // err ⇒ fail-visible captions, and the master toggle hides (an older
+  // engine without the endpoint simply never shows an unverifiable switch).
   function renderEngineState(eff, err) {
     const c = readConfig();
     if (!eff) {
+      unattendedOn = null;
+      if (masterBlock) masterBlock.setAttribute("hidden", "");
       cap("prework").textContent =
         "Couldn't read your workspace schedule — " + String(err || "engine unreachable");
       cap("midday").textContent =
@@ -1845,12 +1863,28 @@ let refreshRoutineEngineState = () => {};
     const p = passes.prework || {};
     // The engine is the authority for the prework pass — reflect it into the row.
     const preworkTime = list.querySelector('.routine-time[data-routine="prework"]');
-    const preworkToggle = list.querySelector('.routine-toggle[data-routine="prework"]');
     if (preworkTime && /^\d{2}:\d{2}$/.test(p.time || "")) preworkTime.value = p.time;
-    if (preworkToggle && typeof p.enabled === "boolean") preworkToggle.checked = p.enabled;
+    // Master toggle: ON when any pass runs (so OFF — the panic direction —
+    // always silences everything). The env master switch is the operator's
+    // kill switch: the client renders it, never overrides it.
+    const anyOn = ["prework", "delta", "closure"].some(
+      (k) => (passes[k] || {}).enabled !== false
+    );
+    const operatorOff = eff.enabled === false;
+    unattendedOn = anyOn;
+    if (masterBlock && masterToggle && masterNote) {
+      masterBlock.removeAttribute("hidden");
+      masterToggle.checked = anyOn;
+      masterToggle.disabled = operatorOff;
+      masterNote.textContent = operatorOff
+        ? "Turned off by your operator — schedule edits still save, nothing runs until they re-enable it."
+        : anyOn
+          ? "Your workspace prepares each check-in before you arrive. Off pauses all three passes within a minute."
+          : "Paused — nothing runs until you turn it back on.";
+    }
     cap("prework").textContent =
       "on your workspace" +
-      (eff.enabled === false ? " — saved; runs once the runner is armed" : "") +
+      (operatorOff ? " — saved; runs once the runner is armed" : "") +
       " · changes apply within a minute";
     const line = (pass, fallbackTime) =>
       "prepared 15 min before — " +
@@ -1866,12 +1900,13 @@ let refreshRoutineEngineState = () => {};
       let eff;
       if (write) {
         const c = readConfig();
+        const on = unattendedOn === true;
         eff = await tauri.core.invoke("save_prework_config", {
           payload: {
             passes: {
-              prework: { time: c.prework.time, enabled: c.prework.enabled },
-              delta: { time: derivePrepTime(c.midday.time), enabled: c.midday.enabled },
-              closure: { time: derivePrepTime(c.evening.time), enabled: c.evening.enabled },
+              prework: { time: c.prework.time, enabled: on },
+              delta: { time: derivePrepTime(c.midday.time), enabled: on },
+              closure: { time: derivePrepTime(c.evening.time), enabled: on },
             },
             tz_offset_minutes: tzOffsetMinutes(),
           },
@@ -1886,14 +1921,22 @@ let refreshRoutineEngineState = () => {};
   }
   refreshRoutineEngineState = () => syncEngine(false);
 
+  if (masterToggle) {
+    masterToggle.addEventListener("change", () => {
+      // The panic switch writes immediately — no debounce on an off switch.
+      unattendedOn = masterToggle.checked;
+      syncEngine(true);
+    });
+  }
+
   let engineSyncTimer = null;
   list.addEventListener("change", (ev) => {
     saveRoutines(readConfig());
-    // Engine-relevant edits (the prework row, or the two rows whose prep
-    // passes derive from them) sync debounced; the POST response re-renders
-    // the captions as verified state.
+    // Engine-relevant time edits sync debounced — but only once a GET has
+    // confirmed engine state (unattendedOn non-null); writing blind could
+    // silently flip passes on an engine we've never heard from.
     const key = ev.target && ev.target.dataset ? ev.target.dataset.routine : null;
-    if (key === "prework" || key === "midday" || key === "evening") {
+    if (unattendedOn !== null && (key === "prework" || key === "midday" || key === "evening")) {
       clearTimeout(engineSyncTimer);
       engineSyncTimer = setTimeout(() => syncEngine(true), 700);
     }
