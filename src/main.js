@@ -4328,12 +4328,15 @@ async function enterWatchingView() {
 // This preserves the < 1s cold first-paint gate (§2.6) — the exact async-
 // enrichment pattern from commit 7a1475f (decisions view), applied to Today.
 //
-// Paint order (WP-TODAY-3BANDS):
-//   ① Needs you       — fetch_outbox + fetch_proxy_queue + fetch_question +
-//                        fetch_vigilance_voids, one band, one count
-//   ② Next two weeks  — fetch_decision_log_full → the merged runway list
-//   ③ Where things stand — fetch_sop narrative (person lens; corpus fallback)
-//                        + the decision-log rollup, both off the critical path.
+// Paint order (WP-TODAY-BRIEF, Ross 2026-07-12 — four strata, one per intention):
+//   ① Don't miss    — vigilance voids + readiness no-precursor (curated, capped)
+//   ② Your week     — fetch_decision_log_full → this-week runway rows,
+//                     fortnight collapsed
+//   ③ Your plan     — plan slot (future packet) + fetch_outbox draft rows
+//   ④ One question  — fetch_question + name/merge asks + proxy wants-your-eye,
+//                     ONE at a time
+// The narrative composes only on the header button; the board/conflicts/
+// workload live in the Log (Ross 2026-07-12).
 //
 // NOTHING LLM-backed or network-backed is awaited before the first paint below.
 // ══════════════════════════════════════════════════════════════════════════
@@ -4347,38 +4350,28 @@ async function enterLogView() {
   _reloadRecordView = enterLogView;
 
   // ── FIRST PAINT (synchronous) ──────────────────────────────────────────────
-  // Reset each section to its skeleton/empty resting state, wire the idempotent
-  // toggles, and show the collapsible shell. No await, no network — this returns
-  // to the event loop before any data source resolves, so the paint is immediate.
+  // Reset each stratum to its skeleton/empty resting state and wire the
+  // idempotent toggles. No await, no network — this returns to the event loop
+  // before any data source resolves, so the paint is immediate.
   renderTodaySkeleton();
-  wireSopLensToggle();
   wireTodayFiledToggle();
 
   // ── FIRE-AND-FORGET ENRICHMENT (off the critical path) ──────────────────────
   // Each source patches its own section when it lands; each is independently
   // guarded so a slow/failed/absent one can't blank Today or abort the others.
 
-  // ③ Where-things-stand narrative — ONE narrative (WP-TODAY-3BANDS; the
-  //    stacked person-lens + auto-opened corpus double-synthesis was inventory
-  //    finding #1/#2). Person lens when the viewer has an identity; the corpus
-  //    panel auto-opens ONLY when no person narrative rendered. The header
-  //    button still toggles the corpus panel on demand either way.
+  // The context join resolves the viewer identity (Mine filter) before the
+  // strata that use it fire. The narrative does NOT auto-compose — the brief's
+  // four intentions don't include a standing report (Ross 2026-07-12); the
+  // header State-of-Play button composes it on demand.
   loadTodayContext()
     .then(() => {
-      loadPersonLensSoP()
-        .then((rendered) => { if (!rendered) autoLoadSopPanel(); })
-        .catch((e) => { console.warn("[main] SoP header:", e); autoLoadSopPanel(); });
-      renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log rollup:", e));
-      // ② Next two weeks — the merged runway band (needs docProjects/viewer from
-      // context for its Mine filter, so it fires here after context resolves).
-      loadTodayComingUp().catch((e) => console.warn("[main] Next two weeks:", e));
+      renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log summary:", e));
+      // ② Your week (also contributes ①'s no-precursor rows + the Log line count).
+      loadTodayComingUp().catch((e) => console.warn("[main] Your week:", e));
     })
     .catch((e) => {
       console.warn("[main] Today context:", e);
-      // Context failed (no viewer identity resolvable) — the person lens goes
-      // calm-empty, so the corpus panel is the narrative.
-      loadPersonLensSoP().catch(() => {});
-      autoLoadSopPanel();
       renderTodayDecisionLog().catch(() => {});
       loadTodayComingUp().catch(() => {});
     });
@@ -4390,101 +4383,95 @@ async function enterLogView() {
   // and composes on entry; the header button remains the collapse/expand toggle,
   // and re-entering Today keeps already-composed prose instead of re-paying the
   // synthesis.
-  function autoLoadSopPanel() {
-    const panel = document.getElementById("log-sop-panel");
-    if (!panel) return;
-    const btn = document.getElementById("btn-log-sop");
-    if (panel.hidden) {
-      panel.hidden = false;
-      if (btn) btn.setAttribute("aria-expanded", "true");
-    }
-    // Already composed this session (or mid-compose) — don't re-pay the LLM call.
-    if ((panel.textContent || "").trim().length > 40) return;
-    loadCorpusStateOfPlay(panel);
-  }
+  // ① Don't miss — the vigilance half of the curated list (② adds the
+  //    readiness half when the full records land).
+  loadTodayMissVoids().catch((e) => console.warn("[main] Don't miss (voids):", e));
 
-  // ① Needs-you band — outbox drafts + both proxy piles + the question card +
-  //    the vigilance voids, one band, one count (loadTodayQueue fans out).
-  loadTodayQueue().catch((e) => console.warn("[main] Needs-you band:", e));
+  // ③ Prepared for you — AI-prepared work awaiting the user's review.
+  loadTodayPlanDrafts().catch((e) => console.warn("[main] Prepared for you:", e));
+
+  // ④ One question — the organizing-question queue, one at a time.
+  loadTodayQuestions().catch((e) => console.warn("[main] Questions:", e));
 }
 
 // Reset every Today section to its resting skeleton/empty state (synchronous —
 // no network). Called at the top of every enterLogView so a re-entry starts
 // clean before the async sources repopulate.
 function renderTodaySkeleton() {
-  // ③ SoP — skeleton line; the lens bar hides until prose resolves; the
-  //   section itself re-shows (loadPersonLensSoP hides it when it has nothing).
-  const sopSection = document.getElementById("today-sop-section");
-  if (sopSection) sopSection.hidden = false;
-  const sopPanel = document.getElementById("log-sop-lens-panel");
-  if (sopPanel) sopPanel.innerHTML = '<div class="sop-status today-sop-skeleton">Composing your state of play…</div>';
-  const sopBar = document.getElementById("log-sop-lens");
-  if (sopBar) sopBar.hidden = true;
+  // Header sub — the brief leads with the date; counts append when the
+  // decision-log summary lands.
+  const sub = document.getElementById("log-sub");
+  if (sub) {
+    const now = new Date();
+    sub.textContent = now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  }
 
-  // ① Needs-you band — clear the lists, show the skeleton, hide the empty state.
-  const qList = document.getElementById("today-queue-list");
-  if (qList) qList.innerHTML = "";
-  const qSlot = document.getElementById("today-question-slot");
-  if (qSlot) qSlot.innerHTML = "";
+  // ① Don't miss — clear rows, show the skeleton, hide empty + the Log line.
+  const missList = document.getElementById("today-miss-list");
+  if (missList) missList.innerHTML = "";
+  const missSkel = document.getElementById("today-miss-skeleton");
+  if (missSkel) missSkel.hidden = false;
+  const missEmpty = document.getElementById("today-miss-empty");
+  if (missEmpty) missEmpty.hidden = true;
+  const missMore = document.getElementById("today-miss-more");
+  if (missMore) missMore.hidden = true;
+  const missCount = document.getElementById("today-miss-count");
+  if (missCount) missCount.textContent = "";
+  _missPool = [];
+  _missSettled = { voids: false, week: false };
+
+  // ② Your week — hidden until the full-records source lands.
+  const nextWeeks = document.getElementById("today-nextweeks-section");
+  if (nextWeeks) nextWeeks.hidden = true;
+  for (const id of ["today-outlook-rows", "today-outlook-rest"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
+  const restWrap = document.getElementById("today-outlook-rest");
+  if (restWrap) restWrap.hidden = true;
+  const restToggle = document.getElementById("today-week-rest-toggle");
+  if (restToggle) { restToggle.hidden = true; restToggle.setAttribute("aria-expanded", "false"); }
+  const nextWeeksCount = document.getElementById("today-nextweeks-count");
+  if (nextWeeksCount) nextWeeksCount.textContent = "";
+
+  // ③ Your plan — drafts clear; the Log line waits for the summary counts.
   const outboxList = document.getElementById("today-outbox-list");
   if (outboxList) outboxList.innerHTML = "";
-  const qSkel = document.getElementById("today-queue-skeleton");
-  if (qSkel) qSkel.hidden = false;
-  const qEmpty = document.getElementById("today-queue-empty");
-  if (qEmpty) qEmpty.hidden = true;
-  const qCount = document.getElementById("today-queue-count");
-  if (qCount) qCount.textContent = "";
+  const planEmpty = document.getElementById("today-plan-empty");
+  if (planEmpty) planEmpty.hidden = true;
+  const planLine = document.getElementById("today-plan-log-line");
+  if (planLine) planLine.hidden = true;
+  const planCount = document.getElementById("today-plan-count");
+  if (planCount) planCount.textContent = "";
 
-  // Filed automatically (demoted into the Needs-you band) — hidden until the
-  // proxy source lands with any high-confidence filed items.
+  // ④ One question — clear both slots; the filed line hides until data.
+  const qSlot = document.getElementById("today-question-slot");
+  if (qSlot) qSlot.innerHTML = "";
+  const qRest = document.getElementById("today-question-rest");
+  if (qRest) { qRest.innerHTML = ""; qRest.hidden = true; }
+  const qMore = document.getElementById("today-question-more");
+  if (qMore) { qMore.hidden = true; qMore.setAttribute("aria-expanded", "false"); }
+  const qCount = document.getElementById("today-question-count");
+  if (qCount) qCount.textContent = "";
+  const qEmpty = document.getElementById("today-question-empty");
+  if (qEmpty) qEmpty.hidden = true;
   const filedSection = document.getElementById("today-filed-section");
   if (filedSection) filedSection.hidden = true;
   const filedList = document.getElementById("today-filed-list");
   if (filedList) filedList.innerHTML = "";
 
-  // ② Next two weeks — hidden until the full-records source lands.
-  const nextWeeks = document.getElementById("today-nextweeks-section");
-  if (nextWeeks) nextWeeks.hidden = true;
-  const outlookRows = document.getElementById("today-outlook-rows");
-  if (outlookRows) outlookRows.innerHTML = "";
-  const nextWeeksCount = document.getElementById("today-nextweeks-count");
-  if (nextWeeksCount) nextWeeksCount.textContent = "";
+  // Runway rows start COLLAPSED on every entry (Ross 2026-07-12: an expanded
+  // step plan made "Due this week" read as the plan stratum) — the set still
+  // preserves expansion across a gesture's re-render within the view.
+  _outlookExpanded.clear();
 
-  // Legacy rollup surfaces reset to a calm resting state (repopulated by
-  // renderTodayDecisionLog / loadTodayPriority / loadStalledChaseList).
-  const statesStrip = document.getElementById("log-states-strip");
-  if (statesStrip) statesStrip.hidden = true;
-  const everySection = document.getElementById("log-everything-section");
-  if (everySection) everySection.hidden = true;
-  const attnGroups = document.getElementById("log-attention-groups");
-  if (attnGroups) attnGroups.innerHTML = "";
-  const attnList = document.getElementById("log-attention-list");
-  if (attnList) attnList.innerHTML = "";
+  // Debug containers + status reset.
+  for (const id of ["log-priority-sections", "log-stalled-sections"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
   const statusEl = document.getElementById("log-status");
   if (statusEl) statusEl.hidden = true;
-
-  // WP-R2 amendment item 1/4 — the cut priority + stalled rails. Empty their
-  // containers so nothing dangles when the debug flag is off (they only refill
-  // under VIEW_DEBUG). Keeps the empty-Today state free of orphaned sections.
-  const priorityWrap = document.getElementById("log-priority-sections");
-  if (priorityWrap) priorityWrap.innerHTML = "";
-  const stalledWrap = document.getElementById("log-stalled-sections");
-  if (stalledWrap) stalledWrap.innerHTML = "";
-
-  // WP-R2 amendment item 3 — reset the "Everything else" cross-path signals so a
-  // re-entry re-derives them (queue empty state unknown until it settles again).
-  _todayQueueEmpty = null;
-  _everythingElseHasContent = false;
-  _todayRollupSettled = false;
-
-  // Needs-attention group expanders start collapsed on each fresh Today entry.
-  _attentionExpandedGroups.clear();
-  _attentionOpenCards.clear();
-  _queueCapExpanded = false;
-
-  // WP-TODAY-3BANDS — the one-appearance set re-derives when the watch band
-  // lands; a stale set must not dedup against last entry's rows.
-  if (_todayCtx) _todayCtx.watchRecordIds = null;
 }
 
 // Toggle the demoted "Filed automatically" line inside "Waiting on you"
@@ -4545,66 +4532,229 @@ async function loadTodayContext() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ② + ③ Needs-you queue + Filed-confidently.
-//
-// ONE card family (§2.3). Three async sources fill the queue, each appending its
-// own cards as it arrives (the queue is order-independent):
-//   · proxy "Wants your eye" cards (renderProxyCard) + the high-confidence pile
-//     into "Filed confidently" (renderProxyFiledRow)
-//   · the Question-Engine pull card / affordance (buildQuestionSection)
-//   · vigilance-void chase cards (renderVoidCard)
-// Each source is independently guarded; a failed/absent one leaves the others.
-// The skeleton hides + the empty state shows only after ALL THREE settle empty.
+// WP-TODAY-BRIEF ① — "Don't miss": the curated might-slip list. Two async
+// sources contribute to one shared pool (vigilance voids here; the readiness
+// no-precursor join arrives with ② from the full records), each replacing only
+// its own entries. Rows render compact — one line, expand in place for the
+// full card/actions — ranked people-waiting-on-you first, then due-with-no-
+// movement, then the rest, capped at TODAY_MISS_CAP. Everything past the cap
+// and the overdue tail live behind ONE quiet line into the Log (fail-closed-
+// but-VISIBLE — counted, never hidden).
 // ══════════════════════════════════════════════════════════════════════════
-async function loadTodayQueue() {
-  // Track completion of the sources so the empty/skeleton state resolves
-  // correctly regardless of arrival order.
-  const settled = { outbox: false, proxy: false, question: false, voids: false, nameAsks: false, mergeAsks: false };
-  const filled = { outbox: false, proxy: false, question: false, voids: false, nameAsks: false, mergeAsks: false };
-  const settle = (key, didFill) => {
-    settled[key] = true;
-    if (didFill) filled[key] = true;
-    reconcileTodayQueueEmptyState(settled, filled);
-  };
+const TODAY_MISS_CAP = 4;
+let _missPool = [];
+let _missSettled = { voids: false, week: false };
+let _todayOverdueCount = null; // set by loadTodayComingUp (open, due < today)
 
-  // Fire all six in parallel; each appends when it lands.
-  loadTodayQueueOutbox(settle).catch((e) => { console.warn("[main] outbox drafts:", e); settle("outbox", false); });
-  loadTodayQueueProxy(settle).catch((e) => { console.warn("[main] proxy queue:", e); settle("proxy", false); });
-  loadTodayQueueQuestion(settle).catch((e) => { console.warn("[main] question card:", e); settle("question", false); });
-  loadTodayQueueVoids(settle).catch((e) => { console.warn("[main] vigilance voids:", e); settle("voids", false); });
-  loadTodayQueueNameAsks(settle).catch((e) => { console.warn("[main] name asks:", e); settle("nameAsks", false); });
-  loadTodayQueueMergeAsks(settle).catch((e) => { console.warn("[main] merge asks:", e); settle("mergeAsks", false); });
+function missContribute(source, entries) {
+  _missPool = _missPool
+    .filter((e) => e.source !== source)
+    .concat(entries.map((e) => ({ ...e, source })));
+  renderTodayMiss();
+}
+function missSettle(source) {
+  _missSettled[source] = true;
+  renderTodayMiss();
 }
 
-// ── WP-NAME-ASKS — the corpus asks for the one fact only the user has ──
+function renderTodayMiss() {
+  const list = document.getElementById("today-miss-list");
+  if (!list) return;
+  const skel = document.getElementById("today-miss-skeleton");
+  const emptyEl = document.getElementById("today-miss-empty");
+  const countEl = document.getElementById("today-miss-count");
+  const moreBtn = document.getElementById("today-miss-more");
+
+  const ranked = _missPool
+    .slice()
+    .sort((a, b) => (a.rank - b.rank) || ((a.order || 0) - (b.order || 0)));
+  const show = ranked.slice(0, TODAY_MISS_CAP);
+
+  list.innerHTML = "";
+  for (const e of show) list.appendChild(renderMissRow(e));
+
+  const allSettled = _missSettled.voids && _missSettled.week;
+  if (skel) skel.hidden = show.length > 0 || allSettled;
+  if (emptyEl) emptyEl.hidden = !(allSettled && show.length === 0);
+  if (countEl) countEl.textContent = show.length ? String(show.length) : "";
+
+  // The one quiet line into the Log: pool overflow + the overdue tail.
+  if (moreBtn) {
+    const overflow = ranked.length - show.length;
+    const overdue = typeof _todayOverdueCount === "number" ? _todayOverdueCount : 0;
+    const parts = [];
+    if (overdue > 0) parts.push(`${overdue} older overdue`);
+    if (overflow > 0) parts.push(`${overflow} more watched`);
+    if (allSettled && parts.length) {
+      moreBtn.textContent = parts.join(" · ") + " — all in the Log →";
+      moreBtn.hidden = false;
+      if (!moreBtn.dataset.wired) {
+        moreBtn.dataset.wired = "1";
+        moreBtn.addEventListener("click", () => enterDecisionsView("open", { from: "today" }));
+      }
+    } else {
+      moreBtn.hidden = true;
+    }
+  }
+}
+
+// One compact might-slip row: quiet tag + one-line text; click expands the
+// full existing card (void card / workback reasoning) in place, lazily.
+function renderMissRow(e) {
+  const wrap = document.createElement("div");
+  wrap.className = "today-miss-item";
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "today-miss-row";
+  row.setAttribute("aria-expanded", "false");
+  const text = document.createElement("span");
+  text.className = "today-miss-text";
+  text.textContent = e.line;
+  text.title = e.line;
+  row.appendChild(text);
+  if (e.tag) {
+    const tag = document.createElement("span");
+    tag.className = "today-miss-tag";
+    tag.textContent = e.tag;
+    row.appendChild(tag);
+  }
+  const detail = document.createElement("div");
+  detail.className = "today-miss-detail";
+  detail.hidden = true;
+  row.addEventListener("click", () => {
+    const open = detail.hidden;
+    if (open && !detail.childNodes.length && typeof e.detail === "function") {
+      try { detail.appendChild(e.detail()); } catch (err) { console.warn("[main] miss detail:", err); }
+    }
+    detail.hidden = !open;
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(detail);
+  return wrap;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// WP-TODAY-BRIEF ④ — "One question for you". Every organizing question the
+// engine has (Question-Engine card, name asks, merge asks, proxy wants-your-
+// eye reviews) collects into ONE queue; the first renders, the rest wait
+// behind an honest count. Each source degrades to [] on failure/flag-off.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayQuestions() {
+  const slot = document.getElementById("today-question-slot");
+  const rest = document.getElementById("today-question-rest");
+  const moreBtn = document.getElementById("today-question-more");
+  const countEl = document.getElementById("today-question-count");
+  const emptyEl = document.getElementById("today-question-empty");
+  if (!slot) return;
+
+  const [qe, nameAsks, mergeAsks, proxy] = await Promise.all([
+    collectQuestionEngineCard().catch((e) => { console.warn("[main] QE card:", e); return []; }),
+    collectNameAskCards().catch((e) => { console.warn("[main] name asks:", e); return []; }),
+    collectMergeAskCards().catch((e) => { console.warn("[main] merge asks:", e); return []; }),
+    collectProxyCards().catch((e) => { console.warn("[main] proxy queue:", e); return []; }),
+  ]);
+  const cards = [...qe, ...mergeAsks, ...nameAsks, ...proxy];
+
+  slot.innerHTML = "";
+  if (rest) { rest.innerHTML = ""; rest.hidden = true; }
+  if (moreBtn) { moreBtn.hidden = true; moreBtn.setAttribute("aria-expanded", "false"); }
+
+  if (!cards.length) {
+    if (countEl) countEl.textContent = "";
+    // The calm pull affordance still renders solo when the engine is on.
+    const pull = buildQuestionSection();
+    if (pull) {
+      slot.appendChild(pull);
+      if (emptyEl) emptyEl.hidden = true;
+    } else if (emptyEl) {
+      emptyEl.hidden = false;
+    }
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+  slot.appendChild(cards[0]);
+  const waiting = cards.length - 1;
+  if (countEl) countEl.textContent = waiting > 0 ? `${waiting} more waiting` : "";
+  if (waiting > 0 && rest && moreBtn) {
+    for (const c of cards.slice(1)) rest.appendChild(c);
+    const closed = `▸ show the ${waiting} waiting`;
+    moreBtn.textContent = closed;
+    moreBtn.hidden = false;
+    if (!moreBtn.dataset.wired) {
+      moreBtn.dataset.wired = "1";
+      moreBtn.addEventListener("click", () => {
+        const open = rest.hidden;
+        rest.hidden = !open;
+        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        moreBtn.textContent = open ? "▾ later questions" : (moreBtn.dataset.closedLabel || closed);
+      });
+    }
+    moreBtn.dataset.closedLabel = closed;
+  }
+}
+
+// The Question-Engine card (only a REAL surfaced card counts — the bare pull
+// affordance renders via the empty branch above instead).
+async function collectQuestionEngineCard() {
+  await loadDocsMap(); // the card's "View in your notes" row resolves via _docsById
+  await refreshQuestionCard(); // sets _questionCard / _questionEngineOff (fail-safe)
+  const section = buildQuestionSection(); // null when the engine is off
+  return section && _questionCard ? [section] : [];
+}
+
+// Proxy source — "wants your eye" reviews are questions ("did I file this
+// right?"); the high-confidence pile renders as the quiet filed line (ids in
+// stratum ④, unchanged behavior).
+async function collectProxyCards() {
+  const filedSection = document.getElementById("today-filed-section");
+  const filedList = document.getElementById("today-filed-list");
+  const payload = await tauri.core.invoke("fetch_proxy_queue");
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+  if (filed.length && filedList && filedSection) {
+    for (const item of filed) {
+      try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
+    }
+    filedSection.hidden = false;
+    const headText = document.getElementById("today-filed-heading-text");
+    if (headText) headText.textContent = `${filed.length} filed automatically — review`;
+  }
+  const cards = [];
+  for (const item of wantsEye) {
+    try { cards.push(renderProxyCard(item)); } catch (e) { console.warn("[main] renderProxyCard:", e); }
+  }
+  return cards;
+}
+
+// ── WP-NAME-ASKS — the corpus asks for the one fact only the user has ──// ── WP-NAME-ASKS — the corpus asks for the one fact only the user has ──
 // Deterministic engine producer (/api/project-canon/name-asks, flag-gated):
 // unnamed code-shaped workstreams carrying open items become a queue card with
 // an inline answer. Saving writes through the existing project-canon rename
 // (read-time application ⇒ every surface picks the name up on next render).
-async function loadTodayQueueNameAsks(settle) {
+async function collectNameAskCards() {
   let data = null;
   try {
     data = await tauri.core.invoke("fetch_name_asks");
-  } catch (err) {
-    // Older servers have no route — degrade silently (flag-off posture).
-    settle("nameAsks", false);
-    return;
+  } catch (_err) {
+    return []; // older servers have no route — degrade silently (flag-off posture)
   }
   const asks = data && data.enabled !== false && Array.isArray(data.asks) ? data.asks : [];
-  const list = document.getElementById("today-queue-list");
-  if (!list || !asks.length) {
-    settle("nameAsks", false);
-    return;
-  }
-  // Cap: housekeeping never floods the queue. Snoozed/dismissed keys skipped.
-  let appended = 0;
+  // Cap: housekeeping never floods the question queue. Suppressed keys skipped.
+  const cards = [];
   for (const ask of asks) {
     if (!ask || !ask.key || _nameAskSuppressed(ask.key)) continue;
-    if (appended >= 3) break;
-    list.appendChild(renderNameAskCard(ask));
-    appended++;
+    if (cards.length >= 3) break;
+    cards.push(renderNameAskCard(ask));
   }
-  settle("nameAsks", appended > 0);
+  return cards;
 }
 
 // WP-QCARD-REVIEW — the shared reviewable-items affordance for every engine→user
@@ -4848,31 +4998,22 @@ async function submitNameAsk(ask, newLabel, card, saveBtn) {
 // both carry open items become a combine-ask card. Combining writes through
 // the EXISTING project-canon merge (read-time application ⇒ every surface
 // regroups on next render, and the ask self-clears server-side).
-async function loadTodayQueueMergeAsks(settle) {
+async function collectMergeAskCards() {
   let data = null;
   try {
     data = await tauri.core.invoke("fetch_merge_asks");
-  } catch (err) {
-    // Older servers have no route — degrade silently (flag-off posture).
-    settle("mergeAsks", false);
-    return;
+  } catch (_err) {
+    return []; // older servers have no route — degrade silently (flag-off posture)
   }
   const asks = data && data.enabled !== false && Array.isArray(data.asks) ? data.asks : [];
-  const list = document.getElementById("today-queue-list");
-  if (!list || !asks.length) {
-    settle("mergeAsks", false);
-    return;
-  }
-  // Cap: housekeeping never floods the queue (shared budget with name asks).
-  let appended = 0;
+  // Cap: housekeeping never floods the question queue (shared budget with name asks).
+  const cards = [];
   for (const ask of asks) {
     if (!ask || !ask.keyA || !ask.keyB || _mergeAskSuppressed(_mergeAskPairKey(ask))) continue;
-    if (appended >= 2) break;
-    list.appendChild(renderMergeAskCard(ask));
-    appended++;
+    if (cards.length >= 2) break;
+    cards.push(renderMergeAskCard(ask));
   }
-  if (appended > 0) capTodayQueue();
-  settle("mergeAsks", appended > 0);
+  return cards;
 }
 
 function renderMergeAskCard(ask) {
@@ -5047,156 +5188,13 @@ async function submitMergeAsk(ask, targetLabel, card, saveBtn) {
   }
 }
 
-// WP-QUEUE-CAP — a long queue must not bury the rest of Today: the rail's
-// height sets where the needs-attention board starts (grid row sizing), so 11
-// stacked cards push the whole worklist below the fold (Ross's dead-real-estate
-// report). Show the first few, collapse the rest behind the same
-// "Show all N →" grammar the board groups use. Re-run after every source
-// settles (cards arrive async); idempotent; expansion sticks per view entry.
-const QUEUE_CAP_VISIBLE = 4;
-let _queueCapExpanded = false;
-function capTodayQueue() {
-  const list = document.getElementById("today-queue-list");
-  if (!list) return;
-  const cards = [...list.children].filter((el) => !el.classList.contains("today-queue-showall"));
-  let btn = list.querySelector(".today-queue-showall");
-  if (cards.length <= QUEUE_CAP_VISIBLE) {
-    for (const c of cards) c.hidden = false;
-    if (btn) btn.remove();
-    return;
-  }
-  for (let i = 0; i < cards.length; i++) {
-    cards[i].hidden = !_queueCapExpanded && i >= QUEUE_CAP_VISIBLE;
-  }
-  if (!btn) {
-    btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn btn-link today-queue-showall";
-    btn.addEventListener("click", () => {
-      _queueCapExpanded = !_queueCapExpanded;
-      capTodayQueue();
-    });
-  }
-  btn.textContent = _queueCapExpanded ? "Show less" : `Show all ${cards.length} →`;
-  btn.setAttribute("aria-expanded", _queueCapExpanded ? "true" : "false");
-  list.appendChild(btn); // keep it last as cards stream in
-}
-
-// Show the empty state (and hide the skeleton) only once all three sources have
-// settled; keep the skeleton up until the first one lands. When any source
-// filled the queue, no empty state — just hide the skeleton.
-function reconcileTodayQueueEmptyState(settled, filled) {
-  const skel = document.getElementById("today-queue-skeleton");
-  const empty = document.getElementById("today-queue-empty");
-  // Name asks are housekeeping, not urgency: they fill the queue VISUALLY
-  // (skeleton/empty-line accounting) but must not suppress the needs-attention
-  // board below (the WP-R2 gate reads _todayQueueEmpty) — a standing "name
-  // this workstream" card should never hide the day's worklist.
-  const urgentFilled = filled.outbox || filled.proxy || filled.question || filled.voids;
-  const anyFilled = urgentFilled || filled.nameAsks || filled.mergeAsks;
-  const allSettled =
-    settled.outbox && settled.proxy && settled.question && settled.voids &&
-    settled.nameAsks && settled.mergeAsks;
-  // Hide the skeleton as soon as anything filled OR everything has settled.
-  if (skel) skel.hidden = anyFilled || allSettled;
-  // WP-TODAY-READ-ACT dedup: when the question PULL AFFORDANCE is up (it renders
-  // without counting as a filled card), its own "nothing right now" answer
-  // already says the queue is clear — a second nothing-line under it is noise.
-  capTodayQueue();
-  const askSlot = document.getElementById("today-question-slot");
-  const askVisible = !!(askSlot && askSlot.firstElementChild);
-  if (empty) empty.hidden = !(allSettled && !anyFilled) || askVisible;
-  // WP-R2 amendment item 3 — publish the queue's empty signal so the "Everything
-  // else" fallback (owned by the decision-log rollup) can show only when empty.
-  // Known only once all three sources settle; anyFilled ⇒ not empty.
-  if (allSettled) {
-    _todayQueueEmpty = !urgentFilled;
-    reconcileEverythingElseVisibility();
-  } else if (urgentFilled) {
-    // A card landed before everything settled — the queue is definitely non-empty.
-    _todayQueueEmpty = false;
-    reconcileEverythingElseVisibility();
-  }
-  // Live count of the band's cards (outbox drafts + proxy "wants your eye" +
-  // voids + a question card) — ONE count for the one Needs-you band.
-  const list = document.getElementById("today-queue-list");
-  const listCards = list
-    ? [...list.children].filter((el) => !el.classList.contains("today-queue-showall")).length
-    : 0;
-  const qSlotCards = document.querySelectorAll("#today-question-slot .rule-card").length;
-  const outboxCards = document.querySelectorAll("#today-outbox-list .record-card").length;
-  const n = listCards + qSlotCards + outboxCards;
-  const countEl = document.getElementById("today-queue-count");
-  if (countEl) countEl.textContent = n > 0 ? String(n) : "";
-}
-
-// Proxy source — the fleet inbox. "Wants your eye" cards append to the queue;
-// the high-confidence pile lands in "Filed confidently" (§ the second pile).
-async function loadTodayQueueProxy(settle) {
-  const list = document.getElementById("today-queue-list");
-  const filedSection = document.getElementById("today-filed-section");
-  const filedList = document.getElementById("today-filed-list");
-  let payload;
-  try {
-    payload = await tauri.core.invoke("fetch_proxy_queue");
-  } catch (err) {
-    console.warn("[main] fetch_proxy_queue failed (Today queue):", err);
-    settle("proxy", false);
-    return;
-  }
-  const items = payload && Array.isArray(payload.items) ? payload.items : [];
-  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
-  const filed = live.filter(
-    (it) =>
-      it.status === "confirmed" ||
-      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
-  );
-  const wantsEye = live.filter((it) => !filed.includes(it));
-
-  // "Wants your eye" — full cards, into the shared queue (same card family).
-  if (list) {
-    for (const item of wantsEye) {
-      try { list.appendChild(renderProxyCard(item)); } catch (e) { console.warn("[main] renderProxyCard:", e); }
-    }
-  }
-  // "Filed automatically" — demoted collapsed line inside "Waiting on you"; undo
-  // per row. The whole group stays hidden when there are none (so no floating
-  // header over nothing — the bug this pass removes).
-  if (filed.length && filedList && filedSection) {
-    for (const item of filed) {
-      try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
-    }
-    filedSection.hidden = false;
-    const headText = document.getElementById("today-filed-heading-text");
-    if (headText) headText.textContent = `${filed.length} filed automatically — review`;
-  }
-  settle("proxy", wantsEye.length > 0);
-}
-
-// Question source — the "Anything you need from me?" pull. Reuses the exact
-// project-lens question surface (buildQuestionSection → buildQuestionCard). The
-// surface renders into its own slot (so re-renders of the other sources don't
-// clear it). Off / empty ⇒ the calm pull affordance (which itself counts as
-// filling the section only when a real card is surfaced).
-async function loadTodayQueueQuestion(settle) {
-  const slot = document.getElementById("today-question-slot");
-  await loadDocsMap(); // the card's "View in your notes" row resolves via _docsById (same as void cards)
-  await refreshQuestionCard(); // sets _questionCard / _questionEngineOff (fail-safe)
-  const section = buildQuestionSection(); // null when the engine is off
-  if (slot) {
-    slot.innerHTML = "";
-    if (section) slot.appendChild(section);
-  }
-  // A surfaced card (not the bare pull affordance) counts as filling the queue.
-  settle("question", !!_questionCard);
-}
-
-// Vigilance-void source — the retired Watching surface's value, re-landed as
-// queue cards. Reuses renderVoidCard (dismiss/snooze via vvVoidAction). Loads
-// grouped so the silent-Nd join + low-impact suppression match the old ledger;
-// only the primary (non-low-impact) voids surface on Today. Degrades silently.
-async function loadTodayQueueVoids(settle) {
-  const list = document.getElementById("today-queue-list");
+// ══════════════════════════════════════════════════════════════════════════
+// WP-TODAY-BRIEF ① (vigilance half) — primary voids feed the might-slip pool.
+// Grouped so the silent-Nd join + low-impact suppression match the old ledger;
+// only primary (non-low-impact) voids qualify. People waiting on YOU rank
+// first (ingress); longest-silent first within a rank. Degrades silently.
+// ══════════════════════════════════════════════════════════════════════════
+async function loadTodayMissVoids() {
   await loadDocsMap(); // void cards' source badges read _docsById (best-effort)
   let data, grouped;
   try {
@@ -5205,8 +5203,8 @@ async function loadTodayQueueVoids(settle) {
     data = result.voidData;
     grouped = result.grouped; // null when flag off / old backend
   } catch (err) {
-    console.warn("[main] fetch_vigilance_voids failed (Today queue):", err);
-    settle("voids", false);
+    console.warn("[main] fetch_vigilance_voids failed (Don't miss):", err);
+    missSettle("voids");
     return;
   }
   const voids = Array.isArray(data && data.voids) ? data.voids : [];
@@ -5223,75 +5221,110 @@ async function loadTodayQueueVoids(settle) {
     }
   }
   const primaryVoids = voids.filter((v) => !lowImpactVoidIds.has(v.voidId));
-  if (list) {
-    for (const v of primaryVoids) {
-      try {
-        list.appendChild(renderVoidCard(v, { ageDays: ageByVoid.get(v.voidId) }));
-      } catch (e) { console.warn("[main] renderVoidCard (Today queue):", e); }
-    }
-  }
-  settle("voids", primaryVoids.length > 0);
+  const entries = primaryVoids.map((v) => {
+    const ctx = v.context || {};
+    const headline = (ctx.blocked && ctx.blocked.summary) || v.render || "Waiting on something to come back";
+    const age = ageByVoid.get(v.voidId);
+    const ingress = String(v.trigger || "").toLowerCase().includes("ingress");
+    return {
+      key: "void:" + v.voidId,
+      rank: ingress ? 0 : 2,
+      order: -(typeof age === "number" ? age : 0),
+      line: headline,
+      tag: (VOID_TRIGGER_LABEL[v.trigger] || "watching") + (typeof age === "number" ? ` · ${Math.round(age)}d` : ""),
+      detail: () => renderVoidCard(v, { ageDays: age }),
+    };
+  });
+  missContribute("voids", entries);
+  missSettle("voids");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Outbox source of the Needs-you band (WP-TODAY-3BANDS — the former standalone
-// Awaiting-send tray). Staged drafts LEAD the band: Send is the one action only
-// the user can take. Each draft renders via the existing renderOutboxCard
-// (WP-OUTBOX-COMPANION-CARD anatomy unchanged). Empty/failed ⇒ the list stays
-// empty and the source settles unfilled (never an error surface on Today).
+// WP-TODAY-BRIEF ③ (drafts half) — staged drafts are what today's plan has
+// produced for the user's send. Compact rows (subject + provenance + "ready to
+// send"); the full companion card (body, artifacts, verbs — PR #150 anatomy
+// unchanged) expands in place. Empty ⇒ the affirmative quiet line.
 // ══════════════════════════════════════════════════════════════════════════
-async function loadTodayQueueOutbox(settle) {
+async function loadTodayPlanDrafts() {
   const list = document.getElementById("today-outbox-list");
+  const emptyEl = document.getElementById("today-plan-empty");
+  const countEl = document.getElementById("today-plan-count");
+  if (!list) return;
   let data;
   try {
     data = await tauri.core.invoke("fetch_outbox");
   } catch (err) {
-    console.warn("[main] fetch_outbox failed (Needs-you band):", err);
-    settle("outbox", false);
+    console.warn("[main] fetch_outbox failed (Your plan):", err);
+    if (emptyEl) emptyEl.hidden = false; // calm — never an error surface
     return;
   }
   const items = Array.isArray(data && data.items) ? data.items : [];
-  if (!items.length || !list) {
-    settle("outbox", false);
+  list.innerHTML = "";
+  if (!items.length) {
+    if (emptyEl) emptyEl.hidden = false;
+    if (countEl) countEl.textContent = "";
     return;
   }
-  list.innerHTML = "";
+  if (emptyEl) emptyEl.hidden = true;
+  if (countEl) countEl.textContent = `${items.length} draft${items.length === 1 ? "" : "s"}`;
   for (const item of items) {
-    try { list.appendChild(renderOutboxCard(item)); }
-    catch (e) { console.warn("[main] renderOutboxCard (Needs-you band):", e); }
+    try { list.appendChild(renderDraftRow(item)); }
+    catch (e) { console.warn("[main] renderDraftRow (Your plan):", e); }
   }
-  settle("outbox", items.length > 0);
+}
+
+// One compact draft row: ✦ when companion-drafted, the subject, a quiet
+// "ready to send"; click expands the full outbox card in place (lazily).
+function renderDraftRow(item) {
+  const wrap = document.createElement("div");
+  wrap.className = "today-draft-item";
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "today-draft-row";
+  row.setAttribute("aria-expanded", "false");
+  const text = document.createElement("span");
+  text.className = "today-draft-text";
+  text.textContent =
+    (item.proposedBy === "mcp-agent" ? "✦ " : "") + (item.subject || "(no subject)");
+  text.title = item.subject || "";
+  row.appendChild(text);
+  const tag = document.createElement("span");
+  tag.className = "today-draft-tag";
+  tag.textContent = "for your review";
+  row.appendChild(tag);
+  const detail = document.createElement("div");
+  detail.className = "today-draft-detail";
+  detail.hidden = true;
+  row.addEventListener("click", () => {
+    const open = detail.hidden;
+    if (open && !detail.childNodes.length) {
+      try { detail.appendChild(renderOutboxCard(item)); }
+      catch (e) { console.warn("[main] renderOutboxCard (draft row):", e); }
+    }
+    detail.hidden = !open;
+    row.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(detail);
+  return wrap;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Decision-log rollup — the "Everything else" collapsible + states strip +
-// priority + stalled surfaces. This is the former blocking body of enterLogView,
-// now loaded fire-and-forget so nothing here blocks the first paint. Renders the
-// needs-attention rows, conflicts, workload, and the priority/stalled rails.
+// Decision-log SUMMARY — the brief needs only the counts: the header subtitle
+// ("N open · M tracked"), ③'s honest open-counts line into the Log, and the
+// record-edit capability flag. The board / conflicts / workload the old rollup
+// rendered here LEFT Today (Ross 2026-07-12): the Log is the archive
+// (Relationships lists conflicts; Workload rides the Log header).
 // ══════════════════════════════════════════════════════════════════════════
 async function renderTodayDecisionLog() {
-  const statusEl = document.getElementById("log-status");
-  const attentionList = document.getElementById("log-attention-list");
-  const attentionEmpty = document.getElementById("log-attention-empty");
-  const contradictionsSection = document.getElementById("log-contradictions-section");
-  const contradictionsList = document.getElementById("log-contradictions-list");
-  const ownersSection = document.getElementById("log-owners-section");
-  const ownersStrip = document.getElementById("log-owners-strip");
-  const statesStrip = document.getElementById("log-states-strip");
-
   let data;
   try {
     data = await tauri.core.invoke("fetch_decision_log");
   } catch (err) {
     console.warn("[main] fetch_decision_log failed:", err);
-    if (attentionList) attentionList.innerHTML = "";
     _recordEditsEnabled = false;
-    if (attentionEmpty) attentionEmpty.hidden = true;
-    if (contradictionsSection) contradictionsSection.hidden = true;
-    if (ownersSection) ownersSection.hidden = true;
-    if (statesStrip) statesStrip.hidden = true;
-    // Degrade quietly — the queue/SoP/tray sections carry Today on their own; a
-    // decision-log outage must not blank Today or surface a hard error banner.
+    // Degrade quietly — the strata carry Today on their own; a decision-log
+    // outage must not blank Today or surface a hard error banner.
     return;
   }
 
@@ -5300,127 +5333,35 @@ async function renderTodayDecisionLog() {
 
   const summary = data && data.summary ? data.summary : {};
   const states = summary.states || {};
-  const needsAttention = withoutDismissed(
-    Array.isArray(data && data.needsAttention) ? data.needsAttention : [],
-  );
-  const relationships = (data && data.relationships) || {};
-  const contradictions = Array.isArray(relationships.contradictions)
-    ? relationships.contradictions
-    : [];
-  const ownerLoad = Array.isArray(summary.ownerLoad) ? summary.ownerLoad : [];
+  const total = typeof summary.total === "number" ? summary.total : 0;
+  const open = typeof states.open === "number" ? states.open : 0;
 
-  // The header subtitle + this section's count render in renderTodayAttention
-  // (they must reflect the deduped, filtered list — WP-TODAY-3BANDS); stash the
-  // tracked total it needs.
-
-  // (The junk-gate review affordance renders from loadTodayComingUp — the
-  // full-records payload lives there; this summary payload carries none.)
-
-  // States strip (open / resolved / superseded).
-  if (statesStrip) {
-    statesStrip.innerHTML = "";
-    const order = [
-      { key: "open", label: "Open" },
-      { key: "resolved", label: "Resolved" },
-      { key: "superseded", label: "Replaced" },
-    ];
-    let any = false;
-    for (const s of order) {
-      const n = typeof states[s.key] === "number" ? states[s.key] : 0;
-      // Clickable — opens the Decisions browser filtered to this status.
-      const pill = document.createElement("button");
-      pill.type = "button";
-      pill.className = "log-state-pill";
-      pill.dataset.state = s.key;
-      pill.textContent = `${n} ${s.label.toLowerCase()}`;
-      pill.addEventListener("click", () => enterDecisionsView(s.key, { from: "today" }));
-      statesStrip.appendChild(pill);
-      if (n > 0) any = true;
-    }
-    statesStrip.hidden = !any;
+  // Header subtitle: date + honest scale ("Sunday, Jul 12 · 282 open · 284 tracked").
+  const sub = document.getElementById("log-sub");
+  if (sub && total > 0) {
+    const now = new Date();
+    const date = now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+    sub.textContent = `${date} · ${open} open · ${total} tracked`;
   }
 
-  // WP-N1 #6/#8 — the viewer identity + attribution join now resolve in
-  // loadTodayContext (off the critical path, before this rollup fires), so
-  // _todayCtx already carries submitterByDoc / viewerSlug. Fold the freshly-
-  // fetched needs-attention list onto it and re-render the rows under the
-  // current filter. Guard against a context that hasn't populated (defensive).
-  if (!_todayCtx) {
-    _todayCtx = { submitterByDoc: new Map(), docProjects: new Map(), viewerEmail: null, viewerSlug: null };
-  }
-  _todayCtx.needsAttention = needsAttention;
-  _todayCtx.summaryTotal = typeof summary.total === "number" ? summary.total : 0;
-  renderTodayAttention();
-
-  // Contradictions.
-  if (contradictionsSection && contradictionsList) {
-    contradictionsList.innerHTML = "";
-    if (contradictions.length > 0) {
-      for (const edge of contradictions) {
-        contradictionsList.appendChild(renderContradictionRow(edge));
+  // ③'s quiet line into the Log — every plan, decision & commitment lives there.
+  const planLine = document.getElementById("today-plan-log-line");
+  if (planLine) {
+    if (open > 0) {
+      planLine.textContent = `${open} open in all — every plan & decision is in the Log →`;
+      planLine.hidden = false;
+      if (!planLine.dataset.wired) {
+        planLine.dataset.wired = "1";
+        planLine.addEventListener("click", () => enterDecisionsView("open", { from: "today" }));
       }
-      contradictionsSection.hidden = false;
     } else {
-      contradictionsSection.hidden = true;
+      planLine.hidden = true;
     }
   }
 
-  // Owner load.
-  if (ownersSection && ownersStrip) {
-    ownersStrip.innerHTML = "";
-    if (ownerLoad.length > 0) {
-      for (const o of ownerLoad.slice(0, 8)) {
-        ownersStrip.appendChild(renderOwnerChip(o));
-      }
-      ownersSection.hidden = false;
-    } else {
-      ownersSection.hidden = true;
-    }
-  }
-
-  // "Needs attention" — the grouped rollup (was "Everything else"). WP-R2 amendment
-  // item 3: it renders ONLY when the Waiting-on-you queue is empty (nothing
-  // actionable), and item 4: never as a header alone — only when the rollup
-  // produced content. Record both signals, then reconcile against the queue's empty
-  // state (which may have already settled on its own async path). The status pills
-  // (item 2) are handled above, independent of this — they stay visible regardless.
-  //
-  // COUNT RECONCILIATION (Today composition pass): the header subtitle renders
-  // `${needsAttention.length} need attention` and this section's count badge is the
-  // SAME working list — so the badge is needsAttention.length ALONE (was
-  // needsAttention.length + contradictions.length, which showed 26 against the
-  // header's 25 whenever a conflict existed). Contradictions still render as an
-  // inner sub-block; they just no longer inflate the header count. The section may
-  // still show for a conflict-only state, so its VISIBILITY signal stays inclusive.
-  const everyToggle = document.getElementById("log-everything-toggle");
-  const everyBody = document.getElementById("log-everything-body");
-  // (The count badge renders in renderTodayAttention — deduped list only.)
-  _everythingElseHasContent = needsAttention.length + contradictions.length > 0;
-  _todayRollupSettled = true;
-  reconcileEverythingElseVisibility();
-  if (everyToggle && everyBody && !everyToggle.dataset.wired) {
-    everyToggle.dataset.wired = "1";
-    const caret = everyToggle.querySelector(".log-collapse-caret");
-    everyToggle.addEventListener("click", () => {
-      const open = everyBody.hidden; // about to open
-      everyBody.hidden = !open;
-      if (caret) caret.textContent = open ? "▾" : "▸";
-      everyToggle.setAttribute("aria-expanded", open ? "true" : "false");
-      const sec = document.getElementById("log-everything-section");
-      if (sec) sec.classList.toggle("log-collapsed", !open);
-    });
-  }
-
-  // WP-R2 amendment item 1 — the legacy priority rail (Focus + Watch) and the
-  // Stalled/Chasing chase-list are CUT as Today sections: their value is re-homed
-  // (focus → the SoP's "calls only you can make"; watch → vigilance-void cards in
-  // the Needs-you queue), so on the default Today they're pure duplication. Gated
-  // behind R0's VIEW_DEBUG (never deleted) — they return with #debug-views set.
-  // Their containers stay empty otherwise (cleared in renderTodaySkeleton).
+  // The cut priority + stalled rails return under the debug flag only.
   if (VIEW_DEBUG) {
-    // WP-Priority-Operator — Focus + Watch sections (the priority rail).
     loadTodayPriority();
-    // WP-Job-Vigilance-Wave2 — Stalled / Chasing chase-list.
     loadStalledChaseList();
   }
 }
@@ -5431,47 +5372,6 @@ async function renderTodayDecisionLog() {
 let _todayFilter = "everyone"; // "everyone" | "mine"
 let _todayCtx = null;
 
-// WP-R2 amendment item 3 — cross-path signal for the "Everything else"
-// collapsible. It's the fallback surface: shown ONLY when the Needs-you queue is
-// empty. The queue settles in loadTodayQueue (a different async path than the
-// decision-log rollup that owns the section), so both paths write here and call
-// reconcileEverythingElseVisibility, which reads the latest of the two.
-//   null  = queue hasn't settled yet (unknown)
-//   true  = queue settled empty  → "Everything else" may show
-//   false = queue has cards       → hide "Everything else"
-let _todayQueueEmpty = null;
-// Whether the decision-log rollup produced any "Everything else" content this
-// render (needs-attention rows or contradictions). Still tracked for the count
-// badge, but no-content no longer hides the section (see below).
-let _everythingElseHasContent = false;
-// Whether the rollup has SETTLED this render — the quiet "all clear" line may
-// only paint from a real answer, never from a not-yet-loaded state (a header
-// over an unloaded body would read as broken, WP-R2 item 4's real concern).
-let _todayRollupSettled = false;
-
-// Show/hide the "Needs attention" collapsible. NARROW (<1200px): the original
-// WP-R2 focus gate — the board shows only once the queue settles EMPTY (clear
-// what's waiting on you first; one column can't hold both). WIDE (>=1200px):
-// the gate is retired (Ross's 2026-07-07 real-estate ruling) — the read|act
-// layout has room for the queue AND the worklist, and hiding the board left
-// the whole lower page dead whenever the queue had cards. Rollup must have
-// settled either way (a header must never paint over an unloaded body).
-function reconcileEverythingElseVisibility() {
-  const everySection = document.getElementById("log-everything-section");
-  if (!everySection) return;
-  const queueEmpty = _todayQueueEmpty === true;
-  const wide = window.innerWidth >= 1200;
-  everySection.hidden = !(_todayRollupSettled && (queueEmpty || wide));
-}
-
-// Crossing the 1200px breakpoint changes the board gate — re-reconcile on
-// resize (debounced; cheap no-op when nothing changes).
-let _boardGateResizeTimer = null;
-window.addEventListener("resize", () => {
-  if (_boardGateResizeTimer) clearTimeout(_boardGateResizeTimer);
-  _boardGateResizeTimer = setTimeout(reconcileEverythingElseVisibility, 150);
-});
-
 /** Set the active filter + reflect it on the segmented control's buttons. */
 function setTodayFilter(filter) {
   _todayFilter = filter === "mine" ? "mine" : "everyone";
@@ -5480,430 +5380,6 @@ function setTodayFilter(filter) {
   }
 }
 
-// Needs-attention ordering — deterministic, derived from fields already on each
-// entry (no new fetch). Tier: (0) blocked, (1) overdue, (2) silent, (3) rest.
-// A row is "blocked" when its state flags it or its reason/kind names a blocked
-// dependency; "overdue" when its due date is strictly before today.
-const ATTENTION_TODAY_MS = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
-function attentionIsBlocked(entry) {
-  const st = (entry && entry.state) || (entry && entry.record && entry.record.state) || "";
-  if (String(st).toLowerCase() === "blocked" || (entry && entry.blocked === true)) return true;
-  const reason = String((entry && (entry.reason || entry.kind)) || "").toLowerCase();
-  return reason.includes("block") || reason === "depends-on-incomplete";
-}
-/** Sort key for one needs-attention entry. Lower `tier` sorts first; within a
- *  tier the secondary key orders (overdue: oldest due asc; silent: longest desc). */
-function attentionRowKey(entry) {
-  const rec = (entry && entry.record) || {};
-  const lc = (entry && entry.lifecycle) || {};
-  const dueDate = parseDueDate(rec.due);
-  const dueMs = dueDate ? dueDate.getTime() : null;
-  const overdue = dueMs != null && dueMs < ATTENTION_TODAY_MS();
-  const silentDays = typeof lc.silentDays === "number" ? lc.silentDays : -1;
-  if (attentionIsBlocked(entry)) return { tier: 0, a: dueMs != null ? dueMs : Infinity, b: -silentDays };
-  if (overdue) return { tier: 1, a: dueMs, b: -silentDays }; // oldest due first
-  if (silentDays > 0) return { tier: 2, a: -silentDays, b: dueMs != null ? dueMs : Infinity }; // longest-silent first
-  return { tier: 3, a: dueMs != null ? dueMs : Infinity, b: -silentDays };
-}
-/** Stable in-place sort of an attention-entry array by the tiered key. */
-function sortAttentionRows(rows) {
-  return rows
-    .map((e, i) => ({ e, i, k: attentionRowKey(e) }))
-    .sort((x, y) => (x.k.tier - y.k.tier) || (x.k.a - y.k.a) || (x.k.b - y.k.b) || (x.i - y.i))
-    .map((o) => o.e);
-}
-/** Group's most-urgent row key — orders GROUPS (blocked ▷ overdue ▷ silent; tie
- *  breaks on oldest due). Groups are pre-sorted, so [0] is the winner. */
-function groupUrgencyKey(grp) {
-  const items = (grp.items || []).slice();
-  if (!items.length) return { tier: 4, a: Infinity, b: 0 };
-  return attentionRowKey(sortAttentionRows(items)[0]);
-}
-
-// Groups longer than this collapse to the first N rows + a "Show all" expander.
-const ATTENTION_GROUP_COLLAPSE_THRESHOLD = 6;
-const ATTENTION_GROUP_COLLAPSE_VISIBLE = 5;
-// Group keys the user expanded this session (survives re-render; cleared on view enter).
-const _attentionExpandedGroups = new Set();
-// WP-ATTN-CARDS — group keys whose compact card is OPEN (rows visible). Separate
-// from _attentionExpandedGroups, which tracks the >6 ⇒ "Show all" row expander
-// INSIDE an open card; sharing the set would force every opened card to show
-// all rows. Cleared together on view enter.
-const _attentionOpenCards = new Set();
-
-/**
- * WP-WIDE-TODAY (coordinator amendment 2) — display-side fail-safe for
- * slug-shaped group titles. Job keys occasionally surface as raw slugs
- * title-cased ("Us Non 22189") when the engine hasn't named the workstream.
- * The wide two-column layout puts these titles front-and-center, so guard the
- * DISPLAY here. Engine-side naming is fixed separately; this only rewrites the
- * label shown, never the underlying key.
- *
- * Conservative detection (must not eat legitimate names):
- *   · the specific "<2-3 letters> non <4+ digits>" pattern from the corpus, and
- *   · a whole label that is only opaque tokens — a vowel-free consonant run of
- *     ≥4 chars, or a token ending in a 4+ digit id — with no ordinary word.
- * Anything with a normal word (has vowels, ≤3 consecutive consonants) passes
- * through untouched.
- */
-function displayGroupLabel(label) {
-  const s = (label == null ? "" : String(label)).trim();
-  if (!s) return s;
-  // WP-NAME-ASKS ruling: show the REAL code, formatted (US-NON-22189), not a
-  // "Unnamed workstream" mask — codes are identifiers users recognize and
-  // search by, and masking made distinct unnamed jobs indistinguishable. The
-  // durable fix is the naming ask in the queue; this is the honest interim.
-  const asCode = (v) => v.replace(/[\s_]+/g, "-").toUpperCase();
-  // Specific corpus pattern: "Us Non 22189", "abc-non-4021", etc.
-  if (/^[a-z]{2,3}[-\s]?non[-\s]?\d{4,}$/i.test(s)) return asCode(s);
-  // Token-shape heuristic: a label is slug-shaped when EVERY token is opaque
-  // (vowel-free ≥4-char run, or a bare 4+ digit id) and none is a real word.
-  const tokens = s.split(/[\s\-_]+/).filter(Boolean);
-  const looksOpaque = (t) => {
-    const lower = t.toLowerCase();
-    if (/^\d{4,}$/.test(lower)) return true; // bare long id
-    if (/[aeiou]/.test(lower)) {
-      // has a vowel — opaque only if it also carries a 4+ consonant run
-      return /[bcdfghjklmnpqrstvwxyz]{4,}/.test(lower);
-    }
-    return lower.length >= 4; // vowel-free run of 4+ letters/digits
-  };
-  if (tokens.length && tokens.every(looksOpaque)) return asCode(s);
-  return s;
-}
-
-/** Render the needs-attention list under the current filter, GROUPED BY PROJECT.
- *  "Mine" keeps only rows whose owner slug matches the viewer's (email local-part
- *  → slug). Grouping reuses the Decisions By-project derivation (groupRecords over
- *  the documentId → projects[] map on _todayCtx.docProjects); rows within a group
- *  sort blocked ▷ overdue (oldest first) ▷ longest-silent ▷ rest, and groups order
- *  by their most-urgent row. Degrades to a flat (ungrouped) list when there's no
- *  project data. Groups over 6 rows collapse to 5 + a "Show all N" expander. */
-function renderTodayAttention() {
-  const ctx = _todayCtx;
-  const groupsEl = document.getElementById("log-attention-groups");
-  const listEl = document.getElementById("log-attention-list");
-  const emptyEl = document.getElementById("log-attention-empty");
-  if (!ctx || !listEl) return;
-
-  let rows = ctx.needsAttention;
-  if (_todayFilter === "mine" && ctx.viewerSlug) {
-    rows = rows.filter((e) =>
-      entryIsMine(e, ctx.viewerSlug, ctx.viewerEmail, ctx.submitterByDoc));
-  }
-
-  // WP-TODAY-3BANDS — one appearance per item: rows the Next-two-weeks band
-  // already renders (a due-soon item that's ALSO silent/blocked) are skipped
-  // here, with a quiet count below (fail-closed-but-VISIBLE, never a silent
-  // disappearance). The watch band re-triggers this render when it lands, so
-  // arrival order doesn't matter.
-  let skippedForWatch = 0;
-  if (ctx.watchRecordIds instanceof Set && ctx.watchRecordIds.size) {
-    const before = rows.length;
-    rows = rows.filter((e) => {
-      const id = ((e && e.record) || {}).recordId;
-      return !(id && ctx.watchRecordIds.has(id));
-    });
-    skippedForWatch = before - rows.length;
-  }
-
-  // This render owns the band's count + the header subtitle (both must reflect
-  // the SAME deduped, filtered list — the count-reconciliation rule).
-  const everyCount = document.getElementById("log-everything-count");
-  if (everyCount) everyCount.textContent = rows.length ? String(rows.length) : "";
-  const subEl = document.getElementById("log-sub");
-  if (subEl) {
-    const total = typeof ctx.summaryTotal === "number" ? ctx.summaryTotal : 0;
-    subEl.textContent =
-      total > 0
-        ? `${rows.length} need attention · ${total} tracked`
-        : "What needs your attention";
-  }
-
-  const renderRow = (entry) =>
-    renderAttentionRow(entry, ctx.submitterByDoc, ctx.viewerEmail);
-
-  if (groupsEl) groupsEl.innerHTML = "";
-  listEl.innerHTML = "";
-
-  // Group by project when we have project data AND it partitions the rows into
-  // more than one named project; otherwise degrade to the flat list. groupRecords
-  // is the same helper the Decisions By-project lens uses; aliases/jobNames/
-  // recordJobs aren't loaded on Today, so it falls to pure document-project keys
-  // (recordJobs empty ⇒ no hot-list re-point) with prettified labels.
-  const docProjects = ctx.docProjects instanceof Map ? ctx.docProjects : new Map();
-  let grouped = null;
-  if (rows.length && docProjects.size && groupsEl) {
-    const g = groupRecords(rows, "project", docProjects, ctx.aliases || {}, ctx.jobNames || {}, ctx.recordJobs || {});
-    // Only group when it's meaningful — more than one bucket, or a single named
-    // (non-"Other") project. A lone "Other" bucket ⇒ flat list (no project data).
-    const named = g.filter((grp) => grp.key !== PROJECT_OTHER);
-    if (g.length > 1 || named.length === 1) {
-      // Sort each group's rows blocked ▷ overdue ▷ silent ▷ rest so the group's
-      // most-urgent row is [0] and drives group ordering.
-      for (const grp of g) grp.items = sortAttentionRows(grp.items);
-      // Order groups by their most-urgent row ("Other" stays last per groupRecords'
-      // order key; within the same order band, urgency decides).
-      grouped = g.slice().sort((a, b) => {
-        if ((a.order || 0) !== (b.order || 0)) return (a.order || 0) - (b.order || 0);
-        const ka = groupUrgencyKey(a), kb = groupUrgencyKey(b);
-        return (ka.tier - kb.tier) || (ka.a - kb.a) || (ka.b - kb.b);
-      });
-    }
-  }
-
-  if (grouped) {
-    for (const grp of grouped) {
-      groupsEl.appendChild(renderAttentionGroupCard(grp, renderRow));
-    }
-  } else {
-    for (const entry of sortAttentionRows(rows)) listEl.appendChild(renderRow(entry));
-  }
-
-  // The quiet dedup receipt — how many rows live in Next two weeks instead.
-  if (skippedForWatch > 0) {
-    const note = document.createElement("p");
-    note.className = "today-dedup-note";
-    note.textContent =
-      skippedForWatch === 1
-        ? "1 more is due soon — it's in Next two weeks above."
-        : `${skippedForWatch} more are due soon — they're in Next two weeks above.`;
-    (groupsEl && groupsEl.childElementCount ? groupsEl : listEl).appendChild(note);
-  }
-
-  if (emptyEl) {
-    emptyEl.hidden = rows.length > 0 || skippedForWatch > 0;
-    if (rows.length === 0 && skippedForWatch === 0) {
-      emptyEl.textContent =
-        _todayFilter === "mine"
-          ? "Nothing of yours is overdue and silent."
-          : "Nothing overdue and silent. You're on top of it.";
-    }
-  }
-}
-
-/**
- * WP-ATTN-CARDS (mockup 2) — one needs-attention GROUP as a compact accent-bar
- * card: amber left bar, title · count, and the group's WORST item as a single
- * quiet summary line (owner · due · status; status word amber for silent/
- * overdue, soft red for blocked). The full rows render IN PLACE on expand
- * (lazily, first open) via renderAttentionGroupRows — which keeps its own
- * >6 ⇒ top-5 + "Show all N →" behavior. Expansion is remembered per group key
- * (_attentionExpandedGroups) so re-renders keep open cards open.
- */
-function renderAttentionGroupCard(grp, renderRow) {
-  const wrap = document.createElement("div");
-  wrap.className = "log-attention-group attn-card";
-  const expanded = _attentionOpenCards.has(grp.key);
-
-  const head = document.createElement("button");
-  head.type = "button";
-  head.className = "attn-card-head";
-  head.setAttribute("aria-expanded", expanded ? "true" : "false");
-  const title = document.createElement("h3");
-  title.className = "log-attention-group-title";
-  title.textContent = displayGroupLabel(grp.label);
-  const count = document.createElement("span");
-  count.className = "log-attention-group-count";
-  count.textContent = String(grp.items.length);
-  title.appendChild(count);
-  const caret = document.createElement("span");
-  caret.className = "attn-card-caret";
-  caret.textContent = expanded ? "▾" : "▸";
-  head.appendChild(title);
-  head.appendChild(caret);
-  wrap.appendChild(head);
-
-  const summary = attnWorstLine(grp.items[0]);
-  if (summary) {
-    summary.hidden = expanded;
-    wrap.appendChild(summary);
-  }
-
-  const body = document.createElement("div");
-  body.className = "attn-card-body";
-  body.hidden = !expanded;
-  if (expanded) renderAttentionGroupRows(body, grp, renderRow);
-  wrap.appendChild(body);
-
-  head.addEventListener("click", () => {
-    const opening = body.hidden;
-    if (opening && !body.childElementCount) renderAttentionGroupRows(body, grp, renderRow);
-    body.hidden = !opening;
-    if (summary) summary.hidden = opening;
-    caret.textContent = opening ? "▾" : "▸";
-    head.setAttribute("aria-expanded", opening ? "true" : "false");
-    if (opening) _attentionOpenCards.add(grp.key);
-    else _attentionOpenCards.delete(grp.key);
-  });
-
-  return wrap;
-}
-
-/** The card's collapsed summary: the worst item's "owner · due <date> · status"
- *  line. Status word carries the urgency colour; everything else stays dim.
- *  Items arrive pre-sorted (blocked ▷ overdue ▷ silent), so [0] is the winner. */
-function attnWorstLine(entry) {
-  if (!entry) return null;
-  const rec = entry.record || {};
-  const lc = entry.lifecycle || {};
-  const p = document.createElement("p");
-  p.className = "attn-card-worst";
-  const addSep = () => {
-    if (p.childNodes.length) p.appendChild(document.createTextNode(" · "));
-  };
-  if (rec.owner) {
-    p.appendChild(document.createTextNode(prettySlug(String(rec.owner))));
-  }
-  if (rec.due) {
-    // Compact date — the year only when it isn't this year (mockup grammar:
-    // "due May 31", not "due May 31, 2026").
-    const d = parseDueDate(rec.due);
-    const compact =
-      d && d.getFullYear() === new Date().getFullYear()
-        ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
-        : formatDueDate(rec.due);
-    addSep();
-    p.appendChild(document.createTextNode("due " + compact));
-  }
-  const silentDays = typeof lc.silentDays === "number" ? lc.silentDays : 0;
-  const dueDate = parseDueDate(rec.due);
-  const overdue = dueDate ? dueDate.getTime() < ATTENTION_TODAY_MS() : false;
-  const status = document.createElement("span");
-  if (attentionIsBlocked(entry)) {
-    status.className = "attn-status-blocked";
-    status.textContent = "blocked";
-  } else if (silentDays > 0) {
-    status.className = "attn-status-silent";
-    status.textContent = silentDays + "d silent";
-  } else if (overdue) {
-    status.className = "attn-status-overdue";
-    status.textContent = "overdue";
-  }
-  if (status.textContent) {
-    addSep();
-    p.appendChild(status);
-  }
-  return p.childNodes.length ? p : null;
-}
-
-/** Append a group's rows into `wrap`. Groups over the threshold render the first
- *  N rows + a "Show all M →" btn-link that reveals the rest IN PLACE (no view jump,
- *  aria-expanded). Expansion state is remembered in _attentionExpandedGroups so a
- *  re-render keeps an opened group open. Rows are pre-sorted by the caller. */
-function renderAttentionGroupRows(wrap, grp, renderRow) {
-  const items = grp.items || [];
-  const overThreshold = items.length > ATTENTION_GROUP_COLLAPSE_THRESHOLD;
-  const expanded = !overThreshold || _attentionExpandedGroups.has(grp.key);
-  const visibleCount = expanded ? items.length : ATTENTION_GROUP_COLLAPSE_VISIBLE;
-
-  const rendered = items.map(renderRow);
-  for (let i = 0; i < rendered.length; i++) {
-    if (i >= visibleCount) rendered[i].hidden = true;
-    wrap.appendChild(rendered[i]);
-  }
-
-  if (!overThreshold) return;
-  const expander = document.createElement("button");
-  expander.type = "button";
-  expander.className = "btn btn-link log-attention-showall";
-  expander.setAttribute("aria-expanded", expanded ? "true" : "false");
-  expander.textContent = expanded ? "Show less" : `Show all ${items.length} →`;
-  expander.addEventListener("click", () => {
-    const nowExpanded = expander.getAttribute("aria-expanded") !== "true";
-    expander.setAttribute("aria-expanded", nowExpanded ? "true" : "false");
-    if (nowExpanded) _attentionExpandedGroups.add(grp.key);
-    else _attentionExpandedGroups.delete(grp.key);
-    for (let i = ATTENTION_GROUP_COLLAPSE_VISIBLE; i < rendered.length; i++) {
-      rendered[i].hidden = !nowExpanded;
-    }
-    expander.textContent = nowExpanded ? "Show less" : `Show all ${items.length} →`;
-  });
-  wrap.appendChild(expander);
-}
-
-/** One needs-attention row: summary, subject, owner, due, silent-days, and
- *  (WP-N1 #6) capture attribution joined from the documentId → submitter map. */
-function renderAttentionRow(entry, submitterByDoc, viewerEmail) {
-  const rec = (entry && entry.record) || {};
-  const lc = (entry && entry.lifecycle) || {};
-  const row = document.createElement("div");
-  row.className = "log-attention-row";
-  row.dataset.type = rec.type || "";
-
-  const head = document.createElement("div");
-  head.className = "log-row-head";
-  const chip = document.createElement("span");
-  chip.className = "record-chip";
-  chip.dataset.type = rec.type || "";
-  chip.textContent = recordTypeLabel(rec);
-  head.appendChild(chip);
-  if (rec.primaryEntity) {
-    const subj = document.createElement("span");
-    subj.className = "log-row-subject";
-    subj.textContent = prettySlug(rec.primaryEntity);
-    head.appendChild(subj);
-  }
-  row.appendChild(head);
-
-  const summary = document.createElement("p");
-  summary.className = "log-row-summary";
-  summary.textContent = rec.summary || "";
-  row.appendChild(summary);
-
-  // Metadata: owner + due as editable spans (dim); the overdue/silent count amber.
-  const hasSilent = typeof lc.silentDays === "number";
-  // WP-N1 #6 — attribution from the join: "captured by you" (submitter == me),
-  // "captured by <local-part>" (someone else), or omitted (no submitter on the
-  // doc — pre-flag or shared-key capture). Never "unknown".
-  const attribution = captureAttribution(rec.documentId, submitterByDoc, viewerEmail);
-  {
-    const meta = document.createElement("p");
-    meta.className = "log-row-meta";
-    const segCount = buildRecordMetaSegments(meta, rec);
-    if (hasSilent) {
-      if (segCount) meta.appendChild(document.createTextNode(" · "));
-      const overdue = document.createElement("span");
-      overdue.className = "log-meta-overdue";
-      overdue.textContent = lc.silentDays + "d silent";
-      meta.appendChild(overdue);
-    }
-    if (attribution) {
-      if (meta.textContent) meta.appendChild(document.createTextNode(" · "));
-      const attr = document.createElement("span");
-      attr.className = "log-meta-attr";
-      attr.textContent = attribution;
-      meta.appendChild(attr);
-    }
-    if (meta.childNodes.length) row.appendChild(meta);
-  }
-
-  // Actions: "Show receipts" (when the row has a subject) + Dismiss. Always
-  // present so the dismiss affordance is on every row.
-  const footer = document.createElement("div");
-  footer.className = "log-row-actions";
-  if (rec.primaryEntity) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn btn-link receipts-entry-btn";
-    btn.textContent = "Show receipts →";
-    // WP-Grouping-Operator P4 — open the JOB's receipts (its full action set +
-    // canonical name) when the record is job-grouped; else the entity's. Hot-
-    // list records' primaryEntity is the section (e.g. "rsv"), so preferring
-    // parentJob is what reaches a job's receipts instead of section-receipts.
-    btn.addEventListener("click", () =>
-      enterReceiptsView((rec.parentJob || "").replace(/^job:/, "") || rec.primaryEntity));
-    footer.appendChild(btn);
-  }
-  appendSourceBadge(footer, rec.documentId, rec.verbatim);
-  appendResolveSnoozeControls(footer, rec.recordId, row, rec.summary);
-  appendDraftFollowUpControl(footer, rec);
-  appendDismissControl(footer, rec.recordId, row, rec.summary);
-  row.appendChild(footer);
-
-  applyRecordCardEditing(row, rec); // Today/daily inline editing (same helpers as the cards)
-  return row;
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // "Coming up" — the forward-looking window (the windshield). OPEN commitments due
@@ -5960,6 +5436,7 @@ async function loadTodayComingUp() {
       }
       if (countEl) countEl.textContent = "";
       section.hidden = false;
+      missSettle("week"); // never leave ① waiting on a failed source
       return;
     }
   }
@@ -5982,12 +5459,6 @@ async function loadTodayComingUp() {
     // Canon alias map (slug → canonical label) — THE channel a project-canon
     // rename travels through (verified live: rename lands here immediately).
     _todayCtx.aliases = (data && data.aliases) || {};
-    // The needs-attention board may have painted before this stash landed
-    // (its rollup is a separate async path) — re-render it so canon names
-    // apply on FIRST entry, not the next refresh.
-    if (_todayCtx.needsAttention && _todayCtx.needsAttention.length) {
-      try { renderTodayAttention(); } catch (_e) { /* board not up yet */ }
-    }
   }
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -6000,6 +5471,7 @@ async function loadTodayComingUp() {
   // filter/sort/display all follow it so the reset propagates everywhere.
   const effDueOf = (it) => (it && it.effectiveDue) || ((it && it.record) || {}).due;
   const upcoming = [];
+  let overdueCount = 0;
   for (const it of records) {
     const rec = (it && it.record) || {};
     if ((it.state || "open") !== "open") continue;
@@ -6007,9 +5479,11 @@ async function loadTodayComingUp() {
     const d = parseDueDate(effDueOf(it));
     if (!d) continue;
     const t = d.getTime();
-    if (t < today.getTime() || t > horizon) continue; // overdue lives in "Needs attention"
+    if (t < today.getTime()) { overdueCount++; continue; } // the tail counts into ①'s Log line
+    if (t > horizon) continue;
     upcoming.push(it);
   }
+  _todayOverdueCount = overdueCount;
   // Soonest first (by effective due).
   upcoming.sort((a, b) => {
     const da = parseDueDate(effDueOf(a));
@@ -6024,38 +5498,89 @@ async function loadTodayComingUp() {
       entryIsMine(e, _todayCtx.viewerSlug, _todayCtx.viewerEmail, _todayCtx.submitterByDoc));
   }
 
-  if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
+  // WP-TODAY-BRIEF ② — the WEEK leads; the rest of the fortnight sits behind
+  // one collapsed line (Ross 2026-07-12: "weekly needs" is the intention, the
+  // fortnight is context). Week = through Friday; on Sat/Sun the upcoming week
+  // (same convention as the check-in brief).
+  const dow = today.getDay(); // 0 Sun … 6 Sat
+  const addToFri = dow === 0 ? 5 : dow === 6 ? 6 : 5 - dow;
+  const weekEnd = today.getTime() + addToFri * 86400000 + (86400000 - 1);
+  const weekRows = rows.filter((it) => {
+    const d = parseDueDate(effDueOf(it));
+    return d && d.getTime() <= weekEnd;
+  });
+  const restRows = rows.filter((it) => !weekRows.includes(it));
 
-  // WP-TODAY-3BANDS — ONE runway list for the whole window. The former
-  // planned/short-fuse split (outlook swimlanes vs the "This week" pick list)
-  // rendered the same records twice-over in two grammars; every due-soon item
-  // is now one runway row (short-runway items simply carry no workback tick —
-  // renderOutlookDetails already explains why, §SW1). Soonest first.
-  try { renderTodayOutlook(rows, today); } catch (e) { console.warn("[main] next two weeks:", e); }
+  if (countEl) countEl.textContent = weekRows.length ? `${weekRows.length} due` : "";
 
-  // One appearance per item: publish this band's record ids so the
-  // needs-attention rollup below skips them with a quiet count.
-  if (_todayCtx) {
-    _todayCtx.watchRecordIds = new Set(
-      rows.map((it) => ((it && it.record) || {}).recordId).filter(Boolean),
-    );
-    if (_todayCtx.needsAttention && _todayCtx.needsAttention.length) {
-      try { renderTodayAttention(); } catch (_e) { /* board not up yet */ }
+  try { renderTodayOutlook(weekRows, today); } catch (e) { console.warn("[main] your week:", e); }
+  const restEl = document.getElementById("today-outlook-rest");
+  if (restEl) {
+    restEl.innerHTML = "";
+    if (restRows.length) {
+      try { renderTodayOutlook(restRows, today, restEl); } catch (e) { console.warn("[main] fortnight rest:", e); }
     }
   }
+  const restToggle = document.getElementById("today-week-rest-toggle");
+  if (restToggle) {
+    if (restRows.length && restEl) {
+      const closed = `▸ rest of the fortnight — ${restRows.length} more`;
+      restToggle.textContent = restEl.hidden ? closed : `▾ rest of the fortnight`;
+      restToggle.dataset.closedLabel = closed;
+      restToggle.hidden = false;
+      if (!restToggle.dataset.wired) {
+        restToggle.dataset.wired = "1";
+        restToggle.addEventListener("click", () => {
+          const open = restEl.hidden;
+          restEl.hidden = !open;
+          restToggle.setAttribute("aria-expanded", open ? "true" : "false");
+          restToggle.textContent = open ? "▾ rest of the fortnight" : (restToggle.dataset.closedLabel || "▸ rest of the fortnight");
+        });
+      }
+    } else {
+      restToggle.hidden = true;
+    }
+  }
+
+  // ① Don't miss — the readiness half: due-soon with NOTHING moving behind it
+  // (the Brian flag). Expanding shows the workback reasoning + actions.
+  const missEntries = [];
+  for (const it of rows) {
+    const rec = (it && it.record) || {};
+    const readiness = it.readiness || rec.readiness || null;
+    if (readiness !== "no-precursor") continue;
+    const d = parseDueDate(effDueOf(it));
+    const days = d ? Math.round((d.getTime() - today.getTime()) / 86400000) : null;
+    const when = days == null ? "" : days <= 0 ? "due today" : days === 1 ? "due tomorrow" : `due in ${days} days`;
+    const wb = it.workbackShadow || rec.workbackShadow || null;
+    const proj = wb && (wb.projection || wb);
+    missEntries.push({
+      key: "np:" + (rec.recordId || rec.summary),
+      rank: 1,
+      order: days == null ? 99 : days,
+      line: (rec.summary || "(no summary)") + (when ? " — " + when + ", nothing has moved" : " — nothing has moved"),
+      tag: "no draft observed",
+      detail: () => {
+        const box = document.createElement("div");
+        try { renderOutlookDetails(box, it, rec, wb, proj); } catch (e) { console.warn("[main] miss detail:", e); }
+        return box;
+      },
+    });
+  }
+  missContribute("week", missEntries);
+  missSettle("week");
 
   // Rank, don't list (operator-inventory lever): quiet focus chips from the
   // priority operator land on matching rows when the service answers.
   loadNextWeeksFocusChips().catch(() => {});
 
-  // Empty ⇒ quiet line (WP-TODAY-READ-ACT): "nothing due in the next two weeks"
-  // is affirmative information — the windshield stays present so the morning
-  // report reads complete, instead of the section vanishing into void.
+  // Empty ⇒ quiet line: "nothing due this week" is affirmative information —
+  // the section stays present so the brief reads complete.
   const quietEl = document.getElementById("today-comingup-empty");
   section.hidden = false;
   if (quietEl) {
-    quietEl.textContent = "Nothing due in the next two weeks."; // reset any prior error line
-    quietEl.hidden = rows.length > 0;
+    quietEl.textContent = "Nothing due this week."; // reset any prior error line
+    quietEl.hidden = weekRows.length > 0;
   }
 }
 
@@ -6079,7 +5604,7 @@ async function loadNextWeeksFocusChips() {
       .filter(Boolean),
   );
   if (!focusIds.size) return;
-  for (const row of document.querySelectorAll("#today-outlook-rows .today-outlook-item[data-record-id]")) {
+  for (const row of document.querySelectorAll("#today-outlook-rows .today-outlook-item[data-record-id], #today-outlook-rest .today-outlook-item[data-record-id]")) {
     if (!focusIds.has(row.dataset.recordId)) continue;
     const label = row.querySelector(".today-outlook-label");
     if (!label || label.querySelector(".today-focus-chip")) continue;
@@ -6146,13 +5671,13 @@ async function sendWorkbackGesture(box, recordId, body) {
  *  due-soon rows — the separate "This week" pick list and Coming-up rail were
  *  re-renderings of the same records and are gone). The caller owns section
  *  visibility/count; this renders rows only. */
-function renderTodayOutlook(rows, today) {
-  const rowsEl = document.getElementById("today-outlook-rows");
+function renderTodayOutlook(rows, today, targetEl) {
+  const rowsEl = targetEl || document.getElementById("today-outlook-rows");
   const legendEl = document.getElementById("today-outlook-legend");
   if (!rowsEl) return;
   rowsEl.innerHTML = "";
   if (!rows || !rows.length) {
-    if (legendEl) legendEl.hidden = true;
+    if (!targetEl && legendEl) legendEl.hidden = true;
     return;
   }
 
@@ -6290,7 +5815,7 @@ function renderTodayOutlook(rows, today) {
     item.appendChild(details);
     rowsEl.appendChild(item);
   }
-  if (legendEl) legendEl.hidden = !anyTick;
+  if (legendEl && (anyTick || !targetEl)) legendEl.hidden = !anyTick;
 }
 
 /** The inline reasoning block under a Deadline-outlook swimlane. Reads only
@@ -6573,27 +6098,6 @@ function appendHeadsUpControl(actionsEl, rec) {
   actionsEl.appendChild(btn);
 }
 
-/** One contradiction — a compact inline warning chip (severity tag + the two
- *  record summaries). The full explanation lives in Receipts, not here. */
-function renderContradictionRow(edge) {
-  const row = document.createElement("div");
-  row.className = "log-contradiction-row";
-  row.dataset.severity = edge.severity || "";
-
-  if (edge.severity) {
-    const sev = document.createElement("span");
-    sev.className = "log-contradiction-sev";
-    // Sentence-case ("High"/"Medium"), not raw caps — display formatting only.
-    sev.textContent = edge.severity.charAt(0).toUpperCase() + edge.severity.slice(1);
-    row.appendChild(sev);
-  }
-
-  const text = document.createElement("span");
-  text.className = "log-contradiction-text";
-  text.textContent = `${edge.recordASummary || "—"} ⟷ ${edge.recordBSummary || "—"}`;
-  row.appendChild(text);
-  return row;
-}
 
 /** One owner-load chip: a small ghost card — owner + open count (dim), with the
  *  overdue count in amber when present. */
@@ -6617,6 +6121,44 @@ function renderOwnerChip(o) {
   }
   chip.appendChild(count);
   return chip;
+}
+
+// WP-TODAY-BRIEF — Workload in the Log (moved from Today, Ross 2026-07-12).
+// Collapsed line above the list; the owner chips render lazily on first open.
+// Additive + silent: fetch failure or empty ownerLoad keeps the line hidden.
+async function loadLogWorkload() {
+  const section = document.getElementById("log-workload-section");
+  const toggle = document.getElementById("log-workload-toggle");
+  const strip = document.getElementById("log-owners-strip");
+  if (!section || !toggle || !strip) return;
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_decision_log");
+  } catch (_err) {
+    section.hidden = true;
+    return;
+  }
+  const ownerLoad = Array.isArray(data && data.summary && data.summary.ownerLoad)
+    ? data.summary.ownerLoad
+    : [];
+  if (!ownerLoad.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (!toggle.dataset.wired) {
+    toggle.dataset.wired = "1";
+    toggle.addEventListener("click", () => {
+      const open = strip.hidden;
+      if (open && !strip.childElementCount) {
+        for (const o of ownerLoad.slice(0, 12)) strip.appendChild(renderOwnerChip(o));
+      }
+      strip.hidden = !open;
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      const chev = toggle.querySelector(".proxy-pile-chevron");
+      if (chev) chev.textContent = open ? "▾" : "▸";
+    });
+  }
 }
 
 // Today-view buttons: refresh, and the view-main / post-capture entry points.
@@ -7506,91 +7048,6 @@ function renderCorpusPanel(panel, data) {
 // Both are the FOREST altitude; the lens is the only difference (Person × Forest).
 // Additive + silent: the bar + panel stay hidden when the endpoint is unavailable.
 
-let _sopLens = "person"; // "person" | "forest"
-
-// UI-1 — render the person-lens SoP narrative into a container. Thin wrapper over
-// the shared prose renderer; the heading reflects the active lens.
-function renderPersonLensSoP(container, data, lens) {
-  container.innerHTML = "";
-  const head = document.createElement("div");
-  head.className = "sop-lens-head";
-  head.textContent = lens === "forest" ? "Across all work" : "Your jobs today";
-  container.appendChild(head);
-  const body = document.createElement("div");
-  body.className = "sop-lens-body";
-  // Lean by default, extended on demand (Ross ruling, Trisha UAT 2026-07-09): the
-  // top-of-Today SoP led with the full multi-paragraph narrative — "6 lines to say
-  // nothing's urgent." Digest mode clamps the lead to ~4 lines behind Show more and
-  // pulls the "Do this first" line out front, matching the corpus panel (mockup 2,
-  // rubric line 53). Same data; the full narrative is one tap away.
-  renderSoPProse(body, data, { digest: true });
-  container.appendChild(body);
-}
-
-// Load + render the top-of-Today SoP for the current lens. Hides the bar + panel
-// when there's nothing to show (unavailable / no prose) — never an error surface.
-// Returns true when it rendered a narrative — WP-TODAY-3BANDS single-narrative
-// rule: the caller auto-opens the corpus panel ONLY when this rendered nothing
-// (no identity, or the lens endpoint came back empty), so exactly one narrative
-// composes on entry.
-async function loadPersonLensSoP() {
-  const bar = document.getElementById("log-sop-lens");
-  const panel = document.getElementById("log-sop-lens-panel");
-  const section = document.getElementById("today-sop-section");
-  if (!panel) return false;
-  const viewerSlug = _todayCtx && _todayCtx.viewerSlug;
-  // The Person lens needs an identity. The old no-identity fallback rendered the
-  // unlensed Forest narrative here — DUPLICATING the State of Play panel below,
-  // which UI-2 re-pointed to that same forest altitude (two syntheses of one
-  // scope, stacked — and identity-less is the default on every fresh install).
-  // One corpus, one narrative: with no identity this surface goes calm-empty and
-  // the SoP panel below is the single source (mirrors the Mine/Everyone gate).
-  if (!viewerSlug) {
-    panel.innerHTML = "";
-    if (bar) bar.hidden = true;
-    if (section) section.hidden = true; // empty surface must not reserve a gap
-    return false;
-  }
-  const lens = _sopLens;
-  const selector = lens === "person" ? personLens(viewerSlug) : null;
-  panel.innerHTML = '<div class="sop-status">Composing your state of play…</div>';
-  const data = await loadSoP("forest", null, selector);
-  if (!data) {
-    // Nothing to show — keep the surface calm and empty (no bar, no panel).
-    panel.innerHTML = "";
-    if (bar) bar.hidden = true;
-    if (section) section.hidden = true;
-    return false;
-  }
-  if (section) section.hidden = false;
-  if (bar) {
-    bar.hidden = false;
-    // The Person toggle only makes sense with an identity.
-    const personBtn = bar.querySelector('[data-lens="person"]');
-    if (personBtn) personBtn.hidden = !viewerSlug;
-  }
-  renderPersonLensSoP(panel, data, lens);
-  return true;
-}
-
-// UI-6 — wire the Person / Forest lens toggle at the top of Today. Idempotent
-// (binds once); re-renders the panel for the chosen lens without a view reload.
-function wireSopLensToggle() {
-  const bar = document.getElementById("log-sop-lens");
-  if (!bar || bar.dataset.wired) return;
-  bar.dataset.wired = "1";
-  bar.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".sop-lens-btn");
-    if (!btn) return;
-    const lens = btn.dataset.lens;
-    if (!lens || lens === _sopLens) return;
-    _sopLens = lens;
-    for (const b of bar.querySelectorAll(".sop-lens-btn")) {
-      b.setAttribute("aria-pressed", b.dataset.lens === lens ? "true" : "false");
-    }
-    loadPersonLensSoP();
-  });
-}
 
 // ───────── WP-WorkForest-Native-SoP (UI-3) — Frame SoP, on Decisions frame headers ─────────
 //
@@ -8884,9 +8341,8 @@ if (openLogBtn) {
 for (const btn of document.querySelectorAll(".log-filter-btn")) {
   btn.addEventListener("click", () => {
     setTodayFilter(btn.dataset.filter);
-    renderTodayAttention();
-    // Coming up honours the same Mine/Everyone filter.
-    loadTodayComingUp().catch((e) => console.warn("[main] Coming up (filter):", e));
+    // Your week honours the Mine/Everyone filter.
+    loadTodayComingUp().catch((e) => console.warn("[main] Your week (filter):", e));
   });
 }
 
@@ -12292,6 +11748,8 @@ async function enterDecisionsView(initialFilter, navCtx) {
   refreshContainmentSignals().catch((e) => console.warn("[main] containment signals:", e));
   refreshDevelopedRules().then(_reDecisions).catch((e) => console.warn("[main] developed rules:", e));
   refreshQuestionCard().then(_reDecisions).catch((e) => console.warn("[main] question card:", e));
+  // Workload (moved from Today) — collapsed line above the list.
+  loadLogWorkload().catch((e) => console.warn("[main] workload strip:", e));
 }
 
 /** Conflicts lens — promotes the contradiction edges with inline confirm/dismiss
