@@ -2081,6 +2081,76 @@ async fn outbox_decide(
         .map_err(|e| format!("outbox_decide: parse response failed: {e}"))
 }
 
+// ── WP-CHECKIN-ROUTINES — engine prework-runner schedule ──
+//
+// The Settings routines card reads/writes the engine's three unattended
+// passes (prework / delta / closure) over the bearer lane. GET returns the
+// EFFECTIVE config (store over env defaults, per-pass source tags, master
+// `enabled`); POST validates server-side and returns the fresh effective
+// config, which the card re-renders — the UI only ever shows verified engine
+// state, never an optimistic local echo. A write takes effect on the running
+// cron within one tick (≤60s), no restart.
+
+/// GET /api/prework/config → effective unattended-pass schedule.
+#[tauri::command]
+async fn fetch_prework_config(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/prework/config", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_prework_config: parse response failed: {e}"))
+}
+
+/// POST /api/prework/config with `{ passes, tz_offset_minutes }` (validated
+/// server-side; 400 carries the validator's code/message). Returns the fresh
+/// effective config for the card to render as verified state.
+#[tauri::command]
+async fn save_prework_config(
+    state: tauri::State<'_, AppState>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/prework/config", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("save_prework_config: parse response failed: {e}"))
+}
+
 /// WP-OUTBOX-COMPANION-CARD — download a held outbox artifact. Fetches raw
 /// bytes from GET /api/outbox/:item/artifacts/:artifact, then opens a native
 /// save dialog seeded with `default_name` (save_text_file's oneshot pattern,
@@ -9531,6 +9601,8 @@ pub fn run() {
             fetch_decision_log,
             fetch_outbox,
             outbox_decide,
+            fetch_prework_config,
+            save_prework_config,
             outbox_artifact_save,
             outbox_artifact_replace,
             outbox_propose,
