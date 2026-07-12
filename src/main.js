@@ -4538,6 +4538,8 @@ function renderTodaySkeleton() {
   if (planOpenList) { planOpenList.innerHTML = ""; planOpenList.hidden = true; }
   const planCount = document.getElementById("today-planrec-count");
   if (planCount) planCount.textContent = "";
+  const planWhen = document.getElementById("today-planrec-when");
+  if (planWhen) planWhen.textContent = "";
 
   // ④ Prepared for you — both lists clear; the Log line waits for the summary.
   for (const id of ["today-prework-list", "today-outbox-list"]) {
@@ -5404,9 +5406,11 @@ function renderTodayPlanSection(tp) {
   })();
   if (countEl) {
     countEl.textContent =
-      `${when} · ${tp.moved.count} moved · ${tp.stalled.count} stalled` +
+      `${tp.moved.count} moved · ${tp.stalled.count} stalled` +
       (tp.newlyActionable.count ? ` · ${tp.newlyActionable.count} newly possible` : "");
   }
+  const whenEl = document.getElementById("today-planrec-when");
+  if (whenEl) whenEl.textContent = when;
 
   const planRow = (ref, opts) => {
     const row = document.createElement("div");
