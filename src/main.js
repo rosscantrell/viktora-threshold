@@ -21,6 +21,8 @@ import {
   loadRoutines,
   saveRoutines,
   composeRoutineSetupMessage,
+  derivePrepTime,
+  tzOffsetMinutes,
 } from "./routines.js";
 
 const tauri = window.__TAURI__;
@@ -735,6 +737,9 @@ function switchSettingsPanel(name) {
   if (name === "integrations") {
     renderAiConnections();
     renderIntegrationDoctor();
+    // Routines: re-read the engine's unattended-pass schedule on open so the
+    // card's captions always show verified workspace state.
+    refreshRoutineEngineState();
   }
 }
 
@@ -1746,11 +1751,18 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
 // The Settings face of the routines architecture (definitions + rationale in
 // routines.js). Attended check-ins are native: the always-resident widget
 // pings at the times set here (persist-on-change, like the companion URL —
-// no global-Save dependency), and the brief's ✦ chip opens the companion.
-// The prework row is engine-side; until the engine runner exposes its config
-// endpoint the row shows the time honestly but schedules nothing — say so,
-// never pretend. The claude.ai one-message setup remains below as the
-// optional cloud tier.
+// no global-Save dependency), and the brief's chip opens the routine's door.
+//
+// The unattended side is ENGINE state: the runner executes THREE passes —
+// prework (morning staging), delta (pre-midday), closure (pre-evening) — and
+// serves GET/POST /api/prework/config over the bearer lane. The prework row
+// edits its pass directly; delta/closure are DERIVED (each runs 15 min before
+// its attended check-in — a caption, not a third time picker). Every render
+// of engine state comes from a server response (verified), never a local
+// echo; unreachable ⇒ the captions say so. The claude.ai one-message setup
+// remains below as the optional cloud tier.
+let refreshRoutineEngineState = () => {};
+
 (function initRoutineSetup() {
   const list = document.getElementById("routine-list");
   const btn = document.getElementById("routine-setup");
@@ -1760,10 +1772,12 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
 
   list.innerHTML = ROUTINES.map((r) => {
     const c = cfg[r.key];
-    const toggle = r.attended
-      ? '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
-        (c.enabled ? " checked" : "") + ' aria-label="Remind me for ' + r.name + '" />'
-      : '<span class="routine-toggle-slot" aria-hidden="true"></span>';
+    // Every row gets a toggle now: attended rows gate the local ping,
+    // the prework row gates its engine pass (synced below).
+    const toggle =
+      '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
+      (c.enabled ? " checked" : "") +
+      ' aria-label="' + (r.attended ? "Remind me for " : "Run ") + r.name + '" />';
     // The routine's door — where engaging it lands (WP-CHECKIN pin: per-routine,
     // user-overridable). Prework is unattended, engine-side: no door.
     const door = r.attended
@@ -1775,7 +1789,14 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
         ">opens Today</option>" +
         "</select>"
       : "";
+    // Engine captions: prework carries the workspace-schedule status; the two
+    // derived passes annotate their attended rows.
+    const caption =
+      r.enginePass || r.prepPass
+        ? '<p class="routine-caption" id="routine-caption-' + r.key + '"></p>'
+        : "";
     return (
+      '<div class="routine-item">' +
       '<div class="routine-row">' +
       toggle +
       '<input type="time" class="routine-time" data-routine="' + r.key + '" value="' +
@@ -1783,6 +1804,8 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
       '<span class="routine-name">' + r.name + "</span>" +
       '<span class="routine-desc">' + r.desc + "</span>" +
       door +
+      "</div>" +
+      caption +
       "</div>"
     );
   }).join("");
@@ -1800,7 +1823,81 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
     }
     return out;
   };
-  list.addEventListener("change", () => saveRoutines(readConfig()));
+
+  // ── Engine sync ──
+  const cap = (key) => document.getElementById("routine-caption-" + key);
+
+  // eff = the server's effective config (the only thing we ever render);
+  // err ⇒ fail-visible captions with the locally-derived times marked
+  // unconfirmed.
+  function renderEngineState(eff, err) {
+    const c = readConfig();
+    if (!eff) {
+      cap("prework").textContent =
+        "Couldn't read your workspace schedule — " + String(err || "engine unreachable");
+      cap("midday").textContent =
+        "prepared 15 min before (" + derivePrepTime(c.midday.time) + ") — not confirmed";
+      cap("evening").textContent =
+        "prepared 15 min before (" + derivePrepTime(c.evening.time) + ") — not confirmed";
+      return;
+    }
+    const passes = eff.passes || {};
+    const p = passes.prework || {};
+    // The engine is the authority for the prework pass — reflect it into the row.
+    const preworkTime = list.querySelector('.routine-time[data-routine="prework"]');
+    const preworkToggle = list.querySelector('.routine-toggle[data-routine="prework"]');
+    if (preworkTime && /^\d{2}:\d{2}$/.test(p.time || "")) preworkTime.value = p.time;
+    if (preworkToggle && typeof p.enabled === "boolean") preworkToggle.checked = p.enabled;
+    cap("prework").textContent =
+      "on your workspace" +
+      (eff.enabled === false ? " — saved; runs once the runner is armed" : "") +
+      " · changes apply within a minute";
+    const line = (pass, fallbackTime) =>
+      "prepared 15 min before — " +
+      ((passes[pass] || {}).time || fallbackTime) +
+      " on your workspace" +
+      ((passes[pass] || {}).enabled === false ? " (off)" : "");
+    cap("midday").textContent = line("delta", derivePrepTime(c.midday.time));
+    cap("evening").textContent = line("closure", derivePrepTime(c.evening.time));
+  }
+
+  async function syncEngine(write) {
+    try {
+      let eff;
+      if (write) {
+        const c = readConfig();
+        eff = await tauri.core.invoke("save_prework_config", {
+          payload: {
+            passes: {
+              prework: { time: c.prework.time, enabled: c.prework.enabled },
+              delta: { time: derivePrepTime(c.midday.time), enabled: c.midday.enabled },
+              closure: { time: derivePrepTime(c.evening.time), enabled: c.evening.enabled },
+            },
+            tz_offset_minutes: tzOffsetMinutes(),
+          },
+        });
+      } else {
+        eff = await tauri.core.invoke("fetch_prework_config");
+      }
+      renderEngineState(eff, null);
+    } catch (err) {
+      renderEngineState(null, err);
+    }
+  }
+  refreshRoutineEngineState = () => syncEngine(false);
+
+  let engineSyncTimer = null;
+  list.addEventListener("change", (ev) => {
+    saveRoutines(readConfig());
+    // Engine-relevant edits (the prework row, or the two rows whose prep
+    // passes derive from them) sync debounced; the POST response re-renders
+    // the captions as verified state.
+    const key = ev.target && ev.target.dataset ? ev.target.dataset.routine : null;
+    if (key === "prework" || key === "midday" || key === "evening") {
+      clearTimeout(engineSyncTimer);
+      engineSyncTimer = setTimeout(() => syncEngine(true), 700);
+    }
+  });
 
   btn.addEventListener("click", async () => {
     const status = document.getElementById("routine-setup-status");

@@ -482,21 +482,22 @@
 
               <!-- Daily routines — native-first (see routines.js for the
                    architecture). The attended rows drive the widget's
-                   check-in pings; the prework row is engine-side (config
-                   endpoint pending — the copy says so). The claude.ai
-                   one-message setup is the optional cloud tier, and its
-                   status line only ever claims what the app verified: that
-                   it opened. Rows + wiring from initRoutineSetup() in
-                   main.js. -->
+                   check-in pings; the unattended side (prework + the two
+                   derived prep passes) is ENGINE state via GET/POST
+                   /api/prework/config — captions render only server
+                   responses, never a local echo. The claude.ai one-message
+                   setup is the optional cloud tier, and its status line only
+                   ever claims what the app verified: that it opened. Rows +
+                   wiring from initRoutineSetup() in main.js. -->
               <div class="field">
                 <span class="field-label">Daily routines</span>
                 <div class="routine-list" id="routine-list"></div>
                 <span class="field-help">
                   While Threshold is running it reminds you at these times —
                   each check-in then opens where you point it: your companion
-                  (✦, prompt ready) or Today. The pre-work session runs on
-                  your workspace before you're up; setting its schedule from
-                  here is coming with the workspace runner.
+                  (✦, prompt ready) or Today. The pre-work session and each
+                  check-in's prep pass run on your workspace, unattended;
+                  edits here reschedule them within a minute.
                 </span>
                 <div class="ec-actions routine-actions">
                   <button type="button" class="btn btn-secondary" id="routine-setup">

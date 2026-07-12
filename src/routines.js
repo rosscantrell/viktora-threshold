@@ -26,6 +26,7 @@ export const ROUTINES = [
     desc: "unattended — your workspace stages drafts before you start",
     defaultTime: "07:00",
     attended: false,
+    enginePass: "prework",
     prompt: (tz) =>
       "Run my pre-work session: call get_checkin_packet with mode:'prework' and tz_offset_minutes:" +
       tz +
@@ -57,6 +58,7 @@ export const ROUTINES = [
     defaultTime: "12:30",
     attended: true,
     defaultDoor: "today",
+    prepPass: "delta",
     ping: { title: "Midday check-in", body: "What's moved, what's slipping — a short reconcile." },
     prompt: (tz) =>
       "Run my midday check-in: get_checkin_packet with tz_offset_minutes:" +
@@ -71,6 +73,7 @@ export const ROUTINES = [
     defaultTime: "17:30",
     attended: true,
     defaultDoor: "companion",
+    prepPass: "closure",
     ping: { title: "Evening debrief", body: "Close out the day and tee up tomorrow." },
     prompt: (tz) =>
       "Run my evening debrief: get_checkin_packet with tz_offset_minutes:" +
@@ -121,6 +124,20 @@ export function saveRoutines(cfg) {
 export function timeToMinutes(t) {
   const m = /^(\d{2}):(\d{2})$/.exec(t || "");
   return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/**
+ * An attended check-in's unattended prep pass runs 15 minutes before it
+ * (midday 12:30 → delta 12:15; debrief 17:30 → closure 17:15) — derived, not
+ * a fourth time picker (2026-07-12 pin). Clamped at midnight.
+ */
+export function derivePrepTime(attendedTime) {
+  const mins = Math.max(0, (timeToMinutes(attendedTime) ?? 0) - 15);
+  return (
+    String(Math.floor(mins / 60)).padStart(2, "0") +
+    ":" +
+    String(mins % 60).padStart(2, "0")
+  );
 }
 
 /**

@@ -6841,8 +6841,16 @@ button.rec-source {
   border: none;
   box-shadow: none;
 }
-/* Prework has no local toggle (engine-side) — hold the column so times align. */
-.routine-toggle-slot { flex: 0 0 auto; width: 15px; }
+/* Engine captions — the quiet line under a row carrying verified workspace
+   state (prework status; the derived delta/closure prep times). Indented past
+   the toggle column so it reads as the row's annotation. */
+.routine-item { display: flex; flex-direction: column; gap: 3px; }
+.routine-caption {
+  margin: 0 0 0 25px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.routine-caption:empty { display: none; }
 /* No fixed width: the control sizes to its locale's format (12-hour adds an
    AM/PM segment; a pinned width clips it and 17:30 reads as "05:30"). */
 .routine-row .routine-time { flex: 0 0 auto; width: auto; }
