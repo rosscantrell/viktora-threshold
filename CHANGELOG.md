@@ -9,6 +9,15 @@ mechanics of cutting a release.
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-07-12
+
+### Added
+- **Your plan on Today** — the daily brief now opens with your plan of record:
+  what moved, what stalled, what became newly possible, and what's still open —
+  yours and your companion's. Overnight-prepared drafts appear here for review.
+- Per-routine door choice — each check-in reminder opens your companion or
+  Today, your pick per routine.
+
 ## [0.11.0] — 2026-07-12
 
 ### Added
