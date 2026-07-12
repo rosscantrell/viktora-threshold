@@ -6649,6 +6649,14 @@ button.rec-source {
 /* No fixed width: the control sizes to its locale's format (12-hour adds an
    AM/PM segment; a pinned width clips it and 17:30 reads as "05:30"). */
 .routine-row .routine-time { flex: 0 0 auto; width: auto; }
+/* The door rides the right edge; base look shared with the auto-import
+   interval select (same custom-chevron dark select). */
+.routine-row .routine-door {
+  margin-left: auto;
+  font-size: 12px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
 .routine-name {
   flex: 0 0 auto;
   font-size: 13px;

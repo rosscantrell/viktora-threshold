@@ -1764,6 +1764,17 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
       ? '<input type="checkbox" class="routine-toggle" data-routine="' + r.key + '"' +
         (c.enabled ? " checked" : "") + ' aria-label="Remind me for ' + r.name + '" />'
       : '<span class="routine-toggle-slot" aria-hidden="true"></span>';
+    // The routine's door — where engaging it lands (WP-CHECKIN pin: per-routine,
+    // user-overridable). Prework is unattended, engine-side: no door.
+    const door = r.attended
+      ? '<select class="auto-import-interval-select routine-door" data-routine="' + r.key +
+        '" aria-label="Where ' + r.name + ' opens">' +
+        '<option value="companion"' + (c.door === "companion" ? " selected" : "") +
+        ">opens your companion</option>" +
+        '<option value="today"' + (c.door === "today" ? " selected" : "") +
+        ">opens Today</option>" +
+        "</select>"
+      : "";
     return (
       '<div class="routine-row">' +
       toggle +
@@ -1771,6 +1782,7 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
       c.time + '" aria-label="' + r.name + ' time" />' +
       '<span class="routine-name">' + r.name + "</span>" +
       '<span class="routine-desc">' + r.desc + "</span>" +
+      door +
       "</div>"
     );
   }).join("");
@@ -1782,6 +1794,9 @@ const COMPANION_URL_KEY = "threshold.companionUrl";
     }
     for (const box of list.querySelectorAll(".routine-toggle")) {
       out[box.dataset.routine].enabled = box.checked;
+    }
+    for (const sel of list.querySelectorAll(".routine-door")) {
+      out[sel.dataset.routine].door = sel.value;
     }
     return out;
   };

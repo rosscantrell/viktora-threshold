@@ -40,7 +40,8 @@ export const ROUTINES = [
     desc: "leads with the staged pre-work",
     defaultTime: "08:30",
     attended: true,
-    ping: { title: "Morning standup", body: "Your standup is prepared — open the brief to start." },
+    defaultDoor: "companion",
+    ping: { title: "Morning standup", body: "Your standup is ready — open the brief to start." },
     prompt: (tz) =>
       "Run my morning standup: call get_checkin_packet with tz_offset_minutes:" +
       tz +
@@ -55,6 +56,7 @@ export const ROUTINES = [
     desc: "short — what moved since morning",
     defaultTime: "12:30",
     attended: true,
+    defaultDoor: "today",
     ping: { title: "Midday check-in", body: "What's moved, what's slipping — a short reconcile." },
     prompt: (tz) =>
       "Run my midday check-in: get_checkin_packet with tz_offset_minutes:" +
@@ -68,6 +70,7 @@ export const ROUTINES = [
     desc: "closes the day, seeds tomorrow",
     defaultTime: "17:30",
     attended: true,
+    defaultDoor: "companion",
     ping: { title: "Evening debrief", body: "Close out the day and tee up tomorrow." },
     prompt: (tz) =>
       "Run my evening debrief: get_checkin_packet with tz_offset_minutes:" +
@@ -86,8 +89,9 @@ export function tzOffsetMinutes() {
 
 /**
  * Per-routine config, defaults merged in: { key: { time: "HH:MM",
- * enabled: bool } }. `enabled` only means anything for attended routines
- * (it gates the local ping); prework's schedule is engine-side.
+ * enabled: bool, door: "companion"|"today" } }. `enabled` and `door` only
+ * mean anything for attended routines (the ping and where engaging the
+ * routine lands); prework's schedule is engine-side and has no door.
  */
 export function loadRoutines() {
   let saved = {};
@@ -101,6 +105,10 @@ export function loadRoutines() {
       time: /^\d{2}:\d{2}$/.test(s.time) ? s.time : r.defaultTime,
       enabled: typeof s.enabled === "boolean" ? s.enabled : true,
     };
+    if (r.attended) {
+      cfg[r.key].door =
+        s.door === "companion" || s.door === "today" ? s.door : r.defaultDoor;
+    }
   }
   return cfg;
 }

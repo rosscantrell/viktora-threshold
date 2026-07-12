@@ -10,7 +10,7 @@
 // completion timestamp yet), and the real "what am I missing" (inbound-with-no-
 // response) is the engine North Star tracked separately.
 
-import { ROUTINES, tzOffsetMinutes } from "./routines.js";
+import { ROUTINES, loadRoutines, tzOffsetMinutes } from "./routines.js";
 
 const tauri = window.__TAURI__;
 const invoke = tauri.core.invoke;
@@ -96,6 +96,12 @@ function standupLabel(lensKey) {
 async function openStandup() {
   const routine =
     ROUTINES.find((r) => r.key === _lens) || ROUTINES.find((r) => r.key === "morning");
+  // The routine's door (Settings, per-routine): companion session or Today.
+  if (loadRoutines()[routine.key].door === "today") {
+    try { await invoke("widget_expand", { targetTab: "log" }); }
+    catch (e) { console.warn("[brief] open Today failed:", e); }
+    return;
+  }
   let url = (localStorage.getItem(COMPANION_URL_KEY) || COMPANION_DEFAULT_URL).trim();
   if (/^https:\/\/(www\.)?claude\.ai\/new\/?$/.test(url)) {
     url += "?q=" + encodeURIComponent(routine.prompt(tzOffsetMinutes()));
@@ -309,6 +315,14 @@ function renderLens(lensKey, buckets, now) {
   const lens = LENSES[lensKey];
   _lens = lensKey;
   document.getElementById("brief-standup-label").textContent = standupLabel(lensKey);
+  // Chip presentation follows the routine's door — ✦ marks a companion
+  // session; a Today door drops the mark and says where it goes.
+  const door = loadRoutines()[lensKey].door;
+  document.getElementById("brief-standup-glyph").textContent = door === "today" ? "" : "✦";
+  document.getElementById("brief-standup").title =
+    door === "today"
+      ? "Open Today for this check-in"
+      : "Run this check-in with your AI companion";
   document.getElementById("brief-tagline").textContent = lens.tagline;
   for (const tab of document.querySelectorAll(".brief-tab")) {
     tab.setAttribute("aria-selected", tab.dataset.lens === lensKey ? "true" : "false");
