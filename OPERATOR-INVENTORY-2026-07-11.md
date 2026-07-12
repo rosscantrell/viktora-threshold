@@ -76,6 +76,85 @@ Canonical home: `AI-Light-Prototype/schema-browser/experiments/field-projection/
 10. **Companion briefs** — WP-MCP-AGENT-ENDGAME-BRIEF (Part C = field-as-coordination-plane, the locked design), WP-INTAKE/CALENDAR/QCARD/MCP-V2/BYOM briefs, READINESS-TIER3 workback reasoning.
 11. **Query/eval** — DD-11 query-resolution spec (confidence envelope → response band); GT-EVAL harness.
 
+## Business mappings — what each operator ANSWERS, and what it may claim
+
+The mechanics table above says where signals live; this section says what they
+MEAN in business terms and how strongly they may be voiced. License rungs (the
+BI-LICENSE-MAP ladder, now served on the ledger): **assert** = state as fact
+with a receipt (interpret) · **opine** = offer as a suggestion/judgment with
+hedges · **never** = the claim the operator must not make. Composition rule:
+a combined answer inherits the WEAKEST license of its inputs.
+
+| Operator | The business question it answers | May assert | May opine | Must never claim |
+|---|---|---|---|---|
+| Priority (Focus/Watch) | "What should I act on first, and what can wait?" | the ranked sets + the reasoning the service computed | "do this first"; a hand-off suggestion (needsConfirmation) | that an unranked item doesn't matter |
+| Reassignment signals | "Should someone else own this?" | the signal behind the suggestion | the new owner, as a question | an ownership change (HITL only) |
+| Vigilance voids | "What did we send/promise that nothing came back for? Who's waiting on us?" | the void exists (receipt-backed); days waiting | egress = nudge candidate; ingress-owed = reputational risk, rank high | that the other party actually failed to respond (maybe off-corpus) |
+| Readiness | "Is prep actually happening for this due date?" | active/quiet with receipts | risk, for quiet items with runway | ANYTHING for 'unobservable'/'no-precursor' — never alarm on what it can't see |
+| Workback / effectiveDue | "What has to happen, by when, for this to land?" | the chain, the effectiveDue, a missed step date | slippage risk; a re-date proposal | a new date as fact (proposal only) |
+| Lifecycle / silence | "Has this gone quiet?" | silentDays, mentionsAfter | — | a CONCLUSION from silence — silence licenses a QUESTION, never a verdict |
+| Frames / Work Forest | "How is this project, as a whole, doing?" | membership, per-project SoP facts | project-level narrative (the SoP prose is calibrated for this) | cross-project priority (that's the priority operator's job) |
+| todaysPlan reconciliation | "Against what we agreed this morning — what moved, stalled, opened up?" | moved/stalled/newlyActionable with record refs | renegotiation suggestions | that an un-anchored item was 'planned' |
+| INFORM / STAKEHOLDER | "Who needs to know? Who are the stakeholders?" | the shared-subject basis (receipts) | the To/Cc suggestion, hedged by corpus-dependence | an auto-send; that absence of signal = not a stakeholder (tight corpora under-report) |
+| Entity cards / ownerLoad | "What's on this person's plate? What do we know about X?" | open items, receipts | 'check in on the PERSON' when load spikes | private-slice content to a non-entitled viewer |
+| Claims ledger / research story | "What's the exact evidence? How did this claim evolve?" | verbatim quotes (verbatimVerified only), the chronology | drift interpretation | an unverified quote AS a quotation |
+| Markers / synthesis | "What's worth surfacing at all?" | — (internal scoring) | the surfaced item (the whole engine is a calibrated opinion) | why something WASN'T surfaced (silence is a feature) |
+| Restatement / chronic-restatement | "Is this stuck? Have we said this N times?" | the repetition chain | 'something unstated is blocking this' | WHAT blocks it (that's an ask, not a read) |
+| get_proposals read-back | "What happened to what I proposed?" | disposition where the join is deterministic (link/edgeId) | inferred dispositions (dispositionBasis says so) | an inferred disposition as certain |
+| Questions lane | "What is only the human able to tell us?" | prior answers (idempotent — never re-ask) | the two prepared options offered | an answer on the human's behalf |
+| Task brief (equip) | "What does the executor need in hand to DO this?" | the assembled context + honest gaps | which gap matters most | content it didn't find ('no receipts newer than X' is the assertion) |
+| Availability | "When is there actually time?" | free/busy windows from the lane | a proposed slot | calendar content beyond windows |
+| SPOF / bridge-people (app-only) | "Where does one person's absence break us? Who connects groups?" | the structural read | a resilience concern | a personnel judgment |
+| Strategic T4/T5, OKR (app-only) | "What direction does the corpus imply? What would win?" | — | everything — this family is opine-or-lower by construction | any of it as established fact |
+
+## Composition recipes — answering complex questions
+
+The doctrine's assembly line covers the per-item flow. These are the
+CROSS-OPERATOR joins for the questions a chief of staff actually gets asked.
+Each names its inputs and the license of the ANSWER (weakest link).
+
+- **"Is this deliverable going to slip?"** = workback (chain + effectiveDue +
+  missed steps, assert) × readiness (quiet/active, assert) × lifecycle
+  (silence, question-only) × vigilance (who we're waiting on, assert) →
+  **opine** on risk, assert the components: "Step 2 hasn't been observed
+  (fact); prep has been quiet 9 days (fact); the pre-read depends on Muecher
+  who hasn't replied in 12 (fact) — I think this slips unless X (opinion)."
+- **"Is this project in trouble?"** = frame SoP (narrative) × chronic-
+  restatement (stuck items) × todaysPlan carry-forward × voids on its records
+  × decision follow-through (decisions whose implied commitments never moved)
+  → **opine**, receipts per component.
+- **"Who should I loop in / who's affected before I act?"** = who_to_inform
+  (suggestion) × edges depends_on (whose work this touches, assert) ×
+  bridge-people (app-only, structural) → **opine** the list, assert the bases.
+- **"Did we already decide this? Is this contradicting something?"** =
+  search_records × claims story (evolution, assert) × supersedes chain (newest
+  is truth, assert) × contradiction edges → **assert** with receipts; the
+  RESOLUTION of a contradiction is human-only.
+- **"What am I missing right now?"** = vigilance ingress-owed × intake
+  arrivals × newSince watermark × todaysPlan.newlyActionable → **assert** the
+  list; the interrupt-vs-hold call composes priority + effectiveDue vs the
+  check-in schedule (C2 gate).
+- **"Who's overloaded — should work move?"** = ownerLoad (assert) ×
+  reassignment signals (opine) × SPOF (structural) → **opine**; any move is a
+  proposal.
+- **"Can I say this in the deck / to the client?"** = license floor of every
+  input claim (ledger) × verbatimVerified for quotes × MIN-composition →
+  phrase each sentence at its own rung; the doctrine's PHRASE step.
+- **"What should the user do FIRST today?"** = priority Focus (opine) ×
+  due/effectiveDue (assert) × todaysPlan stalled (assert) × doctrine RANK →
+  **opine** an ordering, assert each item's facts.
+- **"Prepare this item completely" (the exceed-expectation move)** =
+  get_task_brief (equip, assert+gaps) → draft FROM it → who_to_inform for
+  recipients → license-check every claim → file_question for each honest gap
+  with two options → propose_to_outbox with artifacts → propose_record_edit
+  resolve when discharged. This is the assembly line instantiated; every hop
+  already exists as a capability.
+
+Rule of thumb for NEW complex questions: decompose to operators, take each
+component at its own license, compose the answer at the weakest rung present,
+and convert every gap the decomposition exposes into a filed question with
+prepared options — gaps are the highest-value corpus-patching channel.
+
 ## Notes for the Today-view redesign specifically
 
 Today currently stacks: read/SoP → Waiting-on-you (+Filed) → Coming up →
