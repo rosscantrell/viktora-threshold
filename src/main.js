@@ -5415,6 +5415,20 @@ function renderTodayPlanSection(tp) {
   const planRow = (ref, opts) => {
     const row = document.createElement("div");
     row.className = "today-planrec-row";
+    if (ref.recordId) {
+      // No title attr — the native tooltip reads as a stray chip (Ross);
+      // the pointer cursor + hover brightening carry the affordance.
+      row.classList.add("is-openable");
+      row.addEventListener("click", () => {
+        const rec = _todayCtx && _todayCtx.recordsById && _todayCtx.recordsById.get(ref.recordId);
+        if (rec && rec.documentId) {
+          openSourcePanel(rec.documentId, rec.verbatim || ref.summary || null);
+        } else {
+          // Honest: the record isn't in view (still loading, or not entitled).
+          showToast({ kind: "failure", title: "No source to open", body: "This item's source isn't in view — find it in the Log." });
+        }
+      });
+    }
     const mark = document.createElement("span");
     mark.className = "today-planrec-mark" + (opts.done ? " is-done" : "");
     mark.textContent = opts.done ? "✓" : "·";
@@ -5765,6 +5779,13 @@ async function loadTodayComingUp() {
   }
 
   const records = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
+  // recordId → record join for click-through (the plan stratum's rows open
+  // their source in the right pane through this, same pattern as everything).
+  if (_todayCtx) {
+    _todayCtx.recordsById = new Map(
+      records.map((it) => [((it && it.record) || {}).recordId, (it && it.record) || {}]).filter(([k]) => k),
+    );
+  }
   // Fail-closed-but-VISIBLE (house law §2b.3): whatever the junk gate
   // suppressed from this full payload stays countable and reviewable in the
   // header — never a silent disappearance. Plain language only.

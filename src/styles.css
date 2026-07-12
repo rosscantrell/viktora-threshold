@@ -2680,6 +2680,13 @@ code {
   align-items: baseline;
   gap: 8px;
   padding: 3px 0;
+  border-radius: var(--radius-sm);
+}
+.today-planrec-row.is-openable {
+  cursor: pointer;
+}
+.today-planrec-row.is-openable:hover .today-planrec-text {
+  color: var(--text-primary);
 }
 .today-planrec-mark {
   flex: none;
