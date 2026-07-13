@@ -5561,10 +5561,15 @@ function renderTodayPlanSection(tp) {
       row.classList.add("is-openable");
       row.addEventListener("click", () => {
         const rec = _todayCtx && _todayCtx.recordsById && _todayCtx.recordsById.get(ref.recordId);
-        if (rec && rec.documentId) {
-          openSourcePanel(rec.documentId, rec.verbatim || ref.summary || null);
+        // Prefer the documentId the packet carries on the plan item itself
+        // (engine #463) — freshly-minted plan records often aren't in the
+        // loaded decision-log context yet, which left this path with nothing
+        // real to open (the live 2026-07-13 "No source to open" bug).
+        const srcDocId = ref.documentId || (rec && rec.documentId) || null;
+        if (srcDocId) {
+          openSourcePanel(srcDocId, (rec && rec.verbatim) || ref.summary || null);
         } else {
-          // Honest: the record isn't in view (still loading, or not entitled).
+          // Honest: no source ref on the wire and the record isn't in view.
           showToast({ kind: "failure", title: "No source to open", body: "This item's source isn't in view — find it in the Log." });
         }
       });
