@@ -208,12 +208,15 @@ loop with" and "real data to validate identity against":
   independently-captured corpora of shared events AND ground-truth identity —
   this is what scores the cross-corpus join and gates Phase 3.
 
-**Topology:** one experimental droplet, **multiple engine instances on distinct
-ports**, each with its own corpus dir, users.json, peer-links.json, and
-launcher env (`ENGINE_PROFILE=pilot-full` + explicit experiment flags).
-Cross-server semantics are preserved (distinct origins over HTTP). If
-demo.viktora.ai still serves prospects, keep experiments OFF it — a small
-dedicated droplet is cleaner; Ross's call.
+**Topology (Ross ruling 2026-07-13): the demo droplet is the experimental
+host** — no new droplet, no added spend. **Multiple engine instances on
+distinct ports**, each with its own corpus dir, users.json, peer-links.json,
+and launcher env (`ENGINE_PROFILE=pilot-full` + explicit experiment flags).
+Cross-server semantics are preserved (distinct origins over HTTP).
+Housekeeping before first deploy: inventory what currently runs on demo
+(PM2 list, nginx vhosts, disk) and keep the experimental instances on their
+own ports/process names so any residual demo duty is untouched; experimental
+corpora live under their own paths, never in an existing corpus dir.
 
 **Live-corpus rule:** ross.viktora.ai participates as **SENDER-only** until P2
 verbs stabilize (no purge endpoint ⇒ received experimental docs are manual to
