@@ -276,6 +276,18 @@ pub struct AppConfig {
     /// `auto_import` / `email_follow`.
     #[serde(default)]
     pub onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig,
+    /// Ross ruling 2026-07-13 — the local-Outlook COM thread-follower (WP-INTAKE
+    /// E5-app, `email_follow_sweep` / the "email" callee) is parked as a
+    /// config-gated, DEFAULT-OFF break-glass fallback. The Power Automate flow →
+    /// OneDrive file pipeline (`onedrive_mail_sweep` / the "email-files" callee)
+    /// is now the PRIMARY email transport; the COM sweep is redundant for flow
+    /// users and is the path most likely to fire Outlook's object-model-guard
+    /// security prompt, so it stays OFF unless a pilot's flow path is org-blocked.
+    /// `bool` defaults to `false` via the container-level `#[serde(default)]` ⇒
+    /// legacy configs without the field deserialize with the follower OFF —
+    /// additive-only schema delta, same pattern as `auto_import` / `email_follow`.
+    #[serde(default)]
+    pub email_com_follower_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -293,6 +305,7 @@ impl Default for AppConfig {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            email_com_follower_enabled: false,
         }
     }
 }
@@ -7118,6 +7131,14 @@ async fn onenote_auto_import_sweep(
 pub struct EmailFollowSweepSummary {
     /// Not configured (no base URL / bearer, or no config loaded yet). Calm.
     pub skipped: bool,
+    /// Ross ruling 2026-07-13 — the local-Outlook COM follower is parked as a
+    /// DEFAULT-OFF break-glass fallback (`AppConfig.email_com_follower_enabled`).
+    /// When that flag is false this is `true` and every OTHER field is zero: the
+    /// sweep did NO work and made ZERO engine calls (the gate returns BEFORE any
+    /// HTTP). Calm, not an error — the OneDrive file sweep is the primary email
+    /// transport. The callee stays registered, so flipping the flag on at runtime
+    /// is honored on the next tick.
+    pub disabled_by_config: bool,
     /// Engine flag `EMAIL_THREAD_FOLLOW_ENABLED` state. `false` ⇒ the engine
     /// returned `{enabled:false}` (calm no-op) — everything else is zero.
     pub enabled: bool,
@@ -7314,6 +7335,24 @@ fn persist_email_follow_thread(
     *guard = Some(cfg);
 }
 
+/// The break-glass config gate for the parked COM follower (Ross ruling
+/// 2026-07-13). Returns `Some(disabled-by-config summary)` when the follower
+/// flag is OFF — the caller returns it immediately, BEFORE any engine traffic —
+/// or `None` when the flag is ON and the sweep should proceed exactly as before.
+/// Pure + side-effect-free so the gate is unit-tested without a Tauri runtime
+/// (the async command itself needs an `AppHandle`). When it returns `Some`, the
+/// summary carries `disabled_by_config = true` and every other field is its
+/// `Default` zero — proof that no work was attempted.
+fn email_com_follower_gate(enabled: bool) -> Option<EmailFollowSweepSummary> {
+    if enabled {
+        return None;
+    }
+    Some(EmailFollowSweepSummary {
+        disabled_by_config: true,
+        ..Default::default()
+    })
+}
+
 /// WP-INTAKE E5-app — one-shot email thread-following sweep, driven by the
 /// shared app-side channel tick (widget.js `email` callee). See the section
 /// header above for the full flow. Never `Err`s in a way that aborts the tick:
@@ -7332,6 +7371,22 @@ async fn email_follow_sweep(
             return Ok(summary);
         }
     };
+
+    // ── 0.5. COM-follower break-glass gate (Ross ruling 2026-07-13) ──
+    // The local-Outlook COM follower is parked as a DEFAULT-OFF break-glass
+    // fallback — the OneDrive file sweep ("email-files") is the primary email
+    // transport. When the flag is false, return a calm disabled-by-config
+    // summary BEFORE any engine traffic (zero HTTP), never a tick crash. The
+    // callee stays registered so a runtime flip (config change) is honored on
+    // the very next tick — the gate re-reads the current config each pass.
+    if let Some(summary) = email_com_follower_gate(cfg.email_com_follower_enabled) {
+        // Fail-closed-but-VISIBLE: a sweep that ran leaves a trace in the log.
+        log::info!(
+            "WP-INTAKE E5: email COM follower disabled by config (break-glass fallback, default off) — calm no-op, zero engine traffic"
+        );
+        return Ok(summary);
+    }
+
     if cfg.base_url.trim().is_empty() || cfg.bearer_token.trim().is_empty() {
         summary.skipped = true;
         return Ok(summary);
@@ -10298,6 +10353,7 @@ mod tests {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            email_com_follower_enabled: false,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -10364,6 +10420,7 @@ mod tests {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            email_com_follower_enabled: false,
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -11132,6 +11189,7 @@ mod tests {
         // receipt; a drift to snake_case would break the callee's log line.
         let s = EmailFollowSweepSummary {
             skipped: false,
+            disabled_by_config: false,
             enabled: true,
             platform_unsupported: false,
             threads_total: 5,
@@ -11146,11 +11204,70 @@ mod tests {
         };
         let json = serde_json::to_string(&s).expect("serializes");
         assert!(json.contains("\"platformUnsupported\":false"), "{}", json);
+        assert!(json.contains("\"disabledByConfig\":false"), "{}", json);
         assert!(json.contains("\"enabled\":true"), "{}", json);
         assert!(json.contains("\"threadsChecked\":3"), "{}", json);
         assert!(json.contains("\"imported\":4"), "{}", json);
         assert!(json.contains("\"duplicates\":1"), "{}", json);
         assert!(json.contains("\"deferredMessages\":7"), "{}", json);
+    }
+
+    // ───── COM-follower break-glass gate (Ross ruling 2026-07-13) ─────
+    //
+    // The local-Outlook COM follower is parked as a config-gated, DEFAULT-OFF
+    // break-glass fallback: the OneDrive file sweep is the primary email
+    // transport. These pin (1) the flag defaults OFF (legacy configs too), (2)
+    // OFF ⇒ a calm disabled-by-config summary with NO work attempted (the gate
+    // returns before any HTTP, so zero engine traffic), and (3) ON ⇒ the gate
+    // steps aside so the sweep proceeds with its previous behavior.
+
+    #[test]
+    fn email_com_follower_flag_defaults_off() {
+        // Default constructor is OFF.
+        assert!(!AppConfig::default().email_com_follower_enabled);
+        // A legacy config JSON (no such field) deserializes to OFF via the
+        // container-level #[serde(default)] — nobody is opted in by upgrade.
+        let legacy: AppConfig = serde_json::from_str(
+            r#"{"base_url":"https://x","bearer_token":"t","mode":"workspace"}"#,
+        )
+        .expect("legacy config parses");
+        assert!(
+            !legacy.email_com_follower_enabled,
+            "legacy config must default the follower OFF"
+        );
+    }
+
+    #[test]
+    fn email_com_follower_gate_off_returns_disabled_summary_no_work() {
+        // Flag OFF ⇒ the gate short-circuits with a disabled-by-config summary.
+        let summary = email_com_follower_gate(false).expect("OFF ⇒ Some(summary)");
+        assert!(summary.disabled_by_config, "must mark disabled_by_config");
+        // Proof no work was attempted: every other field is its zero value.
+        // (The command returns THIS summary BEFORE any engine call — zero HTTP.)
+        assert_eq!(summary, EmailFollowSweepSummary {
+            disabled_by_config: true,
+            ..Default::default()
+        });
+        assert!(!summary.enabled);
+        assert!(!summary.platform_unsupported);
+        assert_eq!(summary.threads_total, 0);
+        assert_eq!(summary.threads_checked, 0);
+        assert_eq!(summary.imported, 0);
+        assert_eq!(summary.duplicates, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.discovered, 0);
+        // The disabled summary serializes with the camelCase flag the callee reads.
+        let json = serde_json::to_string(&summary).expect("serializes");
+        assert!(json.contains("\"disabledByConfig\":true"), "{}", json);
+    }
+
+    #[test]
+    fn email_com_follower_gate_on_steps_aside() {
+        // Flag ON ⇒ the gate returns None so the sweep proceeds as before.
+        assert!(
+            email_com_follower_gate(true).is_none(),
+            "ON ⇒ None (sweep proceeds with previous behavior)"
+        );
     }
 
     #[test]

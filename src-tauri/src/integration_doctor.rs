@@ -321,7 +321,13 @@ pub struct EngineProbe {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub availability_lane_enabled: Option<bool>,
     /// Whether the email-thread-follow lane is enabled server-side (from GET
-    /// /api/email/followed-threads `{enabled:false}` vs a threads body).
+    /// /api/email/followed-threads `{enabled:false}` vs a threads body). This is
+    /// the ENGINE lane posture ONLY — it does NOT mean the app-side local-Outlook
+    /// COM follower is running. Ross ruling 2026-07-13: that follower is parked
+    /// as a config-gated, DEFAULT-OFF break-glass fallback
+    /// (`AppConfig.email_com_follower_enabled`), with the OneDrive file sweep as
+    /// the primary email transport — so even with this engine lane ON, the COM
+    /// sweep stays a calm no-op unless the app flag is explicitly flipped on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email_thread_follow_enabled: Option<bool>,
     /// The configured base URL (host only is not stripped — it's the user's own
