@@ -49,6 +49,13 @@ field" ruling generalizes across corpora — companions never need a chat channe
    triggered — but see §6 on the demo droplet.
 2. **ONE COMPANION per human** (Ross, 2026-07-11): new human = new companion;
    companions coordinate through the field, never through session choreography.
+   **Scope clarification (2026-07-13, coordinated with the work-forest arc):**
+   the ruling governs cross-HUMAN topology. Intra-corpus per-frame workers
+   (Ross's per-project companion direction) are consistent with it — they are
+   workers under the human's single companion (the chief-of-staff voice is
+   "the companion" in this brief's sense), they coordinate through the field,
+   and ALL cross-human traffic still flows companion↔companion over peer
+   links. A per-frame worker never holds a peer link of its own.
 3. **Ask-boundary**: drafting is free; *sending to a third party* requires the
    sender's human. Peer traffic is third-party send ⇒ human-gated on the send
    side. Receive side follows the WP-INTAKE ruling: auto-ingest, receipts are
@@ -161,7 +168,15 @@ cross-corpus record minting, ever (receiver's HITL posture is sovereign).
     "inReplyTo": "<documentId of the envelope this answers>",   // answer/receipt only
     "senderRecordIds": ["…"],   // sender-side ids, provenance only — NEVER
                                 // assumed resolvable on the receiver
-    "entityHints": ["acme-renewal", "brian-k"]  // sender's slugs, hints only
+    "entityHints": ["acme-renewal", "brian-k"],  // sender's slugs, hints only
+    "frameHint": "acme-renewal-q3"  // OPTIONAL: sender's job/frame slug for the
+                                    // work this envelope belongs to. Hint-only
+                                    // like everything else — never dereferenced
+                                    // in P1–P2 logic; the receiver's placement
+                                    // machinery (prose-jobs / jobless backfill,
+                                    // work-forest arc) MAY use it as a prior so
+                                    // incoming handoffs don't land jobless/
+                                    // invisible in the By-project Log.
   }
 }
 ```
@@ -251,6 +266,15 @@ sides; kill B's token → A shows `disconnected` with reconnect hint, item held
    prework pass** (draft → B's human gate → answer envelope back); the answer
    lands as A's substrate (answers-become-substrate, the re-ask killer,
    structurally).
+   **Attention-budget arbitration (staked 2026-07-13, coordinated with the
+   work-forest `oneQuestion` design):** an incoming peer question does NOT
+   consume the receiving human's check-in question slot by default. It arrives
+   as receipted intake; the receiving COMPANION tries to answer it from the
+   field during prework (zero human attention cost — equip-don't-remind).
+   Only if the field can't answer does the companion file it locally via
+   `file_question`, where it competes in the global one-question-per-check-in
+   budget on VOI/stakes like any other question. One budget, one arbiter,
+   regardless of source (engine QE / filed local / peer envelope).
 2. **commitment handoff** — envelope content is the baton-with-content pattern
    (the pass-back names its expected input); receiver's extraction mints the
    commitment + `depends_on` locally (mint-lane verified 2026-07-10: action-list
