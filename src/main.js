@@ -1067,14 +1067,16 @@ function buildCalendarCard(report, ics) {
   };
 
   if (cal.readerPresent && !probeFailed) {
-    detail = "Threshold can read the calendar on this computer. It will ask for access once.";
-    actions.push({ label: "Allow access", primary: true, onClick: runLiveProbe });
+    pill = "1 min";
+    detail = "Publish a busy-times link from Outlook on the web and paste it here — syncs even with your laptop closed.";
+    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card, report) });
+    actions.push({ label: "Use this computer's calendar", link: true, onClick: runLiveProbe });
   } else if (cal.readerPresent && probeFailed) {
     detail = lastCalendarProbe.state === "permissionNeeded"
       ? "Access was declined. Enable Threshold under System Settings → Privacy & Security → Automation, then try again — or use a shared calendar link."
       : "The calendar couldn't be read on this computer. Try again — or use a shared calendar link instead.";
-    actions.push({ label: "Try again", primary: true, onClick: runLiveProbe });
-    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card) });
+    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card, report) });
+    actions.push({ label: "Try this computer again", link: true, onClick: runLiveProbe });
   } else {
     pill = "1 min";
     detail = icsConfigured && ics?.lastError
