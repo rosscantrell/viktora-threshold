@@ -42,6 +42,18 @@
 //!
 //! NO LLM anywhere here — the import is deterministic substrate; extraction and
 //! markers happen engine-side, fire-and-forget, exactly like the webhook.
+//!
+//! ── PARKED: DEFAULT-OFF break-glass fallback (Ross ruling 2026-07-13) ─────────
+//! This COM follower is now a config-gated, DEFAULT-OFF break-glass fallback.
+//! The Power Automate flow → OneDrive file pipeline (`onedrive_mail_sweep`, the
+//! "email-files" callee) is the PRIMARY email transport; the COM sweep is
+//! redundant for flow users and is the path most likely to fire Outlook's
+//! object-model-guard security prompt (see E5-2 below). It is gated by
+//! `AppConfig.email_com_follower_enabled` (default `false`): when off,
+//! `email_follow_sweep` short-circuits with a `disabledByConfig` summary BEFORE
+//! any engine traffic. Enable it ONLY for a pilot whose flow/OneDrive path is
+//! org-blocked. The E5-1..E5-7 Windows checklist below therefore only applies
+//! once a pilot has deliberately flipped the follower on.
 
 use serde::{Deserialize, Serialize};
 
@@ -865,6 +877,12 @@ pub fn run_follow_read(_input: FollowReadInput) -> Result<FollowReadOutput, Emai
 // syntactic anchors (owning platform + cross-platform since generation is pure).
 //
 // ── Extended Windows live-verification checklist (E5-app additions) ──────────
+// PARKED (Ross ruling 2026-07-13): the COM follower is a DEFAULT-OFF break-glass
+// fallback gated by `AppConfig.email_com_follower_enabled` — the OneDrive file
+// sweep is the primary email transport. This checklist only applies AFTER a
+// pilot has deliberately flipped the follower on because their flow/OneDrive
+// path is org-blocked; on a normal (flow-enabled) install the follower never
+// runs, so none of E5-1..E5-7 fires.
 // The COM path can't run off Windows; these join the existing OneNote/calendar
 // Windows smoke on Trisha's machine (coordinator-run). NEW items for MAIL read:
 //   E5-1. Outlook build: desktop M365/2016+ (COM present), NOT the sandboxed

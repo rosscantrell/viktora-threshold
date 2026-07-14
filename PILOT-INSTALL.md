@@ -179,6 +179,14 @@ the flows is a one-minute, no-admin step.
 > A blocked connector ("your admin hasn't allowed this") is an org policy, not a
 > bug — the doctor records "blocked by org" and falls back to the classic-Outlook
 > or add-in path. Nothing here exposes more than the email you already receive.
+>
+> **Break-glass only — the classic-Outlook COM thread-follower is OFF by default**
+> (Ross ruling 2026-07-13). This OneDrive mail flow is the primary email transport.
+> The app also ships a local-Outlook COM thread-follower (desktop Outlook only),
+> but it is redundant for flow users and is the path most likely to trip Outlook's
+> "a program is trying to access…" object-model-guard prompt, so it stays disabled
+> unless your flow/OneDrive path is org-blocked. Turn it on only in that case, by
+> setting `email_com_follower_enabled: true` in the app config.
 
 ---
 

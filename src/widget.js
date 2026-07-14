@@ -812,6 +812,13 @@ registerChannelCallee("onenote", onenoteSweep);
 // This callee is a thin driver: it invokes the command, logs a concise receipt
 // (threads checked / messages imported / deferred), distinguishes a platform
 // no-op from a real failure, and NEVER rethrows into the shared tick.
+//
+// PARKED (Ross ruling 2026-07-13): the COM follower is a config-gated,
+// DEFAULT-OFF break-glass fallback (`AppConfig.email_com_follower_enabled`) —
+// the OneDrive file sweep ("email-files") is the primary email transport. With
+// the flag off the command returns `{disabledByConfig:true}` (zero engine
+// traffic) and this callee logs a quiet no-op. The callee stays registered so a
+// runtime flip (config change) is honored on the next tick.
 
 async function emailFollowSweep() {
   let summary;
@@ -826,6 +833,15 @@ async function emailFollowSweep() {
   }
   if (!summary || summary.skipped) {
     // Not configured yet (fresh install before Configure) — silent no-op.
+    return;
+  }
+  if (summary.disabledByConfig) {
+    // Ross ruling 2026-07-13 — the local-Outlook COM follower is parked as a
+    // default-off break-glass fallback (the OneDrive file sweep, "email-files",
+    // is the primary email transport). Quiet no-op made with zero engine
+    // traffic; the callee stays registered so a runtime config flip is honored
+    // on the next tick. Never rethrows.
+    console.log("[email-follow] disabled by config (break-glass follower is off by default)");
     return;
   }
   if (summary.platformUnsupported) {
