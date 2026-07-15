@@ -219,3 +219,56 @@ watched, not assumed.
 **Cost posture:** charters are ~one-time per region + slow amendments; groomer pass
 rides the runner's caching (~$0.25-0.40/pass precedent); briefs are composed on write
 paths and pull-served (no read-path LLM — the #467 law).
+
+---
+
+## §8 Cross-session build-to amendments (2026-07-15 review, enhancements session — BINDING)
+
+Review verdict: three endorsements with terms, one unification requirement. Nothing
+else contested. The reviewing session is at compaction; these terms are recorded in
+its successor-inherited memory — the contract survives the handoff.
+
+**§8.1 Groomer pass (amends §6/§7 P1):**
+- Its own `DEFAULT_MAX_TOOL_CALLS` entry (store-overridable); the differential
+  whitelist test pins its EXACT tool set.
+- Bank-as-you-go prompt ordering + capNote apply (post-#481 pass-family conventions).
+- Transcript persistence (#491) applies — groomer runs must be EXCLUDED from the
+  voice backend's same-mind continuation pool (`CONTINUE_PASS_RANK`): a groomer run is
+  not a resumable working session. Flag in the PR body; the enhancements
+  session/successor takes the backend edit.
+- **Tier declaration:** apply-within-preratified-classes is the FIRST unattended APPLY
+  in the system. The PR must declare it as a deliberate tier decision (the #472
+  pattern); apply-capable classes are pinned CLOSED (enum, not pattern) by the
+  differential test; receipts + undo are load-bearing, not optional.
+
+**§8.2 propose_correction (amends §6 P0) — UNIFICATION REQUIREMENT:**
+This verb is the intake half of the enhancements session's parked WP
+"conversational field corrections as bulk HITL" (same founding incident: OLYSENSE).
+One design, two halves: P0 = typed intake + preratified mechanical apply for CLOSED
+classes; the parked half = scope-preview + one-approval-many-writes bulk ratify for
+fan-out corrections. Build-to so the bulk half bolts on:
+- The correction record carries a `scope` field (`single-record | canon-fanout`) from
+  day one, even while v1 implements only the closed single-class applies.
+- Idempotency from day one (the #492 lesson): findPendingDuplicate-style join — a
+  repeated utterance never mints a duplicate correction row.
+- Same-PR capability-ledger entry with a host-search-optimized description.
+- Voice surface: the verb joins the voice backend's tool allowlist
+  (`VOICE_LLM_ALLOWED_TOOLS`, companion-backend.mjs on the droplet) — the enhancements
+  session/successor's edit; ping at PR time.
+- Doctrine text ("user corrects a name/fact → file via propose_correction, confirm at
+  next check-in") is their surface — same-day co-ship per the #473/#479 pattern; ping
+  at PR time.
+
+**§8.3 Region briefs + license inheritance (amends §4):**
+- Briefs are PULL-served ONLY; the packet carries pointers/counts, never brief bodies
+  (v3.2 payload discipline).
+- Min-of-chain license phrasing must survive the SPOKEN register in plain product
+  language — the words "license" and "posterior" never surface in anything a
+  companion says aloud (house law); hedging is expressed as natural speech
+  ("my working read", "not fully confirmed yet").
+
+**§8.4 Graded sessions as the outcome stream (amends §5/P4):**
+Future session grades emit a machine-readable row per rubric axis (JSONL alongside
+the prose report) carrying attribution ids (proposalIds per #466, qids per #452,
+run/session ids). The autonomy-posterior machinery consumes that stream and NEVER
+parses prose.
