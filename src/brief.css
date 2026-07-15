@@ -70,8 +70,11 @@ body {
 }
 .brief-section-head:hover { background: rgba(255,255,255,0.03); }
 .brief-caret { color: var(--text-tertiary); font-size: 9px; width: 9px; flex: 0 0 auto; }
-.brief-section-label { color: var(--text-primary); font-size: 12px; font-weight: 500; }
-.brief-section-count { color: var(--text-secondary); font-size: 11px; margin-left: auto; }
+.brief-section-label { color: var(--text-primary); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.brief-section-count {
+  color: var(--text-secondary); font-size: 11px; margin-left: auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 .brief-section.tone-fire .brief-section-label,
 .brief-section.tone-fire .brief-section-count { color: var(--warn-text); }
 .brief-items { padding: 1px 3px 2px; }

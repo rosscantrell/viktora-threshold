@@ -388,11 +388,12 @@ function renderPreparedBand(host, prework, delivered, expanded) {
   label.textContent = "✦ Prepared for you";
   const count = document.createElement("span");
   count.className = "brief-section-count";
-  const readyN = items.filter((it) => it.draftComplete).length;
+  // Short count — the per-row status tags carry the ready/needs-input detail,
+  // so the header just sizes the pile (a long count wrapped the label at 360px).
   const bits = [];
-  if (items.length) bits.push(readyN ? `${items.length} · ${readyN} ready` : String(items.length));
+  if (items.length) bits.push(`${items.length} staged`);
   if (cards.length) bits.push(`${cards.length} answered`);
-  if (outbox.length) bits.push(`${outbox.length} delivered`);
+  if (outbox.length) bits.push(`${outbox.length} in Outbox`);
   count.textContent = bits.join(" · ");
   head.append(caret, label, count);
   wrap.appendChild(head);
