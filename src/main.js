@@ -4597,12 +4597,17 @@ async function enterLogView() {
     .then(() => {
       renderTodayDecisionLog().catch((e) => console.warn("[main] decision-log summary:", e));
       // ② Your week (also contributes ①'s no-precursor rows + the Log line count).
-      loadTodayComingUp().catch((e) => console.warn("[main] Your week:", e));
+      loadTodayComingUp().catch((e) => {
+        console.warn("[main] Your week:", e);
+        if (!_missSettled.week) missSettle("week", true); // never skeleton-forever
+      });
     })
     .catch((e) => {
       console.warn("[main] Today context:", e);
       renderTodayDecisionLog().catch(() => {});
-      loadTodayComingUp().catch(() => {});
+      loadTodayComingUp().catch(() => {
+        if (!_missSettled.week) missSettle("week", true);
+      });
     });
 
   // The State-of-Play narrative is Today's FIRST stratum — it must load itself.
@@ -4614,14 +4619,30 @@ async function enterLogView() {
   // synthesis.
   // ① Don't miss — the vigilance half of the curated list (② adds the
   //    readiness half when the full records land).
-  loadTodayMissVoids().catch((e) => console.warn("[main] Don't miss (voids):", e));
+  loadTodayMissVoids().catch((e) => {
+    console.warn("[main] Don't miss (voids):", e);
+    if (!_missSettled.voids) missSettle("voids", true); // never skeleton-forever
+  });
 
   // ③ Your plan + ④'s staged half — ONE packet fetch feeds both (the same
   //    packet the companion's check-ins read; the drift rule, 2026-07-12).
-  loadTodayPlan().catch((e) => console.warn("[main] Your plan:", e));
+  loadTodayPlan().catch((e) => {
+    console.warn("[main] Your plan:", e);
+    if (!_preparedSettled.prework) {
+      _preparedFailed.prework = true;
+      renderPreworkStaging(null);
+    }
+  });
 
   // ④ Prepared for you — the outbox half (approved, awaiting send).
-  loadTodayPlanDrafts().catch((e) => console.warn("[main] Prepared for you:", e));
+  loadTodayPlanDrafts().catch((e) => {
+    console.warn("[main] Prepared for you:", e);
+    if (!_preparedSettled.outbox) {
+      _preparedFailed.outbox = true;
+      _preparedSettled.outbox = true;
+      reconcilePreparedState();
+    }
+  });
 
   // ④ One question — the organizing-question queue, one at a time.
   loadTodayQuestions().catch((e) => console.warn("[main] Questions:", e));
@@ -4652,6 +4673,7 @@ function renderTodaySkeleton() {
   if (missCount) missCount.textContent = "";
   _missPool = [];
   _missSettled = { voids: false, week: false };
+  _missFailed = { voids: false, week: false };
 
   // ② Your week — hidden until the full-records source lands.
   const nextWeeks = document.getElementById("today-nextweeks-section");
@@ -4660,6 +4682,8 @@ function renderTodaySkeleton() {
     const el = document.getElementById(id);
     if (el) el.innerHTML = "";
   }
+  const outlookRows = document.getElementById("today-outlook-rows");
+  if (outlookRows) outlookRows.hidden = false; // re-shown after an errored entry hid it
   const restWrap = document.getElementById("today-outlook-rest");
   if (restWrap) restWrap.hidden = true;
   const restToggle = document.getElementById("today-week-rest-toggle");
@@ -4693,6 +4717,7 @@ function renderTodaySkeleton() {
   const preparedCount = document.getElementById("today-prepared-count");
   if (preparedCount) preparedCount.textContent = "";
   _preparedSettled = { prework: false, outbox: false };
+  _preparedFailed = { prework: false, outbox: false };
 
   // ④ One question — clear both slots; the filed line hides until data.
   const qSlot = document.getElementById("today-question-slot");
@@ -4794,6 +4819,7 @@ async function loadTodayContext() {
 const TODAY_MISS_CAP = 4;
 let _missPool = [];
 let _missSettled = { voids: false, week: false };
+let _missFailed = { voids: false, week: false };
 let _todayOverdueCount = null; // set by loadTodayComingUp (open, due < today)
 
 function missContribute(source, entries) {
@@ -4802,8 +4828,9 @@ function missContribute(source, entries) {
     .concat(entries.map((e) => ({ ...e, source })));
   renderTodayMiss();
 }
-function missSettle(source) {
+function missSettle(source, failed) {
   _missSettled[source] = true;
+  if (failed) _missFailed[source] = true;
   renderTodayMiss();
 }
 
@@ -4824,8 +4851,22 @@ function renderTodayMiss() {
   for (const e of show) list.appendChild(renderMissRow(e));
 
   const allSettled = _missSettled.voids && _missSettled.week;
+  const anyFailed = _missFailed.voids || _missFailed.week;
   if (skel) skel.hidden = show.length > 0 || allSettled;
-  if (emptyEl) emptyEl.hidden = !(allSettled && show.length === 0);
+  if (emptyEl) {
+    if (allSettled && anyFailed) {
+      // Fail-closed-but-VISIBLE: a source that couldn't be reached says so —
+      // never a skeleton-forever, never a false "nothing at risk" (the live
+      // 2026-07-15 slow-engine incident). The header Refresh is the retry.
+      emptyEl.textContent = show.length
+        ? "Part of this list couldn't load — Refresh to retry."
+        : "Couldn't reach Apolla — Refresh to retry.";
+      emptyEl.hidden = false;
+    } else {
+      emptyEl.textContent = "Nothing looks at risk of slipping past you.";
+      emptyEl.hidden = !(allSettled && show.length === 0);
+    }
+  }
   if (countEl) countEl.textContent = show.length ? String(show.length) : "";
 
   // The one quiet line into the Log: pool overflow + the overdue tail.
@@ -5454,7 +5495,7 @@ async function loadTodayMissVoids() {
     grouped = result.grouped; // null when flag off / old backend
   } catch (err) {
     console.warn("[main] fetch_vigilance_voids failed (Don't miss):", err);
-    missSettle("voids");
+    missSettle("voids", true); // couldn't-reach line, never a false-empty
     return;
   }
   const voids = Array.isArray(data && data.voids) ? data.voids : [];
@@ -5499,6 +5540,7 @@ async function loadTodayMissVoids() {
 // the scheduled pass may write ONLY staging + questions).
 // ══════════════════════════════════════════════════════════════════════════
 let _preparedSettled = { prework: false, outbox: false };
+let _preparedFailed = { prework: false, outbox: false };
 
 async function loadTodayPlan() {
   let data;
@@ -5510,9 +5552,11 @@ async function loadTodayPlan() {
       tzOffsetMinutes: -new Date().getTimezoneOffset(),
     });
   } catch (err) {
-    // Old server / unreachable — the stratum stays hidden, staging settles
-    // empty so ④'s empty-state math still resolves.
+    // Old server / unreachable — the plan stratum stays hidden; the staging
+    // half settles FAILED so ④ shows its couldn't-reach line instead of a
+    // false "nothing prepared" (fail-closed-but-VISIBLE).
     console.warn("[main] fetch_checkin_brief failed:", err);
+    _preparedFailed.prework = true;
     renderPreworkStaging(null);
     return;
   }
@@ -5726,7 +5770,21 @@ function reconcilePreparedState() {
     if (drafts) parts.push(`${drafts} to send`);
     countEl.textContent = parts.join(" · ");
   }
-  if (emptyEl) emptyEl.hidden = !(n === 0 && _preparedSettled.prework && _preparedSettled.outbox);
+  const settled = _preparedSettled.prework && _preparedSettled.outbox;
+  const anyFailed = _preparedFailed.prework || _preparedFailed.outbox;
+  if (emptyEl) {
+    if (settled && anyFailed) {
+      // Fail-closed-but-VISIBLE: a raced/failed fetch must never read as an
+      // honest "nothing prepared" (the live 2026-07-15 slow-engine incident).
+      emptyEl.textContent = n
+        ? "Part of this list couldn't load — Refresh to retry."
+        : "Couldn't reach Apolla — Refresh to retry.";
+      emptyEl.hidden = false;
+    } else {
+      emptyEl.textContent = "Nothing prepared right now.";
+      emptyEl.hidden = !(n === 0 && settled);
+    }
+  }
 }
 
 // WP-TODAY-BRIEF ④ (outbox half) — drafts from the AUTHORIZED lanes (attended
@@ -5741,8 +5799,9 @@ async function loadTodayPlanDrafts() {
     data = await tauri.core.invoke("fetch_outbox");
   } catch (err) {
     console.warn("[main] fetch_outbox failed (Prepared for you):", err);
+    _preparedFailed.outbox = true;
     _preparedSettled.outbox = true;
-    reconcilePreparedState(); // calm — never an error surface
+    reconcilePreparedState(); // calm couldn't-reach line, never a false-empty
     return;
   }
   const items = Array.isArray(data && data.items) ? data.items : [];
@@ -5908,7 +5967,7 @@ async function loadTodayComingUp() {
       // Fail-closed-but-VISIBLE: an errored band shows a calm line, never an
       // empty column that reads as broken layout (and never a hard error box).
       const rowsErr = document.getElementById("today-outlook-rows");
-      if (rowsErr) rowsErr.innerHTML = "";
+      if (rowsErr) { rowsErr.innerHTML = ""; rowsErr.hidden = true; } // bordered container reads as a broken pill when empty
       const legendErr = document.getElementById("today-outlook-legend");
       if (legendErr) legendErr.hidden = true;
       const quietErr = document.getElementById("today-comingup-empty");
@@ -5918,10 +5977,12 @@ async function loadTodayComingUp() {
       }
       if (countEl) countEl.textContent = "";
       section.hidden = false;
-      missSettle("week"); // never leave ① waiting on a failed source
+      missSettle("week", true); // never leave ① waiting on a failed source
       return;
     }
   }
+
+  rowsEl.hidden = false; // re-shown after an errored pass hid the bordered container
 
   const records = withoutDismissed(Array.isArray(data && data.records) ? data.records : []);
   // recordId → record join for click-through (the plan stratum's rows open
