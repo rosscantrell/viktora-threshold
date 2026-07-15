@@ -2055,6 +2055,84 @@ async fn fetch_checkin_brief(
         .map_err(|e| format!("fetch_checkin_brief: parse response failed: {e}"))
 }
 
+/// WP-COMPANION-PLAN surface — the companion's own persisted plan of record
+/// (engine #500). Proxies GET /api/companion-plan (Threshold bearer lane).
+/// Serves {summary, items}; a 404 means COMPANION_PLAN_ENABLED is off on this
+/// engine — the frontend treats that as calm absence, never an error surface.
+#[tauri::command]
+async fn fetch_companion_plan(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/companion-plan", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if status.as_u16() == 404 {
+        // Flag off / older engine — calm absence, not an error.
+        return Ok(serde_json::json!({ "enabled": false }));
+    }
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_companion_plan: parse response failed: {e}"))
+}
+
+/// WP-COMPANION-PLAN surface — the HUMAN side of the veto lane. Proxies
+/// PATCH /api/companion-plan/:itemId with {action: veto|unveto|edit-title,
+/// title?}. Veto is the human's alone (the engine refuses it from agents);
+/// this IPC is what makes the plan genuinely vetoable from the widget.
+#[tauri::command]
+async fn companion_plan_action(
+    state: tauri::State<'_, AppState>,
+    item_id: String,
+    action: String,
+    title: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/companion-plan/{}",
+        cfg.base_url.trim_end_matches('/'),
+        item_id
+    );
+    let mut body = serde_json::json!({ "action": action });
+    if let Some(t) = title {
+        body["title"] = serde_json::Value::String(t);
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .patch(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("companion_plan_action: parse response failed: {e}"))
+}
+
 // ── WP-Outlook-Writeback — staged-outbox IPCs ──
 //
 // The desktop SURFACES the staged outbox (drafts Threshold composed) for
@@ -9668,6 +9746,8 @@ pub fn run() {
             // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
             fetch_decision_log_full,
             fetch_checkin_brief,
+            fetch_companion_plan,
+            companion_plan_action,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
             patch_edge_status,
             // WP-THRESHOLD-RECORD-HITL — server-side record disposition
