@@ -173,8 +173,11 @@ function computeBuckets(records, now, prevSet) {
     // (overdue or due this work-week). The current-data proxy for "am I missing this".
     if (silentDays != null && silentDays >= SILENT_DAYS && t <= weekEndMs) b.silent.push(e);
   }
-  // Overdue leads with the at-risk (on fire) ones; everything else soonest-first.
-  b.overdue.sort((x, y) => (y.atRisk - x.atRisk) || (x.t - y.t));
+  // Overdue leads with the at-risk (on fire) ones, then FRESHEST slippage first
+  // (Ross 2026-07-15, the thirty-day-horizon companion rule): what just slipped
+  // deserves the attention; the near-30d tail sits at the bottom, adjacent to
+  // the tracked "N older than a month" line.
+  b.overdue.sort((x, y) => (y.atRisk - x.atRisk) || (y.t - x.t));
   ["dueToday", "restOfWeek", "comingUp", "silent"].forEach((k) => b[k].sort((x, y) => x.t - y.t));
   b.overdueAtRiskN = b.overdue.filter((e) => e.atRisk).length;
   b.newSinceLast = [...b.overdue, ...b.dueToday, ...b.restOfWeek, ...b.comingUp]
