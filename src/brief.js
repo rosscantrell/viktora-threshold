@@ -20,6 +20,10 @@ const invoke = tauri.core.invoke;
 // ───────────────────────────────────────────────────────────────────────────
 const SILENT_DAYS = 3;      // "no one's checked in on this" threshold (mid-day)
 const ROWS_PER_SECTION = 10; // cap — she complained about endless scrolling
+// THE THIRTY-DAY HORIZON (Ross's rule, doctrine §7 via engine #494): items
+// overdue more than ~30 days are TRACKED, not walked — the deep backlog is a
+// number you report, not a list you read. Same rule here as in the companion.
+const AGED_OVERDUE_DAYS = 30;
 
 // The four buckets, always in this order. tone:"fire" spends the one amber accent.
 const CORE_SECTIONS = [
@@ -137,7 +141,7 @@ function computeBuckets(records, now, prevSet) {
   const weekEndMs = t0 + addToFri * dayMs + (dayMs - 1);
   const horizonMs = t0 + 14 * dayMs;
 
-  const b = { overdue: [], dueToday: [], restOfWeek: [], comingUp: [], silent: [] };
+  const b = { overdue: [], dueToday: [], restOfWeek: [], comingUp: [], silent: [], agedOverdueN: 0 };
   const seenIds = [];
   for (const it of Array.isArray(records) ? records : []) {
     const rec = (it && it.record) || {};
@@ -158,6 +162,9 @@ function computeBuckets(records, now, prevSet) {
     const isNew = prevSet ? !!rec.recordId && !prevSet.has(rec.recordId) : false;
     const e = { rec, d, t, atRisk, silentDays, isNew, owner: rec.owner || "", summary: (rec.summary || "").trim(), documentId: rec.documentId };
 
+    // Thirty-day horizon: >30d overdue is tracked (counted), never walked here.
+    // At-risk items are exempt — "on fire" always earns its row regardless of age.
+    if (t < t0 - AGED_OVERDUE_DAYS * dayMs && !atRisk) { b.agedOverdueN += 1; continue; }
     if (t < t0) b.overdue.push(e);
     else if (t < t0 + dayMs) b.dueToday.push(e);
     else if (t <= weekEndMs) b.restOfWeek.push(e);
@@ -166,8 +173,11 @@ function computeBuckets(records, now, prevSet) {
     // (overdue or due this work-week). The current-data proxy for "am I missing this".
     if (silentDays != null && silentDays >= SILENT_DAYS && t <= weekEndMs) b.silent.push(e);
   }
-  // Overdue leads with the at-risk (on fire) ones; everything else soonest-first.
-  b.overdue.sort((x, y) => (y.atRisk - x.atRisk) || (x.t - y.t));
+  // Overdue leads with the at-risk (on fire) ones, then FRESHEST slippage first
+  // (Ross 2026-07-15, the thirty-day-horizon companion rule): what just slipped
+  // deserves the attention; the near-30d tail sits at the bottom, adjacent to
+  // the tracked "N older than a month" line.
+  b.overdue.sort((x, y) => (y.atRisk - x.atRisk) || (y.t - x.t));
   ["dueToday", "restOfWeek", "comingUp", "silent"].forEach((k) => b[k].sort((x, y) => x.t - y.t));
   b.overdueAtRiskN = b.overdue.filter((e) => e.atRisk).length;
   b.newSinceLast = [...b.overdue, ...b.dueToday, ...b.restOfWeek, ...b.comingUp]
@@ -258,7 +268,14 @@ function buildDetail(box, e) {
 }
 
 function countText(key, items, buckets) {
-  if (key === "overdue" && buckets.overdueAtRiskN) return `${items.length} · ${buckets.overdueAtRiskN} at risk`;
+  if (key === "overdue") {
+    const bits = [];
+    if (items.length) bits.push(String(items.length));
+    if (buckets.overdueAtRiskN) bits.push(`${buckets.overdueAtRiskN} at risk`);
+    // The tracked deep backlog stays COUNTED in the header even collapsed.
+    if (buckets.agedOverdueN) bits.push(`${buckets.agedOverdueN} older`);
+    return bits.join(" · ");
+  }
   return items.length ? String(items.length) : "";
 }
 
@@ -300,6 +317,16 @@ function renderSection(host, sec, items, buckets, expanded, t0ms) {
     em.textContent = sec.key === "dueToday" ? "Nothing due today." : "Nothing here.";
     body.appendChild(em);
   }
+  // Thirty-day horizon: the deep backlog is a number you report, not a list you
+  // read — one quiet retrievable line; the full list lives in Today.
+  if (sec.key === "overdue" && buckets.agedOverdueN) {
+    const aged = document.createElement("button");
+    aged.type = "button";
+    aged.className = "brief-more";
+    aged.textContent = `${buckets.agedOverdueN} older than a month — in full Today →`;
+    aged.addEventListener("click", openFull);
+    body.appendChild(aged);
+  }
   wrap.appendChild(body);
   head.addEventListener("click", () => {
     body.hidden = !body.hidden;
@@ -330,6 +357,15 @@ function renderLens(lensKey, buckets, now) {
   const host = document.getElementById("brief-sections");
   host.innerHTML = "";
 
+  // "Prepared for you" leads every lens — finished work awaiting a look beats
+  // the to-do list (prepared-not-offered). Calm absence when nothing staged
+  // AND nothing delivered.
+  renderPreparedBand(host, _prework, _delivered, true);
+
+  // The companion's own plan of record (collapsed by default — the glance
+  // stays about YOUR day; the plan is there when you want to steer or veto).
+  renderPlanSection(host, _plan, false);
+
   // "New since you last looked" — the state-layer delta (mid-day / evening). Leads,
   // since "what's come in since I last checked" is what she's looking for here.
   if (lens.newFlag && buckets.newSinceLast && buckets.newSinceLast.length) {
@@ -344,15 +380,388 @@ function renderLens(lensKey, buckets, now) {
   const openSet = new Set(lens.open || []);
   for (const sec of CORE_SECTIONS) {
     const items = buckets[sec.key] || [];
-    if (!items.length && !sec.alwaysShow) continue; // hide empty buckets — keep it uncluttered
+    // Overdue stays visible when the WALKED list is empty but aged items are
+    // tracked — the count must never silently disappear (30-day horizon).
+    const keepForAged = sec.key === "overdue" && buckets.agedOverdueN > 0;
+    if (!items.length && !sec.alwaysShow && !keepForAged) continue; // hide empty buckets
     renderSection(host, sec, items, buckets, openSet.has(sec.key), t0ms);
   }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// "Prepared for you" — the companion's staged pre-work (WP-PREPARED-BAND,
+// hold rescinded 2026-07-15: the scheduled passes produce real overnight work
+// that needs a visible surface). Display-only: renders the packet's `prework`
+// section (staged drafts + peer accept-cards) served by /api/checkin-brief —
+// the SAME data the ✦ standup presents, one computation, two surfaces. The
+// band appears ONLY when something is staged (calm absence, matching the
+// engine's own omit-when-empty contract); acting on items stays the standup's
+// job — the band's one affordance per item is the hop into it.
+// ───────────────────────────────────────────────────────────────────────────
+function renderPreparedBand(host, prework, delivered, expanded) {
+  const items = Array.isArray(prework && prework.items) ? prework.items : [];
+  const cards = Array.isArray(prework && prework.acceptCards) ? prework.acceptCards : [];
+  const outbox = Array.isArray(delivered) ? delivered : [];
+  if (!items.length && !cards.length && !outbox.length) return; // calm absence
+
+  const wrap = document.createElement("div");
+  wrap.className = "brief-section brief-prepared";
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "brief-section-head";
+  head.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "brief-caret";
+  caret.textContent = expanded ? "▾" : "▸";
+  const label = document.createElement("span");
+  label.className = "brief-section-label";
+  label.textContent = "✦ Prepared for you";
+  const count = document.createElement("span");
+  count.className = "brief-section-count";
+  // Short count — the per-row status tags carry the ready/needs-input detail,
+  // so the header just sizes the pile (a long count wrapped the label at 360px).
+  const bits = [];
+  if (items.length) bits.push(`${items.length} staged`);
+  if (cards.length) bits.push(`${cards.length} answered`);
+  if (outbox.length) bits.push(`${outbox.length} in Outbox`);
+  count.textContent = bits.join(" · ");
+  head.append(caret, label, count);
+  wrap.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "brief-items";
+  body.hidden = !expanded;
+
+  // Peer answers lead — a decision already made is the cheapest win on the board.
+  for (const c of cards) {
+    const row = document.createElement("div");
+    row.className = "brief-item brief-prepared-card";
+    const txt = document.createElement("span");
+    txt.className = "brief-item-text";
+    const line = `${c.peerLabel || "A colleague"} answered — ${c.summary || ""}`.trim();
+    txt.textContent = line;
+    txt.title = line;
+    const tag = document.createElement("span");
+    tag.className = "brief-item-due";
+    tag.textContent = "accept in standup";
+    row.append(txt, tag);
+    row.addEventListener("click", openStandup);
+    body.appendChild(row);
+  }
+
+  for (const it of items.slice(0, ROWS_PER_SECTION)) {
+    body.appendChild(renderPreparedRow(it));
+  }
+  if (items.length > ROWS_PER_SECTION) {
+    const more = document.createElement("div");
+    more.className = "brief-more";
+    more.textContent = `+${items.length - ROWS_PER_SECTION} more staged`;
+    body.appendChild(more);
+  }
+
+  // Delivered — companion work already in your Outbox (the post-close wing's
+  // finished output, e.g. a charter draft with its file attached). Peek shows
+  // the note + attachment chips; save rides the existing outbox_artifact_save
+  // dialog; sending/dismissing stays the Outbox pane's job.
+  for (const ob of outbox.slice(0, ROWS_PER_SECTION)) {
+    body.appendChild(renderDeliveredRow(ob));
+  }
+
+  wrap.appendChild(body);
+  head.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    head.setAttribute("aria-expanded", body.hidden ? "false" : "true");
+    caret.textContent = body.hidden ? "▸" : "▾";
+  });
+  host.appendChild(wrap);
+}
+
+function renderDeliveredRow(item) {
+  const wrap = document.createElement("div");
+  wrap.className = "brief-row";
+  const row = document.createElement("div");
+  row.className = "brief-item";
+  const txt = document.createElement("span");
+  txt.className = "brief-item-text";
+  txt.textContent = item.subject || "(no subject)";
+  txt.title = item.subject || "";
+  const tag = document.createElement("span");
+  tag.className = "brief-item-due";
+  const nArts = Array.isArray(item.artifacts) ? item.artifacts.length : (item.artifactIds || []).length;
+  tag.textContent = nArts ? `in Outbox · ${nArts} file${nArts > 1 ? "s" : ""}` : "in Outbox";
+  row.append(txt, tag);
+  wrap.appendChild(row);
+
+  const detail = document.createElement("div");
+  detail.className = "brief-detail";
+  detail.hidden = true;
+  let built = false;
+  row.addEventListener("click", () => {
+    if (!built) { buildDeliveredDetail(detail, item); built = true; }
+    detail.hidden = !detail.hidden;
+    wrap.classList.toggle("open", !detail.hidden);
+  });
+  wrap.appendChild(detail);
+  return wrap;
+}
+
+function buildDeliveredDetail(box, item) {
+  const bodyText = String(item.bodyHtml || item.body || "").trim();
+  if (bodyText) {
+    const p = document.createElement("p");
+    p.className = "brief-detail-summary brief-prepared-draft";
+    p.textContent = bodyText.length > 320 ? bodyText.slice(0, 320).trimEnd() + "…" : bodyText;
+    box.appendChild(p);
+  }
+  // Attachment chips — engine-served meta when present, bare ids as fallback
+  // (mirrors the Outbox card's own fallback so a chip never silently vanishes).
+  const artifacts = Array.isArray(item.artifacts)
+    ? item.artifacts
+    : (item.artifactIds || []).map((id) => ({ id, filename: "attachment" }));
+  for (const art of artifacts) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "brief-artifact-chip";
+    chip.textContent = "📎 " + (art.filename || "attachment") + (art.version > 1 ? ` (v${art.version})` : "");
+    chip.title = "Save a copy";
+    chip.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      try {
+        await invoke("outbox_artifact_save", {
+          itemId: item.id, artifactId: art.id, defaultName: art.filename || "attachment",
+        });
+      } catch (e) { console.warn("[brief] artifact save failed:", e); }
+    });
+    box.appendChild(chip);
+  }
+  const meta = document.createElement("p");
+  meta.className = "brief-detail-meta";
+  meta.textContent = "awaiting your send in the Outbox";
+  box.appendChild(meta);
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "brief-detail-open";
+  open.textContent = "Open Outbox →";
+  open.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    try { await invoke("widget_expand", { targetTab: "log" }); } catch (e) { console.warn("[brief] open outbox:", e); }
+  });
+  box.appendChild(open);
+}
+
+function renderPreparedRow(it) {
+  const wrap = document.createElement("div");
+  wrap.className = "brief-row";
+  const row = document.createElement("div");
+  row.className = "brief-item";
+  const txt = document.createElement("span");
+  txt.className = "brief-item-text";
+  txt.textContent = it.title || "(untitled)";
+  txt.title = it.title || "";
+  const status = document.createElement("span");
+  status.className = "brief-item-due" + (it.draftComplete ? " brief-prepared-ready" : "");
+  status.textContent = it.draftComplete ? "draft ready" : "needs input";
+  row.append(txt, status);
+  wrap.appendChild(row);
+
+  // Same light inline expand as the buckets: a shallow peek, not the artifact.
+  const detail = document.createElement("div");
+  detail.className = "brief-detail";
+  detail.hidden = true;
+  let built = false;
+  row.addEventListener("click", () => {
+    if (!built) { buildPreparedDetail(detail, it); built = true; }
+    detail.hidden = !detail.hidden;
+    wrap.classList.toggle("open", !detail.hidden);
+  });
+  wrap.appendChild(detail);
+  return wrap;
+}
+
+function buildPreparedDetail(box, it) {
+  if (it.draft) {
+    const p = document.createElement("p");
+    p.className = "brief-detail-summary brief-prepared-draft";
+    const preview = String(it.draft).trim();
+    p.textContent = preview.length > 320 ? preview.slice(0, 320).trimEnd() + "…" : preview;
+    box.appendChild(p);
+  }
+  const qs = Array.isArray(it.questions) ? it.questions.slice(0, 3) : [];
+  for (const q of qs) {
+    const ql = document.createElement("p");
+    ql.className = "brief-detail-quote";
+    ql.textContent = "? " + q;
+    box.appendChild(ql);
+  }
+  const meta = document.createElement("p");
+  meta.className = "brief-detail-meta";
+  const bits = [it.draftComplete ? "draft ready" : "blanks remain"];
+  if (Array.isArray(it.questions) && it.questions.length) bits.push(`${it.questions.length} question${it.questions.length > 1 ? "s" : ""}`);
+  meta.textContent = bits.join(" · ");
+  box.appendChild(meta);
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "brief-detail-open";
+  open.textContent = "Review in standup ✦";
+  open.addEventListener("click", (ev) => { ev.stopPropagation(); openStandup(); });
+  box.appendChild(open);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// "Companion plan" — the wing's persisted plan of record (WP-COMPANION-PLAN,
+// engine #500) and its HUMAN VETO lane. The postclose pass SETS the plan, the
+// scheduled passes work it with continuity; this section is where you SEE it
+// and where a veto actually happens (veto is human-only — the engine refuses
+// it from agents). Display + two verbs only: Veto / Restore. Editing and
+// everything else stays in the standup conversation.
+// ───────────────────────────────────────────────────────────────────────────
+const PLAN_STATUS_LABEL = {
+  planned: "planned", doing: "in progress", done: "done",
+  blocked: "blocked", vetoed: "vetoed",
+};
+
+function planPassLabel(runId) {
+  const m = /^prework-(prework|delta|closure|postclose)-/.exec(runId || "");
+  if (!m) return null;
+  return { prework: "the morning pass", delta: "the mid-day pass", closure: "the evening pass", postclose: "the post-close wing" }[m[1]];
+}
+
+function renderPlanSection(host, plan, expanded) {
+  const items = Array.isArray(plan && plan.items) ? plan.items : [];
+  if (!items.length) return; // calm absence — no plan set yet (or flag off)
+
+  const wrap = document.createElement("div");
+  wrap.className = "brief-section brief-plan";
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "brief-section-head";
+  head.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const caret = document.createElement("span");
+  caret.className = "brief-caret";
+  caret.textContent = expanded ? "▾" : "▸";
+  const label = document.createElement("span");
+  label.className = "brief-section-label";
+  label.textContent = "✦ Companion plan";
+  const count = document.createElement("span");
+  count.className = "brief-section-count";
+  const n = (s) => items.filter((it) => it.status === s).length;
+  const bits = [String(items.length)];
+  if (n("done")) bits.push(`${n("done")} done`);
+  if (n("blocked")) bits.push(`${n("blocked")} blocked`);
+  // Vetoed items stay COUNTED (fail-closed-but-visible), never silently gone.
+  if (n("vetoed")) bits.push(`${n("vetoed")} vetoed`);
+  count.textContent = bits.join(" · ");
+  head.append(caret, label, count);
+  wrap.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "brief-items";
+  body.hidden = !expanded;
+  // Live work first; done sinks; vetoed last (visible but out of the way).
+  const order = { doing: 0, blocked: 1, planned: 2, done: 3, vetoed: 4 };
+  const sorted = [...items].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+  for (const it of sorted.slice(0, ROWS_PER_SECTION)) body.appendChild(renderPlanRow(it));
+  if (sorted.length > ROWS_PER_SECTION) {
+    const more = document.createElement("div");
+    more.className = "brief-more";
+    more.textContent = `+${sorted.length - ROWS_PER_SECTION} more on the plan`;
+    body.appendChild(more);
+  }
+  wrap.appendChild(body);
+  head.addEventListener("click", () => {
+    body.hidden = !body.hidden;
+    head.setAttribute("aria-expanded", body.hidden ? "false" : "true");
+    caret.textContent = body.hidden ? "▸" : "▾";
+  });
+  host.appendChild(wrap);
+}
+
+function renderPlanRow(it) {
+  const wrap = document.createElement("div");
+  wrap.className = "brief-row" + (it.status === "vetoed" ? " plan-vetoed" : "");
+  const row = document.createElement("div");
+  row.className = "brief-item";
+  const txt = document.createElement("span");
+  txt.className = "brief-item-text";
+  txt.textContent = it.title || "(untitled)";
+  txt.title = it.title || "";
+  const tag = document.createElement("span");
+  tag.className = "brief-item-due plan-status-" + it.status;
+  tag.textContent = PLAN_STATUS_LABEL[it.status] || it.status;
+  row.append(txt, tag);
+  wrap.appendChild(row);
+
+  const detail = document.createElement("div");
+  detail.className = "brief-detail";
+  detail.hidden = true;
+  let built = false;
+  row.addEventListener("click", () => {
+    if (!built) { buildPlanDetail(detail, it); built = true; }
+    detail.hidden = !detail.hidden;
+    wrap.classList.toggle("open", !detail.hidden);
+  });
+  wrap.appendChild(detail);
+  return wrap;
+}
+
+function buildPlanDetail(box, it) {
+  if (it.notes) {
+    const p = document.createElement("p");
+    p.className = "brief-detail-summary";
+    p.textContent = it.notes;
+    box.appendChild(p);
+  }
+  const meta = document.createElement("p");
+  meta.className = "brief-detail-meta";
+  const bits = [PLAN_STATUS_LABEL[it.status] || it.status];
+  if (it.blockedOn) bits.push("waiting on " + it.blockedOn);
+  if (it.opportunistic) bits.push("spotted in new intake");
+  const pass = planPassLabel(it.createdByRunId);
+  if (pass) bits.push("planned by " + pass);
+  meta.textContent = bits.join(" · ");
+  box.appendChild(meta);
+
+  // The one verb pair. Veto = "don't work this, don't bring it back"; Restore
+  // undoes it (item returns to planned). Everything else is conversation.
+  const act = document.createElement("button");
+  act.type = "button";
+  act.className = "brief-detail-open plan-veto-btn";
+  const vetoed = it.status === "vetoed";
+  act.textContent = vetoed ? "Restore to plan" : "Veto — don't work this";
+  act.addEventListener("click", async (ev) => {
+    ev.stopPropagation();
+    act.disabled = true;
+    try {
+      await invoke("companion_plan_action", { itemId: it.id, action: vetoed ? "unveto" : "veto" });
+      await refreshPlan(); // re-render the section from the store's truth
+    } catch (e) {
+      console.warn("[brief] plan action failed:", e);
+      act.disabled = false;
+      act.textContent = "Couldn't reach Apolla — try again";
+    }
+  });
+  box.appendChild(act);
+}
+
+async function refreshPlan() {
+  try {
+    const plan = await invoke("fetch_companion_plan");
+    _plan = plan && plan.enabled !== false ? plan : null;
+  } catch (e) {
+    console.warn("[brief] plan refresh failed:", e);
+  }
+  if (_buckets) renderLens(_lens || currentLens(new Date()), _buckets, new Date());
 }
 
 // ───────────────────────────────────────────────────────────────────────────
 // Data + lifecycle
 // ───────────────────────────────────────────────────────────────────────────
 let _buckets = null;
+let _prework = null; // the packet's staged pre-work (null ⇒ nothing staged / unreachable)
+let _delivered = null; // pending companion deliveries in the Outbox (subject + attachments)
+let _plan = null; // the companion's persisted plan of record (null ⇒ none / flag off)
 
 // Per-check-in snapshot (localStorage): the item set seen at the last brief open,
 // so this open can surface "new since you last looked" (Ross 2026-07-10 state layer).
@@ -376,10 +785,31 @@ async function load() {
   document.getElementById("brief-date").textContent =
     now.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
   try {
-    const [dl, dismissed] = await Promise.all([
+    const [dl, dismissed, brief, outbox, plan] = await Promise.all([
       invoke("fetch_decision_log_full"),
       invoke("get_dismissed_record_ids").catch(() => []),
+      // Additive: the packet ride-along for the "Prepared for you" band. A
+      // failure here never breaks the brief — the band just doesn't render.
+      invoke("fetch_checkin_brief", { tzOffsetMinutes: tzOffsetMinutes() }).catch((e) => {
+        console.warn("[brief] checkin-brief fetch failed (band hidden):", e);
+        return null;
+      }),
+      invoke("fetch_outbox").catch((e) => {
+        console.warn("[brief] outbox fetch failed (delivered rows hidden):", e);
+        return null;
+      }),
+      invoke("fetch_companion_plan").catch((e) => {
+        console.warn("[brief] companion-plan fetch failed (section hidden):", e);
+        return null;
+      }),
     ]);
+    _prework = (brief && brief.prework) || null;
+    // Delivered = the companion's finished output awaiting your send — pending
+    // items it proposed (today's charter-with-attachment case). Human drafts
+    // and already-decided items stay out of the band.
+    const obItems = outbox && Array.isArray(outbox.items) ? outbox.items : [];
+    _delivered = obItems.filter((it) => it && it.status === "pending" && it.proposedBy === "mcp-agent");
+    _plan = plan && plan.enabled !== false && Array.isArray(plan.items) ? plan : null;
     const dropped = new Set(Array.isArray(dismissed) ? dismissed : []);
     const records = (Array.isArray(dl && dl.records) ? dl.records : [])
       .filter((it) => !dropped.has(((it && it.record) || {}).recordId));
