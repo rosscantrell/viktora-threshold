@@ -272,3 +272,38 @@ Future session grades emit a machine-readable row per rubric axis (JSONL alongsi
 the prose report) carrying attribution ids (proposalIds per #466, qids per #452,
 run/session ids). The autonomy-posterior machinery consumes that stream and NEVER
 parses prose.
+
+---
+
+## §9 Networking-session review (2026-07-15) — no contests + two inherited design rules (BINDING)
+
+Review verdict: §0.6 ruling restatement verified faithful to PR #167; identity +
+question-grammar touchpoints confirmed; staked question arbitration unchanged.
+**License inheritance ADOPTED for the envelope contract** (v2 amendment logged their
+side: license tag on envelope sourceMetadata, min-of-chain on relay for answer/receipt
+verbs).
+
+Two live findings from their 2026-07-15 unattended re-run (evidence
+`~/scratch/unattended-rerun-2026-07-15/`) are inherited here as design rules — paid
+for once, never rediscovered:
+
+**§9.1 Triage data is PRE-INJECTED, never model-elective.** A live compliance failure:
+a pass's triage instruction was sequenced before the packet call that feeds it, and
+the model never called the tool — it cannot triage a list it structurally never sees.
+Rule for ALL passes in this brief (charter compose, groomer, region-brief refresh):
+the RUNNER deterministically gathers the pass's input set (once-per-doc dedupe, the
+postclose pattern) and injects it into the opening turn. A pass's agenda is runner
+plumbing, not a tool call the model may skip.
+
+**§9.2 Staged content is GROUNDED BY CONSTRUCTION — an autonomy-ladder invariant.**
+Their live incident: a staged accept card summarized an answer as the exact STALE
+value the answer refuted — one tap would have filed the opposite of truth. Linkage
+grounding (right ids) is NOT enough. Invariant at every autonomy tier ≥ propose: a
+staged artifact's claim text is EXTRACTIVE from, or deterministically
+overlap-verified against, its receipts. The Beta posteriors govern WHO may stage
+(§5); this governs WHAT a staging may say. This is the staged-content sibling of
+anti-self-training and the judge ceiling.
+
+**§9.3 P4 grading ground:** the Tier-1 persona rig (demo droplet) offers cheap
+verified-outcome generation (~$0.05-0.08/pass, documented ground-truth seed ledger)
+— the autonomy posteriors' first outcome stream need not wait on live-pilot grades.
