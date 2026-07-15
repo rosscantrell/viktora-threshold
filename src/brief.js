@@ -20,6 +20,10 @@ const invoke = tauri.core.invoke;
 // ───────────────────────────────────────────────────────────────────────────
 const SILENT_DAYS = 3;      // "no one's checked in on this" threshold (mid-day)
 const ROWS_PER_SECTION = 10; // cap — she complained about endless scrolling
+// THE THIRTY-DAY HORIZON (Ross's rule, doctrine §7 via engine #494): items
+// overdue more than ~30 days are TRACKED, not walked — the deep backlog is a
+// number you report, not a list you read. Same rule here as in the companion.
+const AGED_OVERDUE_DAYS = 30;
 
 // The four buckets, always in this order. tone:"fire" spends the one amber accent.
 const CORE_SECTIONS = [
@@ -137,7 +141,7 @@ function computeBuckets(records, now, prevSet) {
   const weekEndMs = t0 + addToFri * dayMs + (dayMs - 1);
   const horizonMs = t0 + 14 * dayMs;
 
-  const b = { overdue: [], dueToday: [], restOfWeek: [], comingUp: [], silent: [] };
+  const b = { overdue: [], dueToday: [], restOfWeek: [], comingUp: [], silent: [], agedOverdueN: 0 };
   const seenIds = [];
   for (const it of Array.isArray(records) ? records : []) {
     const rec = (it && it.record) || {};
@@ -158,6 +162,9 @@ function computeBuckets(records, now, prevSet) {
     const isNew = prevSet ? !!rec.recordId && !prevSet.has(rec.recordId) : false;
     const e = { rec, d, t, atRisk, silentDays, isNew, owner: rec.owner || "", summary: (rec.summary || "").trim(), documentId: rec.documentId };
 
+    // Thirty-day horizon: >30d overdue is tracked (counted), never walked here.
+    // At-risk items are exempt — "on fire" always earns its row regardless of age.
+    if (t < t0 - AGED_OVERDUE_DAYS * dayMs && !atRisk) { b.agedOverdueN += 1; continue; }
     if (t < t0) b.overdue.push(e);
     else if (t < t0 + dayMs) b.dueToday.push(e);
     else if (t <= weekEndMs) b.restOfWeek.push(e);
@@ -258,7 +265,14 @@ function buildDetail(box, e) {
 }
 
 function countText(key, items, buckets) {
-  if (key === "overdue" && buckets.overdueAtRiskN) return `${items.length} · ${buckets.overdueAtRiskN} at risk`;
+  if (key === "overdue") {
+    const bits = [];
+    if (items.length) bits.push(String(items.length));
+    if (buckets.overdueAtRiskN) bits.push(`${buckets.overdueAtRiskN} at risk`);
+    // The tracked deep backlog stays COUNTED in the header even collapsed.
+    if (buckets.agedOverdueN) bits.push(`${buckets.agedOverdueN} older`);
+    return bits.join(" · ");
+  }
   return items.length ? String(items.length) : "";
 }
 
@@ -299,6 +313,16 @@ function renderSection(host, sec, items, buckets, expanded, t0ms) {
     em.className = "brief-empty";
     em.textContent = sec.key === "dueToday" ? "Nothing due today." : "Nothing here.";
     body.appendChild(em);
+  }
+  // Thirty-day horizon: the deep backlog is a number you report, not a list you
+  // read — one quiet retrievable line; the full list lives in Today.
+  if (sec.key === "overdue" && buckets.agedOverdueN) {
+    const aged = document.createElement("button");
+    aged.type = "button";
+    aged.className = "brief-more";
+    aged.textContent = `${buckets.agedOverdueN} older than a month — in full Today →`;
+    aged.addEventListener("click", openFull);
+    body.appendChild(aged);
   }
   wrap.appendChild(body);
   head.addEventListener("click", () => {
@@ -353,7 +377,10 @@ function renderLens(lensKey, buckets, now) {
   const openSet = new Set(lens.open || []);
   for (const sec of CORE_SECTIONS) {
     const items = buckets[sec.key] || [];
-    if (!items.length && !sec.alwaysShow) continue; // hide empty buckets — keep it uncluttered
+    // Overdue stays visible when the WALKED list is empty but aged items are
+    // tracked — the count must never silently disappear (30-day horizon).
+    const keepForAged = sec.key === "overdue" && buckets.agedOverdueN > 0;
+    if (!items.length && !sec.alwaysShow && !keepForAged) continue; // hide empty buckets
     renderSection(host, sec, items, buckets, openSet.has(sec.key), t0ms);
   }
 }
