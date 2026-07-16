@@ -35,11 +35,11 @@
 //! `capture`) the same sweep now routes by kind:
 //!   * Teams LIVE — "when a new channel message is added" → kind teams-channel,
 //!     capture live (one flow per channel).
-//!   * Mail BACKFILL 30d — a manual/instant flow, "Get emails (V3)" over Sent
-//!     Items, last 30 days → kind email, capture backfill (the DEFAULT coldstart;
+//!   * Mail BACKFILL — a manual/instant flow, "Get emails (V3)" over Sent
+//!     Items, last BACKFILL_WINDOW_DAYS days → kind email, capture backfill (the DEFAULT coldstart;
 //!     runs once, then delete).
-//!   * Teams BACKFILL 30d — a manual/instant flow, "Get messages" for a channel,
-//!     last 30 days → kind teams-channel, capture backfill.
+//!   * Teams BACKFILL — a manual/instant flow, "Get messages" for a channel,
+//!     last BACKFILL_WINDOW_DAYS days → kind teams-channel, capture backfill.
 //!
 //! ── Capture-boundary law (WP-FORMATTING-SEMANTICS) ───────────────────────────
 //! EVERY flow maps the source's HTML body token → the schema `bodyHtml` field and
@@ -371,10 +371,39 @@ pub fn teams_backfill_file_content_expression() -> String {
     ])
 }
 
+/// How far back a coldstart backfill reaches.
+///
+/// ONE place: this number appeared in the Get-emails search query, the Teams
+/// client-side filter, both flow NAMES, both generated FILENAMES, the recipe
+/// prose, and the app's card copy. Seven copies of a number is how they drift —
+/// a flow named "30d" quietly importing 14 is the kind of lie that survives
+/// review. Everything below derives from here.
+///
+/// 14 days (Ross, 2026-07-16 — was 30). The window is a judgement call, not a
+/// constraint: bigger warms the field faster, smaller keeps the first import
+/// cheap and the blast radius small if a capture is wrong.
+pub const BACKFILL_WINDOW_DAYS: u32 = 14;
+
 /// Flow names for the v2 flows (match the brief).
 pub const TEAMS_LIVE_FLOW_NAME: &str = "Threshold Teams — <channel>";
-pub const MAIL_BACKFILL_FLOW_NAME: &str = "Threshold backfill — Sent mail 30d";
-pub const TEAMS_BACKFILL_FLOW_NAME: &str = "Threshold backfill — Teams channel 30d";
+
+/// `Threshold backfill — Sent mail <N>d`. Derived so the NAME can never claim a
+/// window the flow doesn't implement.
+pub fn mail_backfill_flow_name() -> String {
+    format!("Threshold backfill — Sent mail {BACKFILL_WINDOW_DAYS}d")
+}
+/// `Threshold backfill — Teams channel <N>d`.
+pub fn teams_backfill_flow_name() -> String {
+    format!("Threshold backfill — Teams channel {BACKFILL_WINDOW_DAYS}d")
+}
+/// `threshold-mail-backfill-<N>d.flow.json`.
+pub fn mail_backfill_filename() -> String {
+    format!("threshold-mail-backfill-{BACKFILL_WINDOW_DAYS}d.flow.json")
+}
+/// `threshold-teams-backfill-<N>d.flow.json`.
+pub fn teams_backfill_filename() -> String {
+    format!("threshold-teams-backfill-{BACKFILL_WINDOW_DAYS}d.flow.json")
+}
 
 /// The Teams LIVE flow definition — standard Teams trigger → Create file.
 pub fn build_teams_live_flow_definition() -> serde_json::Value {
@@ -425,14 +454,14 @@ pub fn build_teams_live_flow_definition() -> serde_json::Value {
 }
 
 /// The mail BACKFILL flow definition — manual trigger → Get emails (V3) over Sent
-/// Items (last 30 days, paged) → Apply-to-each → Create file (kind email,
+/// Items (last BACKFILL_WINDOW_DAYS days, paged) → Apply-to-each → Create file (kind email,
 /// capture backfill).
 pub fn build_email_backfill_flow_definition() -> serde_json::Value {
     let file_content = format!("@{{{}}}", email_backfill_file_content_expression());
     json!({
-        "name": MAIL_BACKFILL_FLOW_NAME,
+        "name": mail_backfill_flow_name(),
         "properties": {
-            "displayName": MAIL_BACKFILL_FLOW_NAME,
+            "displayName": mail_backfill_flow_name(),
             "definition": {
                 "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
                 "contentVersion": "1.0.0.0",
@@ -462,8 +491,8 @@ pub fn build_email_backfill_flow_definition() -> serde_json::Value {
                                 "fetchOnlyUnread": false,
                                 "includeAttachments": false,
                                 "importance": "Any",
-                                // Last 30 days, paged (the designer exposes both).
-                                "searchQuery": "received:>=@{addDays(utcNow(),-30)}",
+                                // The backfill window, paged (the designer exposes both).
+                                "searchQuery": format!("received:>=@{{addDays(utcNow(),-{BACKFILL_WINDOW_DAYS})}}"),
                                 "top": 250
                             },
                             "authentication": "@parameters('$authentication')",
@@ -495,14 +524,14 @@ pub fn build_email_backfill_flow_definition() -> serde_json::Value {
 }
 
 /// The Teams BACKFILL flow definition — manual trigger → Get messages for a
-/// chosen channel → Apply-to-each (filter last 30d client-side is documented in
+/// chosen channel → Apply-to-each (filter the window client-side is documented in
 /// the recipe) → Create file (kind teams-channel, capture backfill).
 pub fn build_teams_backfill_flow_definition() -> serde_json::Value {
     let file_content = format!("@{{{}}}", teams_backfill_file_content_expression());
     json!({
-        "name": TEAMS_BACKFILL_FLOW_NAME,
+        "name": teams_backfill_flow_name(),
         "properties": {
-            "displayName": TEAMS_BACKFILL_FLOW_NAME,
+            "displayName": teams_backfill_flow_name(),
             "definition": {
                 "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
                 "contentVersion": "1.0.0.0",
@@ -543,13 +572,13 @@ pub fn build_teams_backfill_flow_definition() -> serde_json::Value {
                         "foreach": "@outputs('Get_messages')?['body/value']",
                         "runAfter": { "Get_messages": ["Succeeded"] },
                         "actions": {
-                            // Only keep messages from the last 30 days.
+                            // Only keep messages inside the backfill window.
                             "Only_last_30_days": {
                                 "type": "If",
                                 "expression": {
                                     "greaterOrEquals": [
                                         "@item()?['createdDateTime']",
-                                        "@addDays(utcNow(),-30)"
+                                        format!("@addDays(utcNow(),-{BACKFILL_WINDOW_DAYS})")
                                     ]
                                 },
                                 "actions": {
@@ -671,15 +700,15 @@ pub fn build_backfill_recipe() -> String {
     let mail_expr = email_backfill_file_content_expression();
     let teams_expr = teams_backfill_file_content_expression();
     format!(
-        r#"# Threshold coldstart — import your last 30 days (one-time)
+        r#"# Threshold coldstart — import your last {win} days (one-time)
 
 These are **instant** flows: you run each ONCE (a **Run** button in Power
-Automate), it imports the last 30 days, then you can delete it. Everything lands
+Automate), it imports the last {win} days, then you can delete it. Everything lands
 as the same JSON files Threshold sweeps, and the engine dedupes against anything
 already captured. Backfilled items are filed as background context (searchable
 everywhere) and won't crowd today's agenda.
 
-## Recommended: Sent mail, last 30 days ({mail_name})
+## Recommended: Sent mail, last {win} days ({mail_name})
 
 Your sent mail is dense signal with low noise — the best jump-start.
 
@@ -691,7 +720,7 @@ Your sent mail is dense signal with low noise — the best jump-start.
 - **Fetch Only Unread:** No · **Include Attachments:** No
 - **Top:** `250` and turn **Pagination** ON (Settings → Pagination) so it pages
   through the full 30 days.
-- **Search Query:** `received:>=@{{addDays(utcNow(),-30)}}`
+- **Search Query:** `received:>=@{{addDays(utcNow(),-{win})}}`
 
 **Step 3 — Loop + Create file.** Add **Apply to each** over the **value** output
 of Get emails. Inside it add **OneDrive for Business → Create file**:
@@ -707,7 +736,7 @@ as the body and never add an html-to-text step (formatting is meaning here).
 files land in `OneDrive/Apps/Threshold/mail`. When it finishes, **delete the flow**
 (it has done its one job).
 
-## Optional: Teams channel history, last 30 days ({teams_name})
+## Optional: Teams channel history, last {win} days ({teams_name})
 
 Same idea for one Teams channel. Instant flow → **Microsoft Teams → Get messages**
 (pick Team + Channel, Pagination ON) → **Apply to each** over **value** → a
@@ -719,14 +748,17 @@ Same capture-boundary rule: the message **HTML** `body/content` → `bodyHtml`, 
 text conversion. Run once, then delete.
 
 ---
-Import instead? The definitions are provided as `threshold-mail-backfill-30d.flow.json`
-and `threshold-teams-backfill-30d.flow.json` next to this file.
+Import instead? The definitions are provided as `{mail_file}`
+and `{teams_file}` next to this file.
 "#,
-        mail_name = MAIL_BACKFILL_FLOW_NAME,
-        teams_name = TEAMS_BACKFILL_FLOW_NAME,
+        mail_name = mail_backfill_flow_name(),
+        teams_name = teams_backfill_flow_name(),
         folder = CREATE_FILE_FOLDER_PATH,
         mail_expr = mail_expr,
         teams_expr = teams_expr,
+        win = BACKFILL_WINDOW_DAYS,
+        mail_file = mail_backfill_filename(),
+        teams_file = teams_backfill_filename(),
     )
 }
 
@@ -771,8 +803,8 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
     let recipe_path = pkg_dir.join("IMPORT-RECIPE.md");
     // v2 flows (WP-INTAKE TEAMS + COLDSTART).
     let teams_live_path = pkg_dir.join("threshold-teams-live.flow.json");
-    let mail_backfill_path = pkg_dir.join("threshold-mail-backfill-30d.flow.json");
-    let teams_backfill_path = pkg_dir.join("threshold-teams-backfill-30d.flow.json");
+    let mail_backfill_path = pkg_dir.join(mail_backfill_filename());
+    let teams_backfill_path = pkg_dir.join(teams_backfill_filename());
     let teams_recipe_path = pkg_dir.join("TEAMS-RECIPE.md");
     let backfill_recipe_path = pkg_dir.join("BACKFILL-RECIPE.md");
 
@@ -963,6 +995,31 @@ mod tests {
     const FROZEN_MAIL_BACKFILL: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',2),'kind','email'),'capture','backfill'),'mailbox','sent'),'from',item()?['from']),'to',coalesce(item()?['toRecipients'],'')),'cc',coalesce(item()?['ccRecipients'],'')),'subject',coalesce(item()?['subject'],'')),'dateTimeCreated',item()?['receivedDateTime']),'bodyHtml',coalesce(item()?['body'],'')),'internetMessageId',item()?['internetMessageId']))";
     const FROZEN_TEAMS_BACKFILL: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',2),'kind','teams-channel'),'capture','backfill'),'channelId',item()?['channelIdentity']?['channelId']),'channelName',''),'teamName',''),'author',item()?['from']?['user']?['displayName']),'messageId',item()?['id']),'replyToId',coalesce(item()?['replyToId'],'')),'dateTimeCreated',item()?['createdDateTime']),'bodyHtml',coalesce(item()?['body']?['content'],'')))";
 
+    /// The window is ONE number. It used to be seven copies — the search query,
+    /// a Teams filter, two flow names, two filenames, and the recipe prose — and
+    /// a flow NAMED "30d" that imports 14 is a lie that survives review, because
+    /// nothing compares the label to the query. Everything derives; this pins it.
+    #[test]
+    fn backfill_window_is_one_number_everywhere() {
+        let w = BACKFILL_WINDOW_DAYS;
+        assert!(mail_backfill_flow_name().contains(&format!("{w}d")), "flow name states the window");
+        assert!(teams_backfill_flow_name().contains(&format!("{w}d")));
+        assert!(mail_backfill_filename().contains(&format!("{w}d")), "filename states the window");
+        assert!(teams_backfill_filename().contains(&format!("{w}d")));
+
+        // The QUERY must ask for the same window the name advertises.
+        let mail = serde_json::to_string(&build_email_backfill_flow_definition()).unwrap();
+        assert!(mail.contains(&format!("addDays(utcNow(),-{w})")), "search query uses the window");
+        let teams = serde_json::to_string(&build_teams_backfill_flow_definition()).unwrap();
+        assert!(teams.contains(&format!("addDays(utcNow(),-{w})")), "teams filter uses the window");
+
+        // And the recipe a human follows must not contradict either.
+        let recipe = build_backfill_recipe();
+        assert!(recipe.contains(&format!("last {w} days")), "recipe prose states the window");
+        assert!(recipe.contains(&format!("addDays(utcNow(),-{w})")), "recipe query matches");
+        assert!(!recipe.contains("30d"), "no stale 30d anywhere in the recipe");
+    }
+
     #[test]
     fn v2_file_content_expressions_are_frozen_byte_exact() {
         assert_eq!(teams_live_file_content_expression(), FROZEN_TEAMS_LIVE);
@@ -1059,8 +1116,8 @@ mod tests {
         let backfill = build_backfill_recipe();
         assert!(backfill.contains(FROZEN_MAIL_BACKFILL));
         assert!(backfill.contains(FROZEN_TEAMS_BACKFILL));
-        assert!(backfill.contains(MAIL_BACKFILL_FLOW_NAME));
-        assert!(backfill.contains(TEAMS_BACKFILL_FLOW_NAME));
+        assert!(backfill.contains(&mail_backfill_flow_name()));
+        assert!(backfill.contains(&teams_backfill_flow_name()));
     }
 
     /// Eyeball smoke — writes a real package to a chosen dir + prints paths.

@@ -978,8 +978,8 @@ function buildJumpstartCard(report) {
     return doctorCard({
       name: "Jump-start",
       detail: noOneDrive
-        ? "Warm up your field with your last 30 days — runs from the machine where Email is set up."
-        : "Warm up your field with your last 30 days. Available after Email is set up.",
+        ? "Warm up your field with your last 14 days — runs from the machine where Email is set up."
+        : "Warm up your field with your last 14 days. Available after Email is set up.",
       pill: noOneDrive ? "Unavailable" : "After email",
       pillState: "blocked",
     });
@@ -987,7 +987,7 @@ function buildJumpstartCard(report) {
 
   return doctorCard({
     name: "Jump-start",
-    detail: "Import your last 30 days (Sent mail recommended) so Threshold is useful on day one. Runs once in the background — older items file as context, not to-dos.",
+    detail: "Import your last 14 days (Sent mail recommended) so Threshold is useful on day one. Runs once in the background — older items file as context, not to-dos.",
     pill: "10 min · once",
     pillState: "action",
     actions: [{ label: "Jump-start", primary: true, onClick: (card) => openJumpstartSetup(card, mail) }],
@@ -1005,7 +1005,7 @@ async function openJumpstartSetup(card, mail) {
     const expand = document.createElement("div");
     expand.className = "doctor-expand";
     expand.appendChild(doctorNote("ok",
-      "Recipe refreshed in your OneDrive (Apps/Threshold — see BACKFILL-RECIPE). In Power Automate: build \"Threshold backfill — Sent mail 30d\", run it once, then delete it. Optional: the all-mail and Teams-history variants. Receipts show up in your check-ins as items land."));
+      "Recipe refreshed in your OneDrive (Apps/Threshold — see BACKFILL-RECIPE). In Power Automate: build \"Threshold backfill — Sent mail 14d\", run it once, then delete it. Optional: the all-mail and Teams-history variants. Receipts show up in your check-ins as items land."));
     const row = document.createElement("div");
     row.className = "doctor-expand-row";
     const copyBtn = document.createElement("button");
