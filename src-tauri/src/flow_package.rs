@@ -585,7 +585,7 @@ pub fn build_teams_backfill_flow_definition() -> serde_json::Value {
                         "runAfter": { "Get_messages": ["Succeeded"] },
                         "actions": {
                             // Only keep messages inside the backfill window.
-                            "Only_last_30_days": {
+                            "Only_within_backfill_window": {
                                 "type": "If",
                                 "expression": {
                                     "greaterOrEquals": [
@@ -733,7 +733,7 @@ Your sent mail is dense signal with low noise — the best jump-start.
 - **Folder:** `Sent Items`
 - **Fetch Only Unread:** No · **Include Attachments:** No
 - **Top:** `250` and turn **Pagination** ON (Settings → Pagination) so it pages
-  through the full 30 days.
+  through the full {win} days.
 - **Search Query:** `received:>=@{{addDays(utcNow(),-{win})}}`
 
 **Step 3 — Loop + Create file.** Add **Apply to each** over the **value** output
@@ -773,7 +773,7 @@ Same five steps as above, with two changes:
 
 Same idea for one Teams channel. Instant flow → **Microsoft Teams → Get messages**
 (pick Team + Channel, Pagination ON) → **Apply to each** over **value** → a
-**Condition** keeping only `createdDateTime` ≥ 30 days ago → **Create file** with:
+**Condition** keeping only `createdDateTime` ≥ {win} days ago → **Create file** with:
 
     {teams_expr}
 
@@ -1101,6 +1101,32 @@ mod tests {
         assert!(mail_backfill_flow_name(Mailbox::Sent).contains("Sent"));
     }
 
+    /// Every "<n> day(s)" / "<n>d" occurrence in a recipe, as numbers.
+    fn regex_lite_day_counts(text: &str) -> Vec<u32> {
+        let b: Vec<char> = text.chars().collect();
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i < b.len() {
+            if b[i].is_ascii_digit() {
+                let start = i;
+                while i < b.len() && b[i].is_ascii_digit() {
+                    i += 1;
+                }
+                // Build from the CHAR slice — `text[start..i]` mixes char indices
+                // with byte indices and panics on the recipe's em-dashes.
+                let num: String = b[start..i].iter().collect();
+                let n: u32 = num.parse().unwrap_or(0);
+                let rest: String = b[i..].iter().take(6).collect();
+                if rest.starts_with("d ") || rest.starts_with("d)") || rest.starts_with(" day") {
+                    out.push(n);
+                }
+                continue;
+            }
+            i += 1;
+        }
+        out
+    }
+
     #[test]
     fn backfill_window_is_one_number_everywhere() {
         let w = BACKFILL_WINDOW_DAYS;
@@ -1121,7 +1147,13 @@ mod tests {
         let recipe = build_backfill_recipe();
         assert!(recipe.contains(&format!("last {w} days")), "recipe prose states the window");
         assert!(recipe.contains(&format!("addDays(utcNow(),-{w})")), "recipe query matches");
-        assert!(!recipe.contains("30d"), "no stale 30d anywhere in the recipe");
+        // Widened after a live miss: the recipe said "pages through the full 30
+        // days" while every other site said 14, and a `contains("30d")` check
+        // sailed past it. Assert NO day-count other than the window appears —
+        // prose drifts in words, not just in the token you thought to check.
+        for m in regex_lite_day_counts(&recipe) {
+            assert_eq!(m, w, "recipe mentions {m} days but the window is {w}");
+        }
     }
 
     #[test]
