@@ -829,9 +829,21 @@ pub struct GeneratedPackage {
     pub is_fallback: bool,
 }
 
-/// Write the two flow definitions + the recipe into `dest_dir`, creating a
+/// Write the flow definitions + recipes into `dest_dir`, creating a
 /// `Threshold-PowerAutomate/` subfolder so the artifacts stay grouped (e.g. in
 /// Downloads). Overwrites on re-run (idempotent). Returns the written paths.
+///
+/// SUPERSEDED FILES ARE REMOVED. Overwriting-by-name is not enough: our own
+/// filenames carry the backfill window (`…-30d.flow.json` → `…-14d.flow.json`),
+/// so changing it STRANDS the old file — and a stranded file is not merely
+/// clutter, it is a working-looking artifact carrying whatever bug the old
+/// build had. That happened for real: after the window moved to 14d and the
+/// createObject fix landed, the `-30d` definitions were still sitting in
+/// OneDrive containing a function Power Automate does not have. A user browsing
+/// the folder cannot tell which is current.
+///
+/// Only files matching OUR OWN generated names are removed (`threshold-*.flow.json`
+/// we did not just write). Anything a user put here is untouched.
 pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackage> {
     let pkg_dir = dest_dir.join("Threshold-PowerAutomate");
     std::fs::create_dir_all(&pkg_dir)?;
@@ -846,6 +858,35 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
     let teams_backfill_path = pkg_dir.join(teams_backfill_filename());
     let teams_recipe_path = pkg_dir.join("TEAMS-RECIPE.md");
     let backfill_recipe_path = pkg_dir.join("BACKFILL-RECIPE.md");
+
+    // Everything this run legitimately produces. Anything else of ours is stale.
+    let written: Vec<&Path> = vec![
+        inbox_path.as_path(),
+        sent_path.as_path(),
+        teams_live_path.as_path(),
+        mail_backfill_path.as_path(),
+        mail_backfill_inbox_path.as_path(),
+        teams_backfill_path.as_path(),
+    ];
+    if let Ok(entries) = std::fs::read_dir(&pkg_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            // Scope tightly: only our own generated definitions, never a user file.
+            if !(name.starts_with("threshold-") && name.ends_with(".flow.json")) {
+                continue;
+            }
+            if written.iter().any(|w| *w == path.as_path()) {
+                continue;
+            }
+            // Best-effort: a failed cleanup must never fail the generation.
+            match std::fs::remove_file(&path) {
+                Ok(()) => log::info!("flow package: removed superseded {name}"),
+                Err(e) => log::warn!("flow package: could not remove superseded {name}: {e}"),
+            }
+        }
+    }
 
     let pretty = |v: &serde_json::Value| -> std::io::Result<String> {
         serde_json::to_string_pretty(v).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
@@ -1200,6 +1241,41 @@ mod tests {
         let out = std::env::var("FLOWPKG_OUT").expect("set FLOWPKG_OUT");
         let pkg = generate_flow_package(Path::new(&out)).unwrap();
         println!("FLOWPKG={}", serde_json::to_string_pretty(&pkg).unwrap());
+    }
+
+    /// Regeneration must not leave a stale definition behind. Our filenames carry
+    /// the window, so a window change strands the old file — carrying whatever bug
+    /// the old build had, looking just as legitimate. This happened for real
+    /// (a `-30d` file full of `createObject` sat next to the working `-14d` one).
+    /// Equally: a file the USER put here must survive.
+    #[test]
+    fn generate_removes_superseded_definitions_but_not_user_files() {
+        let root = std::env::temp_dir().join(format!(
+            "threshold-stale-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let pkg_dir = root.join("Threshold-PowerAutomate");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+
+        // A stale definition from an older window, and a user's own file.
+        let stale = pkg_dir.join("threshold-mail-backfill-30d.flow.json");
+        let users = pkg_dir.join("my-notes.json");
+        let users_flow = pkg_dir.join("my-own.flow.json"); // not ours: no threshold- prefix
+        std::fs::write(&stale, "{\"createObject\":\"broken\"}").unwrap();
+        std::fs::write(&users, "{}").unwrap();
+        std::fs::write(&users_flow, "{}").unwrap();
+
+        generate_flow_package(&root).unwrap();
+
+        assert!(!stale.exists(), "superseded definition must be removed");
+        assert!(users.exists(), "a user's file must survive");
+        assert!(users_flow.exists(), "a non-threshold flow file must survive");
+        // And the current ones are present.
+        assert!(pkg_dir.join(mail_backfill_filename(Mailbox::Sent)).exists());
+        assert!(pkg_dir.join(mail_backfill_filename(Mailbox::Inbox)).exists());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
