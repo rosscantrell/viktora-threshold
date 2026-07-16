@@ -42,12 +42,25 @@ use crate::onedrive_mail_sweep::{self, OneDriveMailConfig};
 // Also exposed to the UI via the `integration_doctor_links` command.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The Power Automate "Import Package (Legacy)" entry point the guided flow-
-/// import step opens. The generated flow package (commit 2) is imported here.
-pub const POWER_AUTOMATE_IMPORT_URL: &str = "https://make.powerautomate.com/import";
+// NOTE: there is deliberately NO "import package" link here. An earlier one
+// (`https://make.powerautomate.com/import`) pointed at Import Package (Legacy),
+// the entry point for a `.zip` this product has never generated — `flow_package`
+// ships a copy-paste RECIPE instead, on purpose (see its module header). So the
+// button sent users to an import page with nothing to import, and 404'd on top
+// of that (below). Don't reintroduce it without a package to import.
 
-/// The Power Automate "My flows" list — fallback landing if the import page has
-/// moved, and where a user re-enables a paused flow during a repair pass.
+/// The Power Automate "My flows" list — where every guided flow step lands. The
+/// recipe's step 1 is "Create → Automated cloud flow", and this page carries
+/// both that and the left-nav Create entry. Also where a user re-enables a
+/// paused flow during a repair pass.
+///
+/// The `/environments/~default/` segment is LOAD-BEARING, not decoration.
+/// Power Automate routes resolve against an environment; a bare route (e.g.
+/// `make.powerautomate.com/import`) has nothing to resolve against and renders
+/// a client-side 404 for anyone whose sign-in spans more than one tenant — which
+/// is how the old import link failed in the field. `~default` is an alias the
+/// SPA rewrites to the concrete id (`environments/Default-<guid>/flows`).
+/// Verified in a live multi-tenant session, 2026-07-16.
 pub const POWER_AUTOMATE_FLOWS_URL: &str =
     "https://make.powerautomate.com/environments/~default/flows";
 
@@ -61,7 +74,6 @@ pub const OWA_SHARED_CALENDARS_URL: &str =
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepLinks {
-    pub power_automate_import: &'static str,
     pub power_automate_flows: &'static str,
     pub owa_shared_calendars: &'static str,
 }
@@ -69,7 +81,6 @@ pub struct DeepLinks {
 impl DeepLinks {
     pub fn canonical() -> Self {
         DeepLinks {
-            power_automate_import: POWER_AUTOMATE_IMPORT_URL,
             power_automate_flows: POWER_AUTOMATE_FLOWS_URL,
             owa_shared_calendars: OWA_SHARED_CALENDARS_URL,
         }
@@ -1004,8 +1015,17 @@ mod tests {
             l.owa_shared_calendars,
             "https://outlook.office.com/mail/options/calendar/SharedCalendars"
         );
-        assert!(l.power_automate_import.starts_with("https://"));
         assert!(l.power_automate_flows.starts_with("https://"));
+        assert!(l.owa_shared_calendars.starts_with("https://"));
+        // Power Automate routes resolve against an ENVIRONMENT. A bare route
+        // renders a client-side 404 for multi-tenant sign-ins (how the retired
+        // import link failed in the field) — and an https:// check can't catch
+        // it, because a wrong-but-valid URL passes. Pin the segment instead.
+        assert!(
+            l.power_automate_flows.contains("/environments/"),
+            "Power Automate deep links must be environment-scoped: {}",
+            l.power_automate_flows
+        );
     }
 
     // ── platform ──

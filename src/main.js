@@ -932,7 +932,7 @@ async function openTeamsSetup(card, mail) {
     if (!parent) return;
     const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent });
     const links = await tauri.core.invoke("integration_doctor_links");
-    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries it */ }
+    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateFlows }); } catch { /* note carries it */ }
     card.querySelector(".doctor-expand")?.remove();
     const expand = document.createElement("div");
     expand.className = "doctor-expand";
@@ -1000,7 +1000,7 @@ async function openJumpstartSetup(card, mail) {
     if (!parent) return;
     const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent });
     const links = await tauri.core.invoke("integration_doctor_links");
-    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries it */ }
+    try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateFlows }); } catch { /* note carries it */ }
     card.querySelector(".doctor-expand")?.remove();
     const expand = document.createElement("div");
     expand.className = "doctor-expand";
@@ -1223,7 +1223,7 @@ function buildEmailFilesCard(report) {
           const parent = (prepared?.folder || "").replace(/[\\/]mail[\\/]?$/, "");
           const pkg = await tauri.core.invoke("generate_flow_package", { destDir: parent || business.path });
           const links = await tauri.core.invoke("integration_doctor_links");
-          try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateImport }); } catch { /* note carries the pointer */ }
+          try { await tauri.core.invoke("plugin:opener|open_url", { url: links.powerAutomateFlows }); } catch { /* note carries the pointer */ }
           card.querySelector(".doctor-expand")?.remove();
           const expand = document.createElement("div");
           expand.className = "doctor-expand";
