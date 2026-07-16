@@ -6494,41 +6494,87 @@ async fn ics_source_set(
         }
     };
 
-    // 2. Fetch once, capped, sniff for BEGIN:VCALENDAR. Plain external GET (no
-    //    bearer — this isn't the engine).
+    // 2. Fetch (retried), capped, sniff for BEGIN:VCALENDAR. Plain external GET
+    //    (no bearer — this isn't the engine).
+    //
+    // RETRIED, and the distinction matters more than the timeout. A measured
+    // 8-hour probe of a live OWA feed failed ~5% of fetches (a 30s hang, an
+    // ECONNRESET). This code used to make ONE attempt and map `Err(_)` — the
+    // error DISCARDED — onto "That link didn't return a calendar. Check you
+    // copied the Publish → ICS link." So 1 user in 20 pasting a perfectly good
+    // link was told it was wrong and sent back to OWA to fix nothing.
+    //
+    // A hang doesn't heal by waiting longer, so the fix is attempts, not
+    // patience: 10s each, 3 tries ⇒ a ~5% blip becomes ~1-in-8000, at which
+    // point "couldn't reach it" is the honest verdict rather than a smear on the
+    // user's link. Only TRANSIENT failures retry; a 4xx or a 200 of non-calendar
+    // bytes is a real answer and retrying it only delays a correct verdict.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(ICS_FETCH_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("HTTP client init failed: {e}"))?;
-    let mut resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(_) => {
-            return Ok(IcsSetResult {
-                ok: false,
-                stage: "fetch".into(),
-                configured: None,
-                engine_status: None,
-                note: Some(
-                    integration_doctor::IcsValidationError::NotCalendar
-                        .user_message()
-                        .to_string(),
-                ),
-            })
+
+    let fetch_err = |e: integration_doctor::IcsValidationError| IcsSetResult {
+        ok: false,
+        stage: e.stage().into(),
+        configured: None,
+        engine_status: None,
+        note: Some(e.user_message().to_string()),
+    };
+
+    let mut resp = None;
+    let mut last_transient: Option<String> = None;
+    for attempt in 1..=integration_doctor::ICS_FETCH_ATTEMPTS {
+        match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                resp = Some(r);
+                break;
+            }
+            Ok(r) if r.status().is_server_error() => {
+                // 5xx is the origin having a moment — worth another try.
+                last_transient = Some(format!("HTTP {}", r.status().as_u16()));
+            }
+            Ok(r) => {
+                // 4xx: a real answer. The link is dead or was unpublished/rotated
+                // (we saw exactly this when republishing minted a new URL and the
+                // old one began serving an error). Don't retry, don't blame the
+                // paste — say what happened.
+                log::warn!("ics_source_set: link returned HTTP {}", r.status().as_u16());
+                return Ok(fetch_err(integration_doctor::IcsValidationError::NotServing));
+            }
+            Err(e) => {
+                // Timeout / reset / DNS. Keep the reason for the log — the old
+                // code threw this away, which is why the bug was invisible.
+                last_transient = Some(if e.is_timeout() {
+                    format!("timeout after {}s", integration_doctor::ICS_FETCH_TIMEOUT_SECS)
+                } else {
+                    format!("{e}")
+                });
+            }
+        }
+        if attempt < integration_doctor::ICS_FETCH_ATTEMPTS {
+            log::warn!(
+                "ics_source_set: attempt {attempt}/{} failed ({}) — retrying",
+                integration_doctor::ICS_FETCH_ATTEMPTS,
+                last_transient.as_deref().unwrap_or("unknown"),
+            );
+            tokio::time::sleep(Duration::from_millis(
+                integration_doctor::ICS_FETCH_RETRY_DELAY_MS,
+            ))
+            .await;
+        }
+    }
+    let mut resp = match resp {
+        Some(r) => r,
+        None => {
+            log::warn!(
+                "ics_source_set: unreachable after {} attempts ({})",
+                integration_doctor::ICS_FETCH_ATTEMPTS,
+                last_transient.as_deref().unwrap_or("unknown"),
+            );
+            return Ok(fetch_err(integration_doctor::IcsValidationError::Unreachable));
         }
     };
-    if !resp.status().is_success() {
-        return Ok(IcsSetResult {
-            ok: false,
-            stage: "fetch".into(),
-            configured: None,
-            engine_status: None,
-            note: Some(
-                integration_doctor::IcsValidationError::NotCalendar
-                    .user_message()
-                    .to_string(),
-            ),
-        });
-    }
     // Read up to the byte cap, then stop (don't slurp a hostile huge body).
     let mut buf: Vec<u8> = Vec::new();
     loop {

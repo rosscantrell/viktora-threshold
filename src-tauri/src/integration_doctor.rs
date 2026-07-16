@@ -918,8 +918,28 @@ pub fn classify_calendar_live(
 /// lib.rs's `ics_source_set`.
 pub const ICS_FETCH_BYTE_CAP: usize = 5 * 1024 * 1024;
 
-/// Timeout for the ICS fetch (brief: ~15s).
-pub const ICS_FETCH_TIMEOUT_SECS: u64 = 15;
+/// Per-ATTEMPT timeout for the ICS fetch. Lowered from 15s when measurement
+/// showed a warm fetch of Ross's real 1MB feed takes ~3s — 15s wasn't buying
+/// patience, it was buying a longer wait before the same failure. A hang doesn't
+/// resolve itself; a retry is what fixes it (see ICS_FETCH_ATTEMPTS).
+pub const ICS_FETCH_TIMEOUT_SECS: u64 = 10;
+
+/// How many times to attempt the ICS fetch before calling it unreachable.
+///
+/// An 8-hour probe against a live OWA feed (2026-07-16) failed ~4-6% of polls:
+/// one 30s hang, one ECONNRESET, across 52 fetches of a 1MB body. At a ~5%
+/// independent failure rate, ONE attempt fails for 1 user in 20 — and the app
+/// then told them their perfectly good link was invalid. Three attempts put that
+/// at ~1 in 8000, where the honest conclusion really is "the network is down".
+///
+/// Only TRANSIENT failures are retried (connect/timeout/5xx). A 4xx or a 200
+/// carrying non-calendar bytes is a real answer — retrying it just makes the
+/// user wait longer for the same correct verdict.
+pub const ICS_FETCH_ATTEMPTS: u32 = 3;
+
+/// Backoff between ICS fetch attempts. Deliberately short: a human is watching a
+/// spinner, and the failures we're covering are blips, not congestion.
+pub const ICS_FETCH_RETRY_DELAY_MS: u64 = 400;
 
 /// Typed ICS-validation failure (local sanity, before the engine ever sees it).
 #[derive(Debug, PartialEq)]
@@ -930,6 +950,20 @@ pub enum IcsValidationError {
     NotHttps,
     /// Fetched OK but the body didn't look like an iCalendar document.
     NotCalendar,
+    /// The link responded, but with an error status — it is not serving a
+    /// calendar (typically 404 after an unpublish/rotate, or 403). Distinct from
+    /// `Unreachable`: this IS a real answer, and the user must act.
+    NotServing,
+    /// Could not reach the link at all after ICS_FETCH_ATTEMPTS tries (timeout,
+    /// connection reset, DNS).
+    ///
+    /// This variant exists because its absence was a live bug: every network
+    /// failure was reported as `NotCalendar` — "That link didn't return a
+    /// calendar. Check you copied the Publish → ICS link." — which is a lie that
+    /// blames the user for a blip and sends them back to OWA to re-copy a link
+    /// that was already correct. At the measured ~5% transient rate that was
+    /// 1 user in 20. Never conflate "we couldn't ask" with "the answer was no".
+    Unreachable,
     /// Exceeded the byte cap while fetching.
     TooLarge,
 }
@@ -943,6 +977,12 @@ impl IcsValidationError {
             IcsValidationError::NotCalendar => {
                 "That link didn't return a calendar. Check you copied the Publish → ICS link."
             }
+            IcsValidationError::NotServing => {
+                "That link isn't serving a calendar any more — it may have been unpublished. Publish a fresh one and paste it here."
+            }
+            IcsValidationError::Unreachable => {
+                "Couldn't reach that link just now — the network or Outlook didn't answer. Try again in a moment; the link itself looks fine."
+            }
             IcsValidationError::TooLarge => "That calendar file is unexpectedly large — check the link.",
         }
     }
@@ -950,7 +990,10 @@ impl IcsValidationError {
     pub fn stage(&self) -> &'static str {
         match self {
             IcsValidationError::Empty | IcsValidationError::NotHttps => "validation",
-            IcsValidationError::NotCalendar | IcsValidationError::TooLarge => "fetch",
+            IcsValidationError::NotCalendar
+            | IcsValidationError::NotServing
+            | IcsValidationError::TooLarge
+            | IcsValidationError::Unreachable => "fetch",
         }
     }
 }
@@ -1232,6 +1275,46 @@ ACCT name=Business2 folder= display=Empty
         let p = probe_calendar_local(&PlatformInfo::detect());
         assert_eq!(p.permission, CalendarPermission::Unknown);
         assert_eq!(p.live_probe_command, "probe_calendar_live");
+    }
+
+    /// The bug this vocabulary exists to prevent: a network blip must never be
+    /// reported as "your link is wrong".
+    ///
+    /// `ics_source_set` mapped `Err(_)` — every timeout, reset and DNS failure,
+    /// error discarded — onto NotCalendar's "That link didn't return a calendar.
+    /// Check you copied the Publish → ICS link." A measured ~5% transient rate
+    /// meant 1 user in 20 was told their correct link was bad and sent back to
+    /// OWA to fix nothing. These messages must stay distinguishable.
+    #[test]
+    fn unreachable_never_blames_the_user_s_link() {
+        let unreachable = IcsValidationError::Unreachable.user_message();
+        let not_calendar = IcsValidationError::NotCalendar.user_message();
+        let not_serving = IcsValidationError::NotServing.user_message();
+
+        // Three different failures, three different things to tell the user.
+        assert_ne!(unreachable, not_calendar);
+        assert_ne!(unreachable, not_serving);
+        assert_ne!(not_calendar, not_serving);
+
+        // "Couldn't reach it" must NOT tell them to go re-copy the link.
+        let u = unreachable.to_lowercase();
+        assert!(
+            !u.contains("check you copied") && !u.contains("publish"),
+            "an unreachable link must not send the user back to OWA: {unreachable}"
+        );
+        // ...and it should say the link looks fine, because it does.
+        assert!(u.contains("link itself looks fine") || u.contains("try again"),
+            "unreachable should tell the user to retry: {unreachable}");
+
+        // A 4xx IS the link's fault — that one may say "publish a fresh one".
+        assert!(not_serving.to_lowercase().contains("publish"));
+
+        // Retrying must be worth doing: 1 attempt is the bug we just fixed.
+        assert!(ICS_FETCH_ATTEMPTS >= 2, "a single attempt reproduces the 1-in-20 false failure");
+        // ...and bounded, since a human is watching a spinner.
+        let worst_ms = ICS_FETCH_TIMEOUT_SECS * 1000 * ICS_FETCH_ATTEMPTS as u64
+            + ICS_FETCH_RETRY_DELAY_MS * (ICS_FETCH_ATTEMPTS as u64 - 1);
+        assert!(worst_ms <= 45_000, "worst-case validate {worst_ms}ms is too long to watch a spinner");
     }
 
     // ── ICS shape validation ──
