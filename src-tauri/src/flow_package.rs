@@ -333,15 +333,23 @@ pub fn teams_live_file_content_expression() -> String {
 
 /// FROZEN `File Content` for the mail BACKFILL flow (kind email, capture
 /// backfill), evaluated inside an Apply-to-each over "Get emails (V3)" `value`.
-/// `mailbox` is `sent` (the default coldstart scope). `bodyHtml` carries the HTML
-/// `body` token (capture-boundary law). Mirrors the live-mail field set so the
-/// sweep parses it identically, plus the v2 discriminators.
-pub fn email_backfill_file_content_expression() -> String {
+/// `bodyHtml` carries the HTML `body` token (capture-boundary law). Mirrors the
+/// live-mail field set so the sweep parses it identically, plus the v2
+/// discriminators.
+///
+/// The mailbox is a PARAMETER, not a constant. Sent remains the recommended
+/// coldstart (you wrote it, so it's safe unconditionally, and it's what teaches
+/// the reciprocity gate its correspondent set). Inbox exists because the gate
+/// makes it safe: with INBOX_RECIPROCITY_GATE_ENABLED on, an inbox backfill
+/// self-filters to people you already correspond with. Running one WITHOUT the
+/// gate imports 14 days of solicitations, permanently — hence the recipe puts
+/// Sent first and says so.
+pub fn email_backfill_file_content_expression(mailbox: Mailbox) -> String {
     json_object_expression(&[
         ("schemaVersion", "2"),
         ("kind", "'email'"),
         ("capture", "'backfill'"),
-        ("mailbox", "'sent'"),
+        ("mailbox", &format!("'{}'", mailbox.label())),
         ("from", "item()?['from']"),
         ("to", "coalesce(item()?['toRecipients'],'')"),
         ("cc", "coalesce(item()?['ccRecipients'],'')"),
@@ -387,18 +395,22 @@ pub const BACKFILL_WINDOW_DAYS: u32 = 14;
 /// Flow names for the v2 flows (match the brief).
 pub const TEAMS_LIVE_FLOW_NAME: &str = "Threshold Teams — <channel>";
 
-/// `Threshold backfill — Sent mail <N>d`. Derived so the NAME can never claim a
-/// window the flow doesn't implement.
-pub fn mail_backfill_flow_name() -> String {
-    format!("Threshold backfill — Sent mail {BACKFILL_WINDOW_DAYS}d")
+/// `Threshold backfill — Sent mail <N>d` / `— Inbox mail <N>d`. Derived so the
+/// NAME can never claim a window (or a mailbox) the flow doesn't implement.
+pub fn mail_backfill_flow_name(mailbox: Mailbox) -> String {
+    let which = match mailbox {
+        Mailbox::Sent => "Sent",
+        Mailbox::Inbox => "Inbox",
+    };
+    format!("Threshold backfill — {which} mail {BACKFILL_WINDOW_DAYS}d")
 }
 /// `Threshold backfill — Teams channel <N>d`.
 pub fn teams_backfill_flow_name() -> String {
     format!("Threshold backfill — Teams channel {BACKFILL_WINDOW_DAYS}d")
 }
-/// `threshold-mail-backfill-<N>d.flow.json`.
-pub fn mail_backfill_filename() -> String {
-    format!("threshold-mail-backfill-{BACKFILL_WINDOW_DAYS}d.flow.json")
+/// `threshold-mail-backfill-<sent|inbox>-<N>d.flow.json`.
+pub fn mail_backfill_filename(mailbox: Mailbox) -> String {
+    format!("threshold-mail-backfill-{}-{BACKFILL_WINDOW_DAYS}d.flow.json", mailbox.label())
 }
 /// `threshold-teams-backfill-<N>d.flow.json`.
 pub fn teams_backfill_filename() -> String {
@@ -453,15 +465,15 @@ pub fn build_teams_live_flow_definition() -> serde_json::Value {
     })
 }
 
-/// The mail BACKFILL flow definition — manual trigger → Get emails (V3) over Sent
-/// Items (last BACKFILL_WINDOW_DAYS days, paged) → Apply-to-each → Create file (kind email,
+/// The mail BACKFILL flow definition — manual trigger → Get emails (V3) over the
+/// chosen mailbox (last BACKFILL_WINDOW_DAYS days, paged) → Apply-to-each → Create file (kind email,
 /// capture backfill).
-pub fn build_email_backfill_flow_definition() -> serde_json::Value {
-    let file_content = format!("@{{{}}}", email_backfill_file_content_expression());
+pub fn build_email_backfill_flow_definition(mailbox: Mailbox) -> serde_json::Value {
+    let file_content = format!("@{{{}}}", email_backfill_file_content_expression(mailbox));
     json!({
-        "name": mail_backfill_flow_name(),
+        "name": mail_backfill_flow_name(mailbox),
         "properties": {
-            "displayName": mail_backfill_flow_name(),
+            "displayName": mail_backfill_flow_name(mailbox),
             "definition": {
                 "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
                 "contentVersion": "1.0.0.0",
@@ -487,7 +499,7 @@ pub fn build_email_backfill_flow_definition() -> serde_json::Value {
                                 "apiId": "/providers/Microsoft.PowerApps/apis/shared_office365"
                             },
                             "parameters": {
-                                "folderPath": "SentItems",
+                                "folderPath": mailbox.trigger_folder(),
                                 "fetchOnlyUnread": false,
                                 "includeAttachments": false,
                                 "importance": "Any",
@@ -694,10 +706,12 @@ channel, see `BACKFILL-RECIPE.md`.
     )
 }
 
-/// The COLDSTART 30-day backfill recipe (default = Sent mail; plus Teams-channel
-/// history). One-time, manually-triggered flows; delete after they run.
+/// The COLDSTART backfill recipe (recommended = Sent mail; optional Inbox and
+/// Teams-channel history). One-time, manually-triggered flows; delete after they
+/// run.
 pub fn build_backfill_recipe() -> String {
-    let mail_expr = email_backfill_file_content_expression();
+    let mail_expr = email_backfill_file_content_expression(Mailbox::Sent);
+    let inbox_expr = email_backfill_file_content_expression(Mailbox::Inbox);
     let teams_expr = teams_backfill_file_content_expression();
     format!(
         r#"# Threshold coldstart — import your last {win} days (one-time)
@@ -736,6 +750,25 @@ as the body and never add an html-to-text step (formatting is meaning here).
 files land in `OneDrive/Apps/Threshold/mail`. When it finishes, **delete the flow**
 (it has done its one job).
 
+## Optional: Inbox, last {win} days ({inbox_name})
+
+**Run the Sent flow first, and only run this one if Threshold is holding
+unknown senders for you.** Your Inbox contains solicitations you never asked
+for; importing them is permanent (each message is deduped by its id, so it
+cannot be un-imported). With the reciprocity gate on, this import self-filters
+to people you already correspond with — which is exactly why Sent goes first:
+it's what teaches Threshold who those people are.
+
+Same five steps as above, with two changes:
+
+**Step 1 — New flow.** Name it `{inbox_name}`.
+
+**Step 2 — Get emails (V3).** Set **Folder** to `Inbox` (not Sent Items).
+
+**Step 4 — File Content.** Paste this instead:
+
+    {inbox_expr}
+
 ## Optional: Teams channel history, last {win} days ({teams_name})
 
 Same idea for one Teams channel. Instant flow → **Microsoft Teams → Get messages**
@@ -751,13 +784,15 @@ text conversion. Run once, then delete.
 Import instead? The definitions are provided as `{mail_file}`
 and `{teams_file}` next to this file.
 "#,
-        mail_name = mail_backfill_flow_name(),
+        mail_name = mail_backfill_flow_name(Mailbox::Sent),
+        inbox_name = mail_backfill_flow_name(Mailbox::Inbox),
         teams_name = teams_backfill_flow_name(),
         folder = CREATE_FILE_FOLDER_PATH,
         mail_expr = mail_expr,
+        inbox_expr = inbox_expr,
         teams_expr = teams_expr,
         win = BACKFILL_WINDOW_DAYS,
-        mail_file = mail_backfill_filename(),
+        mail_file = mail_backfill_filename(Mailbox::Sent),
         teams_file = teams_backfill_filename(),
     )
 }
@@ -779,6 +814,9 @@ pub struct GeneratedPackage {
     pub teams_live_definition: String,
     /// Absolute path to the mail BACKFILL flow definition (WP-INTAKE COLDSTART).
     pub mail_backfill_definition: String,
+    /// The INBOX backfill definition. Safe to run only with the reciprocity gate
+    /// on (it self-filters); the recipe says so.
+    pub mail_backfill_inbox_definition: String,
     /// Absolute path to the Teams BACKFILL flow definition (WP-INTAKE COLDSTART).
     pub teams_backfill_definition: String,
     /// Absolute path to the Teams setup recipe markdown.
@@ -803,7 +841,8 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
     let recipe_path = pkg_dir.join("IMPORT-RECIPE.md");
     // v2 flows (WP-INTAKE TEAMS + COLDSTART).
     let teams_live_path = pkg_dir.join("threshold-teams-live.flow.json");
-    let mail_backfill_path = pkg_dir.join(mail_backfill_filename());
+    let mail_backfill_path = pkg_dir.join(mail_backfill_filename(Mailbox::Sent));
+    let mail_backfill_inbox_path = pkg_dir.join(mail_backfill_filename(Mailbox::Inbox));
     let teams_backfill_path = pkg_dir.join(teams_backfill_filename());
     let teams_recipe_path = pkg_dir.join("TEAMS-RECIPE.md");
     let backfill_recipe_path = pkg_dir.join("BACKFILL-RECIPE.md");
@@ -816,7 +855,11 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
     std::fs::write(&sent_path, pretty(&build_flow_definition(Mailbox::Sent))?)?;
     std::fs::write(&recipe_path, build_recipe())?;
     std::fs::write(&teams_live_path, pretty(&build_teams_live_flow_definition())?)?;
-    std::fs::write(&mail_backfill_path, pretty(&build_email_backfill_flow_definition())?)?;
+    std::fs::write(&mail_backfill_path, pretty(&build_email_backfill_flow_definition(Mailbox::Sent))?)?;
+    std::fs::write(
+        &mail_backfill_inbox_path,
+        pretty(&build_email_backfill_flow_definition(Mailbox::Inbox))?,
+    )?;
     std::fs::write(&teams_backfill_path, pretty(&build_teams_backfill_flow_definition())?)?;
     std::fs::write(&teams_recipe_path, build_teams_recipe())?;
     std::fs::write(&backfill_recipe_path, build_backfill_recipe())?;
@@ -828,6 +871,7 @@ pub fn generate_flow_package(dest_dir: &Path) -> std::io::Result<GeneratedPackag
         recipe: path_string(&recipe_path),
         teams_live_definition: path_string(&teams_live_path),
         mail_backfill_definition: path_string(&mail_backfill_path),
+        mail_backfill_inbox_definition: path_string(&mail_backfill_inbox_path),
         teams_backfill_definition: path_string(&teams_backfill_path),
         teams_recipe: path_string(&teams_recipe_path),
         backfill_recipe: path_string(&backfill_recipe_path),
@@ -880,7 +924,8 @@ mod tests {
             file_content_expression(Mailbox::Inbox),
             file_content_expression(Mailbox::Sent),
             teams_live_file_content_expression(),
-            email_backfill_file_content_expression(),
+            email_backfill_file_content_expression(Mailbox::Sent),
+            email_backfill_file_content_expression(Mailbox::Inbox),
             teams_backfill_file_content_expression(),
         ];
         for expr in &all {
@@ -999,16 +1044,34 @@ mod tests {
     /// a Teams filter, two flow names, two filenames, and the recipe prose — and
     /// a flow NAMED "30d" that imports 14 is a lie that survives review, because
     /// nothing compares the label to the query. Everything derives; this pins it.
+    /// The Inbox backfill must actually READ the Inbox. A flow named "Inbox"
+    /// that queries Sent Items would make every downstream measurement a lie —
+    /// and nothing else in the suite compares the label to the folder.
+    #[test]
+    fn inbox_backfill_reads_inbox_and_sent_reads_sent() {
+        let sent = serde_json::to_string(&build_email_backfill_flow_definition(Mailbox::Sent)).unwrap();
+        let inbox = serde_json::to_string(&build_email_backfill_flow_definition(Mailbox::Inbox)).unwrap();
+        assert!(sent.contains("\"folderPath\":\"SentItems\""), "sent backfill reads Sent Items");
+        assert!(inbox.contains("\"folderPath\":\"Inbox\""), "inbox backfill reads Inbox");
+        assert!(sent.contains("'mailbox','sent'"), "sent stamps mailbox sent");
+        assert!(inbox.contains("'mailbox','inbox'"), "inbox stamps mailbox inbox");
+        // The label must match the folder — that pairing is the whole contract.
+        assert!(mail_backfill_flow_name(Mailbox::Inbox).contains("Inbox"));
+        assert!(mail_backfill_flow_name(Mailbox::Sent).contains("Sent"));
+    }
+
     #[test]
     fn backfill_window_is_one_number_everywhere() {
         let w = BACKFILL_WINDOW_DAYS;
-        assert!(mail_backfill_flow_name().contains(&format!("{w}d")), "flow name states the window");
+        assert!(mail_backfill_flow_name(Mailbox::Sent).contains(&format!("{w}d")), "flow name states the window");
+        assert!(mail_backfill_flow_name(Mailbox::Inbox).contains(&format!("{w}d")));
         assert!(teams_backfill_flow_name().contains(&format!("{w}d")));
-        assert!(mail_backfill_filename().contains(&format!("{w}d")), "filename states the window");
+        assert!(mail_backfill_filename(Mailbox::Sent).contains(&format!("{w}d")), "filename states the window");
+        assert!(mail_backfill_filename(Mailbox::Inbox).contains(&format!("{w}d")));
         assert!(teams_backfill_filename().contains(&format!("{w}d")));
 
         // The QUERY must ask for the same window the name advertises.
-        let mail = serde_json::to_string(&build_email_backfill_flow_definition()).unwrap();
+        let mail = serde_json::to_string(&build_email_backfill_flow_definition(Mailbox::Sent)).unwrap();
         assert!(mail.contains(&format!("addDays(utcNow(),-{w})")), "search query uses the window");
         let teams = serde_json::to_string(&build_teams_backfill_flow_definition()).unwrap();
         assert!(teams.contains(&format!("addDays(utcNow(),-{w})")), "teams filter uses the window");
@@ -1023,7 +1086,14 @@ mod tests {
     #[test]
     fn v2_file_content_expressions_are_frozen_byte_exact() {
         assert_eq!(teams_live_file_content_expression(), FROZEN_TEAMS_LIVE);
-        assert_eq!(email_backfill_file_content_expression(), FROZEN_MAIL_BACKFILL);
+        assert_eq!(email_backfill_file_content_expression(Mailbox::Sent), FROZEN_MAIL_BACKFILL);
+        // The Inbox variant differs ONLY in the mailbox literal — if it ever
+        // differs in anything else, the sweep would parse the two differently.
+        assert_eq!(
+            FROZEN_MAIL_BACKFILL.replace("'mailbox','sent'", "'mailbox','inbox'"),
+            email_backfill_file_content_expression(Mailbox::Inbox),
+            "inbox backfill must differ from sent ONLY in the mailbox literal"
+        );
         assert_eq!(teams_backfill_file_content_expression(), FROZEN_TEAMS_BACKFILL);
     }
 
@@ -1085,7 +1155,7 @@ mod tests {
     fn v2_flow_definitions_parse_and_carry_frozen_expression() {
         for (def, frozen, connector) in [
             (build_teams_live_flow_definition(), FROZEN_TEAMS_LIVE, "shared_teams"),
-            (build_email_backfill_flow_definition(), FROZEN_MAIL_BACKFILL, "shared_office365"),
+            (build_email_backfill_flow_definition(Mailbox::Sent), FROZEN_MAIL_BACKFILL, "shared_office365"),
             (build_teams_backfill_flow_definition(), FROZEN_TEAMS_BACKFILL, "shared_teams"),
         ] {
             // Round-trips through JSON.
@@ -1116,7 +1186,7 @@ mod tests {
         let backfill = build_backfill_recipe();
         assert!(backfill.contains(FROZEN_MAIL_BACKFILL));
         assert!(backfill.contains(FROZEN_TEAMS_BACKFILL));
-        assert!(backfill.contains(&mail_backfill_flow_name()));
+        assert!(backfill.contains(&mail_backfill_flow_name(Mailbox::Sent)));
         assert!(backfill.contains(&teams_backfill_flow_name()));
     }
 
