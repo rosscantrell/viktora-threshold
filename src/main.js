@@ -751,12 +751,19 @@ function switchSettingsPanel(name) {
 // always reflect probed truth rather than optimistic UI state.
 let doctorRenderInFlight = false;
 
-// Session + cross-restart memory of the local calendar probe. TCC only
-// prompts the FIRST time — once the grant flag is set, re-running the live
-// probe at render time is silent (granted ⇒ quiet success; later revoked ⇒
-// quiet typed error), so the card stays truthful without ever ambushing.
-const CAL_GRANT_KEY = "thresholdCalendarProbeGranted";
+// Session memory of the local calendar probe. The re-probe at render time is
+// silent (granted ⇒ quiet success; later revoked ⇒ quiet typed error), so the
+// card stays truthful without ever ambushing.
+//
+// The gate for that re-probe is `calendar.localReadOptIn` in AppConfig — NOT a
+// localStorage grant flag. It used to be `thresholdCalendarProbeGranted`, which
+// meant every render of this panel spawned the reader subprocess (hidden
+// PowerShell + Outlook COM on Windows) for anyone who'd ever granted once. The
+// durable config is the honest home for a decision with that blast radius: it
+// survives a cleared webview, it's the same value the Rust-side tick gate
+// reads, and it can't be resurrected by stale browser state.
 let lastCalendarProbe = null;
+let calendarOptIn = false;
 let doctorRenderQueued = false;
 
 async function renderIntegrationDoctor() {
@@ -778,8 +785,14 @@ async function renderIntegrationDoctor() {
       step = "calendar-link status";
       try { ics = await tauri.core.invoke("ics_source_status"); } catch { /* card falls back to local-only */ }
     }
-    // Previously-granted local calendar: refresh the live state silently.
-    if (!lastCalendarProbe && report?.calendarLocal?.readerPresent && localStorage.getItem(CAL_GRANT_KEY)) {
+    // Opted-in local calendar: refresh the live state silently. Gated on the
+    // durable opt-in, so a stock install never spawns the reader from a render.
+    step = "calendar opt-in";
+    try {
+      const cfg = await tauri.core.invoke("load_config");
+      calendarOptIn = cfg?.calendar?.localReadOptIn === true;
+    } catch { calendarOptIn = false; }
+    if (!lastCalendarProbe && calendarOptIn && report?.calendarLocal?.readerPresent) {
       step = "calendar refresh";
       try { lastCalendarProbe = await tauri.core.invoke("probe_calendar_live"); } catch { /* keep silent-unknown */ }
     }
@@ -1018,11 +1031,20 @@ async function openJumpstartSetup(card, mail) {
   }
 }
 
+// The Calendar card. ICS-FIRST: a published busy-times link is the front door,
+// because the local read is COM-shaped on Windows (hidden PowerShell driving
+// Outlook's object model) and that is what org protections intercept. The local
+// read stays available as a deliberate, opt-in fallback for orgs that block
+// calendar publishing — the two are not redundant, they fail in opposite
+// environments, and neither one covers everybody.
+//
+// Both transports feed the SAME engine-side availability store, so "Ready" via
+// either route means the same thing downstream.
 function buildCalendarCard(report, ics) {
   const cal = report?.calendarLocal ?? {};
   const icsConfigured = !!ics?.configured;
 
-  // Best working transport wins the headline.
+  // The default door, working: nothing on this computer runs at all.
   if (icsConfigured && !ics?.lastError) {
     return doctorCard({
       name: "Calendar",
@@ -1035,29 +1057,17 @@ function buildCalendarCard(report, ics) {
     });
   }
 
-  // Local probe already succeeded (this session, or a remembered grant).
-  if (lastCalendarProbe?.state === "works") {
-    const n = lastCalendarProbe.eventCount ?? 0;
-    return doctorCard({
-      name: "Calendar",
-      detail: `Reads this computer's calendar · ${n} upcoming ${n === 1 ? "event" : "events"} found`,
-      pill: "Ready",
-      pillState: "ready",
-    });
-  }
-
-  const probeFailed = lastCalendarProbe && lastCalendarProbe.state !== "works";
-  const actions = [];
-  let detail;
-  let pill = "1 step";
-
   const runLiveProbe = async (card, btn) => {
     btn.disabled = true;
     btn.textContent = "Asking…";
     try {
+      // Probe FIRST, persist the opt-in only on success: the flag drives an
+      // every-30-min background read, so we don't switch it on until we've seen
+      // the read actually work in this environment.
       lastCalendarProbe = await tauri.core.invoke("probe_calendar_live");
       if (lastCalendarProbe?.state === "works") {
-        localStorage.setItem(CAL_GRANT_KEY, "1");
+        await tauri.core.invoke("calendar_local_set_opt_in", { enabled: true });
+        calendarOptIn = true;
         showToast({ kind: "success", title: "Calendar connected", body: `Found ${lastCalendarProbe.eventCount ?? 0} upcoming events.` });
       }
     } catch (err) {
@@ -1066,24 +1076,50 @@ function buildCalendarCard(report, ics) {
     renderIntegrationDoctor();
   };
 
-  if (cal.readerPresent && !probeFailed) {
-    detail = "Threshold can read the calendar on this computer. It will ask for access once.";
-    actions.push({ label: "Allow access", primary: true, onClick: runLiveProbe });
-  } else if (cal.readerPresent && probeFailed) {
-    detail = lastCalendarProbe.state === "permissionNeeded"
-      ? "Access was declined. Enable Threshold under System Settings → Privacy & Security → Automation, then try again — or use a shared calendar link."
-      : "The calendar couldn't be read on this computer. Try again — or use a shared calendar link instead.";
-    actions.push({ label: "Try again", primary: true, onClick: runLiveProbe });
-    actions.push({ label: "Use a shared link", link: true, onClick: (card) => toggleIcsExpand(card) });
-  } else {
-    pill = "1 min";
-    detail = icsConfigured && ics?.lastError
-      ? "Your shared calendar link stopped working — publish a fresh one and paste it here."
-      : "No local calendar on this computer. Publish a busy-times link from Outlook on the web and paste it here.";
-    actions.push({ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card) });
+  // Fallback already on and working.
+  if (calendarOptIn && lastCalendarProbe?.state === "works") {
+    const n = lastCalendarProbe.eventCount ?? 0;
+    return doctorCard({
+      name: "Calendar",
+      detail: `Reads this computer's calendar · ${n} upcoming ${n === 1 ? "event" : "events"} found`,
+      pill: "Ready",
+      pillState: "ready",
+      actions: [{ label: "Use a shared link instead", link: true, onClick: (card) => toggleIcsExpand(card) }],
+    });
   }
 
-  return doctorCard({ name: "Calendar", detail, pill, pillState: "action", actions });
+  // Fallback on but failing — visible, never silent (house law). The read is
+  // opted in, so the tick is trying this every 30 minutes and getting nothing.
+  if (calendarOptIn && lastCalendarProbe && lastCalendarProbe.state !== "works") {
+    return doctorCard({
+      name: "Calendar",
+      detail: lastCalendarProbe.state === "permissionNeeded"
+        ? "Access to this computer's calendar was declined. Enable Threshold under System Settings → Privacy & Security → Automation, or use a shared calendar link instead."
+        : "This computer's calendar couldn't be read — some workplaces block it. A shared calendar link works instead.",
+      pill: "1 step",
+      pillState: "action",
+      actions: [
+        { label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card) },
+        { label: "Try this computer again", link: true, onClick: runLiveProbe },
+      ],
+    });
+  }
+
+  // Nothing configured — the first-run state. The link is the primary action
+  // even when a local reader is present.
+  const actions = [{ label: "Add calendar link", primary: true, onClick: (card) => toggleIcsExpand(card) }];
+  if (cal.readerPresent) {
+    actions.push({ label: "Use this computer's calendar", link: true, onClick: runLiveProbe });
+  }
+  return doctorCard({
+    name: "Calendar",
+    detail: icsConfigured && ics?.lastError
+      ? "Your shared calendar link stopped working — publish a fresh one and paste it here."
+      : "Publish a busy-times link from your calendar and paste it here, so Threshold knows when you're free.",
+    pill: "1 min",
+    pillState: "action",
+    actions,
+  });
 }
 
 function toggleIcsExpand(card) {
@@ -1108,6 +1144,19 @@ function toggleIcsExpand(card) {
     add.textContent = "Checking…";
     try {
       await tauri.core.invoke("ics_source_set", { icsUrl: url });
+      // A working link supersedes the local read — stand the local one down.
+      // Not just tidiness: both producers write the SAME engine-side
+      // availability store under the same viewer key, last-writer-wins. Leaving
+      // both on makes the stored snapshot alternate between the two sources
+      // every tick, and keeps spawning the reader subprocess we just stopped
+      // needing. Best-effort: a failure here must not fail the save.
+      if (calendarOptIn) {
+        try {
+          await tauri.core.invoke("calendar_local_set_opt_in", { enabled: false });
+          calendarOptIn = false;
+          lastCalendarProbe = null;
+        } catch (e) { console.warn("[calendar] couldn't stand down the local read:", e); }
+      }
       showToast({ kind: "success", title: "Calendar link saved", body: "Busy times sync every 30 minutes — laptop open or closed." });
       renderIntegrationDoctor();
     } catch (err) {
@@ -1120,7 +1169,10 @@ function toggleIcsExpand(card) {
   row.append(input, add);
   const help = document.createElement("p");
   help.className = "doctor-card-detail";
-  help.textContent = "Outlook on the web → Settings → Calendar → Shared calendars → publish \"Can view when I'm busy\", then paste the ICS link. Only busy times are shared — never titles.";
+  // Outlook leads because it's where most of our users are, but the field takes
+  // any published calendar now that webcal:// links normalize — and iCloud
+  // hands out webcal:// verbatim, so naming it saves a dead end.
+  help.textContent = "Outlook on the web → Settings → Calendar → Shared calendars → publish \"Can view when I'm busy\", then paste the ICS link. Google and iCloud published links work too. Only busy times are shared — never titles. If you don't see a publish option, your workplace has turned it off — use this computer's calendar instead.";
   expand.append(row, help);
   card.appendChild(expand);
   input.focus();

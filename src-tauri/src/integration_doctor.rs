@@ -945,16 +945,38 @@ impl IcsValidationError {
 }
 
 /// Local shape validation of a pasted ICS URL: non-empty + https. Does NOT
-/// fetch. Pure + unit-tested. Returns the trimmed URL on success.
+/// fetch. Pure + unit-tested. Returns the trimmed (and `webcal://`-normalized)
+/// URL on success.
+///
+/// `webcal://` is normalized to `https://` rather than rejected. It isn't a
+/// real transport — it's a click-to-subscribe hint that calendar clients map
+/// onto https, and iCloud (among others) hands the user a `webcal://` link
+/// verbatim from its share sheet. Rejecting the exact string the user was given
+/// is a dead end, and now that ICS is the FRONT door rather than a fallback
+/// there's nowhere for them to fall back to. The scheme swap is the same
+/// resolution every calendar client performs.
+///
+/// Note this rejects plain `http://` — the ICS URL exposes free/busy to any
+/// holder (the engine's ics-source-store treats it as a bearer secret), so it
+/// must not travel in cleartext. `webcal://` normalizes UP to https, never down.
 pub fn validate_ics_url_shape(url: &str) -> Result<String, IcsValidationError> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err(IcsValidationError::Empty);
     }
-    if !trimmed.to_lowercase().starts_with("https://") {
+    // `get(..n)` (not `trimmed[..n]`): a byte-index slice panics when the index
+    // isn't a char boundary, and this string is arbitrary pasted input.
+    const WEBCAL: &str = "webcal://";
+    let normalized = match trimmed.get(..WEBCAL.len()) {
+        Some(head) if head.eq_ignore_ascii_case(WEBCAL) => {
+            format!("https://{}", &trimmed[WEBCAL.len()..])
+        }
+        _ => trimmed.to_string(),
+    };
+    if !normalized.to_lowercase().starts_with("https://") {
         return Err(IcsValidationError::NotHttps);
     }
-    Ok(trimmed.to_string())
+    Ok(normalized)
 }
 
 /// Does a fetched body look like an iCalendar document? We do NOT parse (the
@@ -1207,6 +1229,30 @@ ACCT name=Business2 folder= display=Empty
         assert_eq!(
             validate_ics_url_shape("  https://outlook.office.com/owa/calendar/abc/reachcalendar.ics  ").unwrap(),
             "https://outlook.office.com/owa/calendar/abc/reachcalendar.ics"
+        );
+    }
+
+    // ── webcal:// normalizes UP to https (iCloud hands these out verbatim) ──
+    #[test]
+    fn ics_shape_normalizes_webcal_to_https() {
+        assert_eq!(
+            validate_ics_url_shape("webcal://p01-calendars.icloud.com/published/2/abc").unwrap(),
+            "https://p01-calendars.icloud.com/published/2/abc"
+        );
+        // Scheme match is case-insensitive, and surrounding whitespace still trims.
+        assert_eq!(
+            validate_ics_url_shape("  WebCal://example.com/x.ics  ").unwrap(),
+            "https://example.com/x.ics"
+        );
+        // Only the SCHEME is rewritten — a `webcal` host/path must survive intact.
+        assert_eq!(
+            validate_ics_url_shape("webcal://webcal.example.com/webcal/x.ics").unwrap(),
+            "https://webcal.example.com/webcal/x.ics"
+        );
+        // The prefix check must not panic on a short/partial paste.
+        assert_eq!(
+            validate_ics_url_shape("webcal:/").unwrap_err(),
+            IcsValidationError::NotHttps
         );
     }
 
