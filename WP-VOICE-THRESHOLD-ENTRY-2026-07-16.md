@@ -158,7 +158,84 @@ exposure (V4).
 4. Backend redeploy — reconcile local `ec90ec0` vs droplet copy before V1
    (md5 check; §A caveat).
 
-## J. References
+## J. Co-presentation — the companion shows work product (added 2026-07-16)
+
+Voice alone can't show anything; when the call runs next to Threshold, **the
+app is the display**. The mechanism is a presenter directive, not a payload:
+
+- companion-backend adds ONE **local tool** to Claude's loop (it already owns
+  the tool list — MCP tools via the connector, plus its own):
+  `present({ kind, id, note? })`, kind ∈ record · task-brief · outbox-item ·
+  day-graph-region · workback-plan · question.
+- A `present` call emits an event on a per-session SSE channel
+  (`GET /voice-llm/app-session/:sid/events`, same bearer gate as the mint
+  route). The call window subscribes at session start and forwards directives
+  over a Tauri event to the main window, which resolves `{kind, id}` through
+  its **existing views** and navigates/highlights.
+- The app renders from its own engine data — the directive is a pointer,
+  never content. Single source of truth; no second formatting path; the voice
+  register stays terse while the screen carries the detail ("pulling it up
+  now — see the workback on screen; the red step is the one that slipped").
+- **Session ↔ window correlation:** the mint route returns a `sessionId`; the
+  client passes it as a dynamic variable at `startSession`; ElevenLabs
+  forwards it into the custom-LLM request (`user_id` /
+  `elevenlabs_extra_body` — the backend already reads `user_id`; pin the
+  exact field at build).
+- **Register honesty:** the mint route knows whether a screen exists. Desktop
+  sessions get the `present` tool + one doctrine line ("show what you
+  discuss"); phone sessions (§K) don't get the tool at all — Claude never
+  offers to show something it can't.
+- Fail-visible: an unresolvable directive renders a plain line in the call
+  window ("asked to show a workback plan — this build can't display it yet"),
+  never a silent drop.
+- v2+: reverse deixis — the app passes what Ross is currently looking at
+  (view + item ids) as session context, so "what about this one?" resolves.
+
+Sequencing: needs V1's call window + mint route; lands as its own slice after
+V2 (session UX) is stable. Engine work: zero. App work: one event listener +
+routing into views that already exist.
+
+## K. Ad-hoc entry — call or text the companion during the day (added 2026-07-16)
+
+The continuity machinery is already engine-anchored, not thread-anchored:
+same-mind continuation (`CONTINUE_PASS_RANK`), day-plan anchor, capture docs →
+post-close wing. Any entry surface appends the SAME plan — which is exactly
+why new entry surfaces are cheap. What's missing is only the surfaces.
+
+**Call it — a phone number on the existing agent.** ElevenLabs Agents
+natively supports phone numbers (Twilio integration or SIP trunk) attached to
+an agent. An inbound call runs the same custom-LLM backend, same protocol,
+same post-call capture → same plan updates. New pieces:
+
+- number provisioning (Twilio → ElevenLabs, dashboard-level config);
+- **inbound gating** via the conversation-initiation webhook: allowlist
+  Ross's caller ID, reject everything else. Caller-ID is spoofable — honest
+  limit. Acceptable Ross-only with attended read+capture scope; revisit
+  (spoken challenge, per-call PIN) before any pilot exposure; the standing
+  release/pilot action gate applies regardless;
+- a midday/ad-hoc packet lens already exists (lens is derived from
+  call time — the postcall bridge already maps ET time → morning/midday/
+  evening).
+
+Bonus this unlocks: **outbound** — routines could place the call ("your 8:30
+standup is calling you") instead of waiting for a click; batch-calling API
+exists. V3+ material, same gate.
+
+**Text it — two tiers, and tier 0 already exists.**
+
+- **Tier 0 (today, zero build):** claude.ai text chat with the `/mcp/v2`
+  connector IS the text companion — `update_companion_plan`, `stage_prework`,
+  outbox proposals all work from the phone now. This is the very baseline
+  voice has to out-grade (WP-VOICE §G).
+- **Tier 1 (only if SMS specifically proves wanted):** Twilio SMS webhook →
+  a thin text lane on companion-backend (same Claude+MCP loop, terse SMS
+  register, thread by phone number, close on inactivity → capture doc).
+  ~a day of build. Recommendation: **defer** — the friction it removes vs
+  opening the Claude app is small, and SMS strips the register down to its
+  weakest form. Build it if a week of real days shows the Claude-app hop is
+  actually where appends die.
+
+## L. References
 
 - `WP-VOICE-BRIEF-2026-07-13.md` (parent; §G ship gates unchanged)
 - `~/scratch/voice-spike/` — README, RUBRIC, GRADES-2026-07-13 (why Claude
