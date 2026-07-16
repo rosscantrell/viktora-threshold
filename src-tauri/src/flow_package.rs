@@ -104,24 +104,61 @@ pub const CREATE_FILE_FOLDER_PATH: &str = "/Apps/Threshold/mail";
 /// never collide (the sweep dedups engine-side by internetMessageId anyway).
 pub const CREATE_FILE_NAME_EXPRESSION: &str = "@{concat(guid(),'.json')}";
 
-/// The FROZEN `File Content` expression for a mailbox. Produced by templating the
-/// `mailbox` literal into the exact createObject shape `onedrive_mail_sweep`
-/// schema v1 parses. The unit tests assert this byte-for-byte against a separate
-/// literal copy of the brief spec (drift guard).
+/// Compose a `File Content` expression that serializes ordered `(key, value)`
+/// pairs to a JSON string, in Power Automate's workflow-definition language.
+///
+/// ── Why `setProperty` and not `createObject` ─────────────────────────────────
+/// Every expression here USED to call `createObject(...)`. **That function does
+/// not exist.** Power Automate has `createArray`, and someone reasoned by
+/// symmetry — so all five flows failed identically and instantly, in the field:
+///
+///   InvalidTemplate ... 'The template function 'createObject' is not defined
+///   or not valid.'
+///
+/// The tests asserted the broken string byte-exact against a copy of the brief,
+/// so they were green the whole time: the spec and the code agreed with each
+/// other and neither had ever met Power Automate. Only running a real flow
+/// (2026-07-16, Olympus tenant) surfaced it. Don't "fix" this from a spec —
+/// verify against a run.
+///
+/// `setProperty(object, key, value)` layered onto a `json('{}')` base is the
+/// documented way to build an object. (`addProperty` THROWS if the key already
+/// exists; `setProperty` doesn't — safer for a generated chain.)
+///
+/// ── Why serialize an object instead of concatenating JSON ────────────────────
+/// `string()` of a real object escapes for us. `bodyHtml` carries raw email HTML
+/// — quotes, newlines, the lot — and any hand-built JSON literal or `concat`
+/// shreds on the first message containing a `"`. Verified: a 463-char HTML body
+/// round-tripped intact through a live run.
+fn json_object_expression(fields: &[(&str, &str)]) -> String {
+    let mut expr = String::from("json('{}')");
+    for (key, value) in fields {
+        expr = format!("setProperty({expr},'{key}',{value})");
+    }
+    format!("string({expr})")
+}
+
+/// The FROZEN `File Content` expression for a mailbox — the exact JSON shape
+/// `onedrive_mail_sweep` schema v1 parses. The unit tests assert it byte-for-byte
+/// against a separate literal copy (drift guard).
+///
+/// VERIFIED END-TO-END against a live Power Automate run (2026-07-16): the
+/// produced file parsed as `MailFileV1` with every required field populated
+/// (`from`, `internetMessageId`, a body). The shape is UNCHANGED from the old
+/// broken expression's intent, so the parser and `schemaVersion` don't move —
+/// only the function that builds it.
 pub fn file_content_expression(mailbox: Mailbox) -> String {
-    format!(
-        "string(createObject(\
-'schemaVersion',1,\
-'mailbox','{m}',\
-'from',triggerBody()?['from'],\
-'to',coalesce(triggerBody()?['toRecipients'],''),\
-'cc',coalesce(triggerBody()?['ccRecipients'],''),\
-'subject',coalesce(triggerBody()?['subject'],''),\
-'dateTimeCreated',triggerBody()?['receivedDateTime'],\
-'bodyHtml',coalesce(triggerBody()?['body'],''),\
-'internetMessageId',triggerBody()?['internetMessageId']))",
-        m = mailbox.label()
-    )
+    json_object_expression(&[
+        ("schemaVersion", "1"),
+        ("mailbox", &format!("'{}'", mailbox.label())),
+        ("from", "triggerBody()?['from']"),
+        ("to", "coalesce(triggerBody()?['toRecipients'],'')"),
+        ("cc", "coalesce(triggerBody()?['ccRecipients'],'')"),
+        ("subject", "coalesce(triggerBody()?['subject'],'')"),
+        ("dateTimeCreated", "triggerBody()?['receivedDateTime']"),
+        ("bodyHtml", "coalesce(triggerBody()?['body'],'')"),
+        ("internetMessageId", "triggerBody()?['internetMessageId']"),
+    ])
 }
 
 /// Build one flow's Logic-App workflow definition (the shape Power Automate's
@@ -264,7 +301,7 @@ receive.
 // ─────────────────────────────────────────────────────────────────────────────
 // v2 flows — WP-INTAKE TEAMS (live channel messages) + COLDSTART (30d backfill).
 // Each writes schema-v2 JSON (schemaVersion:2 + kind + capture) via the same
-// string(createObject(...)) escaping pattern the sweep's v2 dispatcher parses.
+// json_object_expression() serializer the sweep's v2 dispatcher parses.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The Create-file folder for Teams captures — the SAME swept folder as mail
@@ -279,19 +316,19 @@ pub const CREATE_FILE_FOLDER_PATH_TEAMS: &str = CREATE_FILE_FOLDER_PATH;
 /// the channel — a user may hard-code a literal name if they want a prettier
 /// title). The engine derives the thread key from `channelId` + `replyToId`.
 pub fn teams_live_file_content_expression() -> String {
-    "string(createObject(\
-'schemaVersion',2,\
-'kind','teams-channel',\
-'capture','live',\
-'channelId',triggerBody()?['channelIdentity']?['channelId'],\
-'channelName','',\
-'teamName','',\
-'author',triggerBody()?['from']?['user']?['displayName'],\
-'messageId',triggerBody()?['id'],\
-'replyToId',coalesce(triggerBody()?['replyToId'],''),\
-'dateTimeCreated',triggerBody()?['createdDateTime'],\
-'bodyHtml',coalesce(triggerBody()?['body']?['content'],'')))"
-        .to_string()
+    json_object_expression(&[
+        ("schemaVersion", "2"),
+        ("kind", "'teams-channel'"),
+        ("capture", "'live'"),
+        ("channelId", "triggerBody()?['channelIdentity']?['channelId']"),
+        ("channelName", "''"),
+        ("teamName", "''"),
+        ("author", "triggerBody()?['from']?['user']?['displayName']"),
+        ("messageId", "triggerBody()?['id']"),
+        ("replyToId", "coalesce(triggerBody()?['replyToId'],'')"),
+        ("dateTimeCreated", "triggerBody()?['createdDateTime']"),
+        ("bodyHtml", "coalesce(triggerBody()?['body']?['content'],'')"),
+    ])
 }
 
 /// FROZEN `File Content` for the mail BACKFILL flow (kind email, capture
@@ -300,38 +337,38 @@ pub fn teams_live_file_content_expression() -> String {
 /// `body` token (capture-boundary law). Mirrors the live-mail field set so the
 /// sweep parses it identically, plus the v2 discriminators.
 pub fn email_backfill_file_content_expression() -> String {
-    "string(createObject(\
-'schemaVersion',2,\
-'kind','email',\
-'capture','backfill',\
-'mailbox','sent',\
-'from',item()?['from'],\
-'to',coalesce(item()?['toRecipients'],''),\
-'cc',coalesce(item()?['ccRecipients'],''),\
-'subject',coalesce(item()?['subject'],''),\
-'dateTimeCreated',item()?['receivedDateTime'],\
-'bodyHtml',coalesce(item()?['body'],''),\
-'internetMessageId',item()?['internetMessageId']))"
-        .to_string()
+    json_object_expression(&[
+        ("schemaVersion", "2"),
+        ("kind", "'email'"),
+        ("capture", "'backfill'"),
+        ("mailbox", "'sent'"),
+        ("from", "item()?['from']"),
+        ("to", "coalesce(item()?['toRecipients'],'')"),
+        ("cc", "coalesce(item()?['ccRecipients'],'')"),
+        ("subject", "coalesce(item()?['subject'],'')"),
+        ("dateTimeCreated", "item()?['receivedDateTime']"),
+        ("bodyHtml", "coalesce(item()?['body'],'')"),
+        ("internetMessageId", "item()?['internetMessageId']"),
+    ])
 }
 
 /// FROZEN `File Content` for the Teams BACKFILL flow (kind teams-channel, capture
 /// backfill), evaluated inside an Apply-to-each over "Get messages" `value`. Same
 /// field set as the Teams live flow but sourced from `item()`.
 pub fn teams_backfill_file_content_expression() -> String {
-    "string(createObject(\
-'schemaVersion',2,\
-'kind','teams-channel',\
-'capture','backfill',\
-'channelId',item()?['channelIdentity']?['channelId'],\
-'channelName','',\
-'teamName','',\
-'author',item()?['from']?['user']?['displayName'],\
-'messageId',item()?['id'],\
-'replyToId',coalesce(item()?['replyToId'],''),\
-'dateTimeCreated',item()?['createdDateTime'],\
-'bodyHtml',coalesce(item()?['body']?['content'],'')))"
-        .to_string()
+    json_object_expression(&[
+        ("schemaVersion", "2"),
+        ("kind", "'teams-channel'"),
+        ("capture", "'backfill'"),
+        ("channelId", "item()?['channelIdentity']?['channelId']"),
+        ("channelName", "''"),
+        ("teamName", "''"),
+        ("author", "item()?['from']?['user']?['displayName']"),
+        ("messageId", "item()?['id']"),
+        ("replyToId", "coalesce(item()?['replyToId'],'')"),
+        ("dateTimeCreated", "item()?['createdDateTime']"),
+        ("bodyHtml", "coalesce(item()?['body']?['content'],'')"),
+    ])
 }
 
 /// Flow names for the v2 flows (match the brief).
@@ -779,11 +816,65 @@ mod tests {
     use super::*;
     use std::time::SystemTime;
 
-    // The canonical frozen strings, copied verbatim from the ONBOARD brief spec.
-    // If `file_content_expression` ever drifts from what `onedrive_mail_sweep`
-    // schema v1 parses, THIS is the test that fails.
-    const FROZEN_INBOX: &str = "string(createObject('schemaVersion',1,'mailbox','inbox','from',triggerBody()?['from'],'to',coalesce(triggerBody()?['toRecipients'],''),'cc',coalesce(triggerBody()?['ccRecipients'],''),'subject',coalesce(triggerBody()?['subject'],''),'dateTimeCreated',triggerBody()?['receivedDateTime'],'bodyHtml',coalesce(triggerBody()?['body'],''),'internetMessageId',triggerBody()?['internetMessageId']))";
-    const FROZEN_SENT: &str = "string(createObject('schemaVersion',1,'mailbox','sent','from',triggerBody()?['from'],'to',coalesce(triggerBody()?['toRecipients'],''),'cc',coalesce(triggerBody()?['ccRecipients'],''),'subject',coalesce(triggerBody()?['subject'],''),'dateTimeCreated',triggerBody()?['receivedDateTime'],'bodyHtml',coalesce(triggerBody()?['body'],''),'internetMessageId',triggerBody()?['internetMessageId']))";
+    // The canonical frozen strings. These are NOT copied from the brief any more
+    // — the brief's spec called createObject(), a function Power Automate does
+    // not have, and these constants faithfully asserted that broken string for
+    // the product's whole life. A spec copy proves the code matches a document;
+    // it proves nothing about Microsoft accepting it. FROZEN_INBOX below is the
+    // expression a real flow ran successfully (2026-07-16, Olympus tenant),
+    // producing a file that parsed as MailFileV1 with every required field.
+    const FROZEN_INBOX: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',1),'mailbox','inbox'),'from',triggerBody()?['from']),'to',coalesce(triggerBody()?['toRecipients'],'')),'cc',coalesce(triggerBody()?['ccRecipients'],'')),'subject',coalesce(triggerBody()?['subject'],'')),'dateTimeCreated',triggerBody()?['receivedDateTime']),'bodyHtml',coalesce(triggerBody()?['body'],'')),'internetMessageId',triggerBody()?['internetMessageId']))";
+    const FROZEN_SENT: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',1),'mailbox','sent'),'from',triggerBody()?['from']),'to',coalesce(triggerBody()?['toRecipients'],'')),'cc',coalesce(triggerBody()?['ccRecipients'],'')),'subject',coalesce(triggerBody()?['subject'],'')),'dateTimeCreated',triggerBody()?['receivedDateTime']),'bodyHtml',coalesce(triggerBody()?['body'],'')),'internetMessageId',triggerBody()?['internetMessageId']))";
+
+    /// Guards the CLASS of bug that shipped here, not the instance.
+    ///
+    /// `createObject` isn't a Power Automate function, so every generated flow
+    /// failed instantly with InvalidTemplate — and the drift-guard tests were
+    /// green throughout, because they compared the code against a copy of the
+    /// same wrong spec. Nothing in the suite could tell "matches the brief" from
+    /// "actually works".
+    ///
+    /// This asserts every File Content expression is built only from functions
+    /// observed working against live Power Automate. Adding a function here
+    /// means running a real flow with it first — that's the whole point.
+    #[test]
+    fn expressions_use_only_verified_template_functions() {
+        // Verified in a live run, Olympus tenant, 2026-07-16.
+        const VERIFIED: &[&str] = &["string(", "setProperty(", "json(", "coalesce(", "triggerBody(", "item("];
+        // Known-not-a-function. The literal that cost us this bug.
+        const FORBIDDEN: &[&str] = &["createObject(", "createRecord(", "makeObject("];
+
+        let all = [
+            file_content_expression(Mailbox::Inbox),
+            file_content_expression(Mailbox::Sent),
+            teams_live_file_content_expression(),
+            email_backfill_file_content_expression(),
+            teams_backfill_file_content_expression(),
+        ];
+        for expr in &all {
+            for bad in FORBIDDEN {
+                assert!(!expr.contains(bad), "expression uses a non-existent template function `{bad}`: {expr}");
+            }
+            // Every `name(` in the expression must be a function we've seen work.
+            let mut rest = expr.as_str();
+            while let Some(open) = rest.find('(') {
+                let head = &rest[..open];
+                let name_start = head
+                    .rfind(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .map(|i| i + 1)
+                    .unwrap_or(0);
+                let call = format!("{}(", &head[name_start..]);
+                if call != "(" {
+                    assert!(
+                        VERIFIED.iter().any(|v| *v == call),
+                        "unverified template function `{call}` — run it against real Power \
+                         Automate before adding it to VERIFIED: {expr}"
+                    );
+                }
+                rest = &rest[open + 1..];
+            }
+        }
+    }
 
     #[test]
     fn file_content_expression_is_frozen_byte_exact() {
@@ -868,9 +959,9 @@ mod tests {
     // Independent literal copies of the v2 File Content expressions. If a
     // generator drifts from what `onedrive_mail_sweep`'s v2 dispatcher parses,
     // THESE fail.
-    const FROZEN_TEAMS_LIVE: &str = "string(createObject('schemaVersion',2,'kind','teams-channel','capture','live','channelId',triggerBody()?['channelIdentity']?['channelId'],'channelName','','teamName','','author',triggerBody()?['from']?['user']?['displayName'],'messageId',triggerBody()?['id'],'replyToId',coalesce(triggerBody()?['replyToId'],''),'dateTimeCreated',triggerBody()?['createdDateTime'],'bodyHtml',coalesce(triggerBody()?['body']?['content'],'')))";
-    const FROZEN_MAIL_BACKFILL: &str = "string(createObject('schemaVersion',2,'kind','email','capture','backfill','mailbox','sent','from',item()?['from'],'to',coalesce(item()?['toRecipients'],''),'cc',coalesce(item()?['ccRecipients'],''),'subject',coalesce(item()?['subject'],''),'dateTimeCreated',item()?['receivedDateTime'],'bodyHtml',coalesce(item()?['body'],''),'internetMessageId',item()?['internetMessageId']))";
-    const FROZEN_TEAMS_BACKFILL: &str = "string(createObject('schemaVersion',2,'kind','teams-channel','capture','backfill','channelId',item()?['channelIdentity']?['channelId'],'channelName','','teamName','','author',item()?['from']?['user']?['displayName'],'messageId',item()?['id'],'replyToId',coalesce(item()?['replyToId'],''),'dateTimeCreated',item()?['createdDateTime'],'bodyHtml',coalesce(item()?['body']?['content'],'')))";
+    const FROZEN_TEAMS_LIVE: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',2),'kind','teams-channel'),'capture','live'),'channelId',triggerBody()?['channelIdentity']?['channelId']),'channelName',''),'teamName',''),'author',triggerBody()?['from']?['user']?['displayName']),'messageId',triggerBody()?['id']),'replyToId',coalesce(triggerBody()?['replyToId'],'')),'dateTimeCreated',triggerBody()?['createdDateTime']),'bodyHtml',coalesce(triggerBody()?['body']?['content'],'')))";
+    const FROZEN_MAIL_BACKFILL: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',2),'kind','email'),'capture','backfill'),'mailbox','sent'),'from',item()?['from']),'to',coalesce(item()?['toRecipients'],'')),'cc',coalesce(item()?['ccRecipients'],'')),'subject',coalesce(item()?['subject'],'')),'dateTimeCreated',item()?['receivedDateTime']),'bodyHtml',coalesce(item()?['body'],'')),'internetMessageId',item()?['internetMessageId']))";
+    const FROZEN_TEAMS_BACKFILL: &str = "string(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(setProperty(json('{}'),'schemaVersion',2),'kind','teams-channel'),'capture','backfill'),'channelId',item()?['channelIdentity']?['channelId']),'channelName',''),'teamName',''),'author',item()?['from']?['user']?['displayName']),'messageId',item()?['id']),'replyToId',coalesce(item()?['replyToId'],'')),'dateTimeCreated',item()?['createdDateTime']),'bodyHtml',coalesce(item()?['body']?['content'],'')))";
 
     #[test]
     fn v2_file_content_expressions_are_frozen_byte_exact() {
