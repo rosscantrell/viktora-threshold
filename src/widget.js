@@ -666,6 +666,17 @@ async function runChannelTick(reason) {
 // `push_availability` command (which attaches the per-user bearer + base URL —
 // the bearer never leaves Rust, matching every other engine call in the app).
 //
+// OPT-IN ONLY (ICS-first posture). `calendar_read_window` is gated in Rust on
+// `calendar.localReadOptIn` and returns the CALENDAR_LOCAL_OFF sentinel when it
+// isn't set — which is the DEFAULT. So on a stock install this callee makes one
+// cheap IPC round-trip and stops, and the reader subprocess (on Windows: hidden
+// PowerShell + `Outlook.Application` COM) is never spawned. That matters: doing
+// that automatically every 30 minutes forever is precisely the pattern org
+// protections read as hostile, and it was firing whether or not anything
+// downstream needed it. The default door is now the engine's ICS poller, which
+// fetches a user-published busy-times link server-side and writes the SAME
+// availability store this push writes — so the lane is fed either way.
+//
 // Privacy default (WP-CALENDAR rule 2): busy-windows only. `includeTitles` is
 // false, so we DON'T put titles/organizers on the wire even though the local
 // read returns them. (A future local-detail setting can flip this per-push.)
@@ -699,20 +710,31 @@ function buildAvailabilityBody(events, { includeTitles = false, updatedAt } = {}
   return body;
 }
 
+/** Rust's sentinel for "local read isn't opted into" — the default, not a fault. */
+const CALENDAR_LOCAL_OFF = "CALENDAR_LOCAL_OFF";
+
 /**
  * The availability push callee. Reads the calendar, maps to the busy-only body,
  * and pushes. Every failure is swallowed with a quiet log (the read command
  * already surfaces a plain-product "calendar unavailable" message via its
  * error; here we just don't let it reach the UI). Never throws.
+ *
+ * No-ops entirely unless the user opted the local read in — see the section
+ * header. The opt-in is enforced Rust-side, so this callee doesn't need to read
+ * config itself and can't drift from the gate.
  */
 async function pushAvailability() {
   let result;
   try {
     result = await invoke("calendar_read_window", { days: AVAILABILITY_WINDOW_DAYS });
   } catch (err) {
-    // Read failed (permission denied / timeout / platform unsupported). The Rust
-    // command returned its plain-product user_message as the error string. Log
-    // and skip — the next tick retries a fresh full snapshot.
+    // CALENDAR_LOCAL_OFF is the stock posture (ICS is the front door and feeds
+    // the same lane engine-side) — stay silent, or every install logs a warning
+    // every 30 minutes for a state that is working as designed.
+    if (String(err).includes(CALENDAR_LOCAL_OFF)) return;
+    // A real read failure: permission denied / timeout / platform unsupported.
+    // The Rust command returned its plain-product user_message as the error
+    // string. Log and skip — the next tick retries a fresh full snapshot.
     console.warn("[availability] calendar read unavailable:", err);
     return;
   }

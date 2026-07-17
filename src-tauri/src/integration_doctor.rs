@@ -42,12 +42,25 @@ use crate::onedrive_mail_sweep::{self, OneDriveMailConfig};
 // Also exposed to the UI via the `integration_doctor_links` command.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The Power Automate "Import Package (Legacy)" entry point the guided flow-
-/// import step opens. The generated flow package (commit 2) is imported here.
-pub const POWER_AUTOMATE_IMPORT_URL: &str = "https://make.powerautomate.com/import";
+// NOTE: there is deliberately NO "import package" link here. An earlier one
+// (`https://make.powerautomate.com/import`) pointed at Import Package (Legacy),
+// the entry point for a `.zip` this product has never generated — `flow_package`
+// ships a copy-paste RECIPE instead, on purpose (see its module header). So the
+// button sent users to an import page with nothing to import, and 404'd on top
+// of that (below). Don't reintroduce it without a package to import.
 
-/// The Power Automate "My flows" list — fallback landing if the import page has
-/// moved, and where a user re-enables a paused flow during a repair pass.
+/// The Power Automate "My flows" list — where every guided flow step lands. The
+/// recipe's step 1 is "Create → Automated cloud flow", and this page carries
+/// both that and the left-nav Create entry. Also where a user re-enables a
+/// paused flow during a repair pass.
+///
+/// The `/environments/~default/` segment is LOAD-BEARING, not decoration.
+/// Power Automate routes resolve against an environment; a bare route (e.g.
+/// `make.powerautomate.com/import`) has nothing to resolve against and renders
+/// a client-side 404 for anyone whose sign-in spans more than one tenant — which
+/// is how the old import link failed in the field. `~default` is an alias the
+/// SPA rewrites to the concrete id (`environments/Default-<guid>/flows`).
+/// Verified in a live multi-tenant session, 2026-07-16.
 pub const POWER_AUTOMATE_FLOWS_URL: &str =
     "https://make.powerautomate.com/environments/~default/flows";
 
@@ -61,7 +74,6 @@ pub const OWA_SHARED_CALENDARS_URL: &str =
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeepLinks {
-    pub power_automate_import: &'static str,
     pub power_automate_flows: &'static str,
     pub owa_shared_calendars: &'static str,
 }
@@ -69,7 +81,6 @@ pub struct DeepLinks {
 impl DeepLinks {
     pub fn canonical() -> Self {
         DeepLinks {
-            power_automate_import: POWER_AUTOMATE_IMPORT_URL,
             power_automate_flows: POWER_AUTOMATE_FLOWS_URL,
             owa_shared_calendars: OWA_SHARED_CALENDARS_URL,
         }
@@ -907,8 +918,28 @@ pub fn classify_calendar_live(
 /// lib.rs's `ics_source_set`.
 pub const ICS_FETCH_BYTE_CAP: usize = 5 * 1024 * 1024;
 
-/// Timeout for the ICS fetch (brief: ~15s).
-pub const ICS_FETCH_TIMEOUT_SECS: u64 = 15;
+/// Per-ATTEMPT timeout for the ICS fetch. Lowered from 15s when measurement
+/// showed a warm fetch of Ross's real 1MB feed takes ~3s — 15s wasn't buying
+/// patience, it was buying a longer wait before the same failure. A hang doesn't
+/// resolve itself; a retry is what fixes it (see ICS_FETCH_ATTEMPTS).
+pub const ICS_FETCH_TIMEOUT_SECS: u64 = 10;
+
+/// How many times to attempt the ICS fetch before calling it unreachable.
+///
+/// An 8-hour probe against a live OWA feed (2026-07-16) failed ~4-6% of polls:
+/// one 30s hang, one ECONNRESET, across 52 fetches of a 1MB body. At a ~5%
+/// independent failure rate, ONE attempt fails for 1 user in 20 — and the app
+/// then told them their perfectly good link was invalid. Three attempts put that
+/// at ~1 in 8000, where the honest conclusion really is "the network is down".
+///
+/// Only TRANSIENT failures are retried (connect/timeout/5xx). A 4xx or a 200
+/// carrying non-calendar bytes is a real answer — retrying it just makes the
+/// user wait longer for the same correct verdict.
+pub const ICS_FETCH_ATTEMPTS: u32 = 3;
+
+/// Backoff between ICS fetch attempts. Deliberately short: a human is watching a
+/// spinner, and the failures we're covering are blips, not congestion.
+pub const ICS_FETCH_RETRY_DELAY_MS: u64 = 400;
 
 /// Typed ICS-validation failure (local sanity, before the engine ever sees it).
 #[derive(Debug, PartialEq)]
@@ -919,6 +950,20 @@ pub enum IcsValidationError {
     NotHttps,
     /// Fetched OK but the body didn't look like an iCalendar document.
     NotCalendar,
+    /// The link responded, but with an error status — it is not serving a
+    /// calendar (typically 404 after an unpublish/rotate, or 403). Distinct from
+    /// `Unreachable`: this IS a real answer, and the user must act.
+    NotServing,
+    /// Could not reach the link at all after ICS_FETCH_ATTEMPTS tries (timeout,
+    /// connection reset, DNS).
+    ///
+    /// This variant exists because its absence was a live bug: every network
+    /// failure was reported as `NotCalendar` — "That link didn't return a
+    /// calendar. Check you copied the Publish → ICS link." — which is a lie that
+    /// blames the user for a blip and sends them back to OWA to re-copy a link
+    /// that was already correct. At the measured ~5% transient rate that was
+    /// 1 user in 20. Never conflate "we couldn't ask" with "the answer was no".
+    Unreachable,
     /// Exceeded the byte cap while fetching.
     TooLarge,
 }
@@ -932,6 +977,12 @@ impl IcsValidationError {
             IcsValidationError::NotCalendar => {
                 "That link didn't return a calendar. Check you copied the Publish → ICS link."
             }
+            IcsValidationError::NotServing => {
+                "That link isn't serving a calendar any more — it may have been unpublished. Publish a fresh one and paste it here."
+            }
+            IcsValidationError::Unreachable => {
+                "Couldn't reach that link just now — the network or Outlook didn't answer. Try again in a moment; the link itself looks fine."
+            }
             IcsValidationError::TooLarge => "That calendar file is unexpectedly large — check the link.",
         }
     }
@@ -939,22 +990,47 @@ impl IcsValidationError {
     pub fn stage(&self) -> &'static str {
         match self {
             IcsValidationError::Empty | IcsValidationError::NotHttps => "validation",
-            IcsValidationError::NotCalendar | IcsValidationError::TooLarge => "fetch",
+            IcsValidationError::NotCalendar
+            | IcsValidationError::NotServing
+            | IcsValidationError::TooLarge
+            | IcsValidationError::Unreachable => "fetch",
         }
     }
 }
 
 /// Local shape validation of a pasted ICS URL: non-empty + https. Does NOT
-/// fetch. Pure + unit-tested. Returns the trimmed URL on success.
+/// fetch. Pure + unit-tested. Returns the trimmed (and `webcal://`-normalized)
+/// URL on success.
+///
+/// `webcal://` is normalized to `https://` rather than rejected. It isn't a
+/// real transport — it's a click-to-subscribe hint that calendar clients map
+/// onto https, and iCloud (among others) hands the user a `webcal://` link
+/// verbatim from its share sheet. Rejecting the exact string the user was given
+/// is a dead end, and now that ICS is the FRONT door rather than a fallback
+/// there's nowhere for them to fall back to. The scheme swap is the same
+/// resolution every calendar client performs.
+///
+/// Note this rejects plain `http://` — the ICS URL exposes free/busy to any
+/// holder (the engine's ics-source-store treats it as a bearer secret), so it
+/// must not travel in cleartext. `webcal://` normalizes UP to https, never down.
 pub fn validate_ics_url_shape(url: &str) -> Result<String, IcsValidationError> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err(IcsValidationError::Empty);
     }
-    if !trimmed.to_lowercase().starts_with("https://") {
+    // `get(..n)` (not `trimmed[..n]`): a byte-index slice panics when the index
+    // isn't a char boundary, and this string is arbitrary pasted input.
+    const WEBCAL: &str = "webcal://";
+    let normalized = match trimmed.get(..WEBCAL.len()) {
+        Some(head) if head.eq_ignore_ascii_case(WEBCAL) => {
+            format!("https://{}", &trimmed[WEBCAL.len()..])
+        }
+        _ => trimmed.to_string(),
+    };
+    if !normalized.to_lowercase().starts_with("https://") {
         return Err(IcsValidationError::NotHttps);
     }
-    Ok(trimmed.to_string())
+    Ok(normalized)
 }
 
 /// Does a fetched body look like an iCalendar document? We do NOT parse (the
@@ -982,8 +1058,17 @@ mod tests {
             l.owa_shared_calendars,
             "https://outlook.office.com/mail/options/calendar/SharedCalendars"
         );
-        assert!(l.power_automate_import.starts_with("https://"));
         assert!(l.power_automate_flows.starts_with("https://"));
+        assert!(l.owa_shared_calendars.starts_with("https://"));
+        // Power Automate routes resolve against an ENVIRONMENT. A bare route
+        // renders a client-side 404 for multi-tenant sign-ins (how the retired
+        // import link failed in the field) — and an https:// check can't catch
+        // it, because a wrong-but-valid URL passes. Pin the segment instead.
+        assert!(
+            l.power_automate_flows.contains("/environments/"),
+            "Power Automate deep links must be environment-scoped: {}",
+            l.power_automate_flows
+        );
     }
 
     // ── platform ──
@@ -1192,6 +1277,46 @@ ACCT name=Business2 folder= display=Empty
         assert_eq!(p.live_probe_command, "probe_calendar_live");
     }
 
+    /// The bug this vocabulary exists to prevent: a network blip must never be
+    /// reported as "your link is wrong".
+    ///
+    /// `ics_source_set` mapped `Err(_)` — every timeout, reset and DNS failure,
+    /// error discarded — onto NotCalendar's "That link didn't return a calendar.
+    /// Check you copied the Publish → ICS link." A measured ~5% transient rate
+    /// meant 1 user in 20 was told their correct link was bad and sent back to
+    /// OWA to fix nothing. These messages must stay distinguishable.
+    #[test]
+    fn unreachable_never_blames_the_user_s_link() {
+        let unreachable = IcsValidationError::Unreachable.user_message();
+        let not_calendar = IcsValidationError::NotCalendar.user_message();
+        let not_serving = IcsValidationError::NotServing.user_message();
+
+        // Three different failures, three different things to tell the user.
+        assert_ne!(unreachable, not_calendar);
+        assert_ne!(unreachable, not_serving);
+        assert_ne!(not_calendar, not_serving);
+
+        // "Couldn't reach it" must NOT tell them to go re-copy the link.
+        let u = unreachable.to_lowercase();
+        assert!(
+            !u.contains("check you copied") && !u.contains("publish"),
+            "an unreachable link must not send the user back to OWA: {unreachable}"
+        );
+        // ...and it should say the link looks fine, because it does.
+        assert!(u.contains("link itself looks fine") || u.contains("try again"),
+            "unreachable should tell the user to retry: {unreachable}");
+
+        // A 4xx IS the link's fault — that one may say "publish a fresh one".
+        assert!(not_serving.to_lowercase().contains("publish"));
+
+        // Retrying must be worth doing: 1 attempt is the bug we just fixed.
+        assert!(ICS_FETCH_ATTEMPTS >= 2, "a single attempt reproduces the 1-in-20 false failure");
+        // ...and bounded, since a human is watching a spinner.
+        let worst_ms = ICS_FETCH_TIMEOUT_SECS * 1000 * ICS_FETCH_ATTEMPTS as u64
+            + ICS_FETCH_RETRY_DELAY_MS * (ICS_FETCH_ATTEMPTS as u64 - 1);
+        assert!(worst_ms <= 45_000, "worst-case validate {worst_ms}ms is too long to watch a spinner");
+    }
+
     // ── ICS shape validation ──
     #[test]
     fn ics_shape_requires_https() {
@@ -1207,6 +1332,30 @@ ACCT name=Business2 folder= display=Empty
         assert_eq!(
             validate_ics_url_shape("  https://outlook.office.com/owa/calendar/abc/reachcalendar.ics  ").unwrap(),
             "https://outlook.office.com/owa/calendar/abc/reachcalendar.ics"
+        );
+    }
+
+    // ── webcal:// normalizes UP to https (iCloud hands these out verbatim) ──
+    #[test]
+    fn ics_shape_normalizes_webcal_to_https() {
+        assert_eq!(
+            validate_ics_url_shape("webcal://p01-calendars.icloud.com/published/2/abc").unwrap(),
+            "https://p01-calendars.icloud.com/published/2/abc"
+        );
+        // Scheme match is case-insensitive, and surrounding whitespace still trims.
+        assert_eq!(
+            validate_ics_url_shape("  WebCal://example.com/x.ics  ").unwrap(),
+            "https://example.com/x.ics"
+        );
+        // Only the SCHEME is rewritten — a `webcal` host/path must survive intact.
+        assert_eq!(
+            validate_ics_url_shape("webcal://webcal.example.com/webcal/x.ics").unwrap(),
+            "https://webcal.example.com/webcal/x.ics"
+        );
+        // The prefix check must not panic on a short/partial paste.
+        assert_eq!(
+            validate_ics_url_shape("webcal:/").unwrap_err(),
+            IcsValidationError::NotHttps
         );
     }
 
