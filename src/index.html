@@ -322,6 +322,7 @@
                    renderIntegrationDoctor() in main.js on panel open. -->
               <div class="doctor-head">
                 <h3 class="settings-subhead">Connections</h3>
+                <button type="button" id="btn-peer-invite" class="btn-inline-link" hidden>Invite someone</button>
                 <button type="button" id="btn-doctor-refresh" class="btn-inline-link">Re-check</button>
               </div>
               <p class="field-help doctor-lede">
@@ -329,6 +330,33 @@
                 organization. Green means flowing; anything needing you shows one
                 step.
               </p>
+              <!-- WP-PEER-HANDSHAKE H2 — the invite composer (connect-by-
+                   invitation; no directory, no search — by design). Hidden
+                   until "Invite someone"; the button itself only shows when
+                   the engine says the handshake lane is on. -->
+              <div id="peer-invite-composer" class="peer-invite-composer" hidden>
+                <label class="field">
+                  <span class="field-label">Their email</span>
+                  <input type="email" id="peer-invite-email" placeholder="colleague@company.com" autocomplete="off" />
+                </label>
+                <fieldset class="peer-invite-scopes">
+                  <legend class="field-label">What this connection may carry</legend>
+                  <label class="peer-scope-row"><input type="checkbox" id="peer-scope-question" checked />
+                    <span>Ask each other's companions questions</span></label>
+                  <label class="peer-scope-row"><input type="checkbox" id="peer-scope-handoff" />
+                    <span>Pass work items to each other</span></label>
+                  <label class="peer-scope-row"><input type="checkbox" id="peer-scope-receipt" />
+                    <span>Confirm each other's completions</span></label>
+                </fieldset>
+                <label class="field">
+                  <span class="field-label">Note (optional)</span>
+                  <input type="text" id="peer-invite-note" placeholder="Why you're connecting — they'll see this" autocomplete="off" />
+                </label>
+                <div class="peer-invite-actions">
+                  <button type="button" id="btn-peer-invite-send" class="btn btn-primary btn-compact">Send invitation</button>
+                  <button type="button" id="btn-peer-invite-close" class="btn btn-link">Cancel</button>
+                </div>
+              </div>
               <div id="integration-doctor-body" class="doctor-cards">
                 <p class="field-help">Checking what works on this computer…</p>
               </div>
@@ -1048,6 +1076,40 @@
       </p>
       <div class="decisions-list" id="outbox-list" aria-label="Staged outbox items"></div>
       <p class="record-status" id="outbox-status" hidden></p>
+    </section>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         WP-PEER-HANDSHAKE H2 — the invitation accept screen. Reached ONLY
+         via the apolla-threshold://peer-invite deep link (B clicked the
+         invite email's "Open in Threshold"). Shows who's asking, their
+         note, and the proposed scopes as checkboxes B may NARROW (never
+         widen); exactly two actions. main.js's peer-invite listener fills
+         it from the inviter's public landing payload.
+         ────────────────────────────────────────────────────────────────── -->
+    <section id="view-peer-accept" class="view view-decisions view-peer-accept" hidden>
+      <header class="decisions-header">
+        <div class="decisions-header-text">
+          <h1 class="decisions-title">Connect your workspaces?</h1>
+          <p class="decisions-sub" id="peer-accept-sub"></p>
+        </div>
+      </header>
+      <div class="peer-accept-card">
+        <p class="peer-accept-who" id="peer-accept-who"></p>
+        <p class="peer-accept-note" id="peer-accept-note" hidden></p>
+        <p class="peer-accept-host" id="peer-accept-host"></p>
+        <fieldset class="peer-invite-scopes" id="peer-accept-scopes">
+          <legend class="field-label">What they proposed — untick anything you don't want</legend>
+        </fieldset>
+        <p class="peer-accept-explain">
+          Connecting lets your companions coordinate — nothing sends without
+          you, and you can disconnect any time from Settings.
+        </p>
+        <div class="peer-invite-actions">
+          <button type="button" id="btn-peer-accept" class="btn btn-primary btn-compact">Accept</button>
+          <button type="button" id="btn-peer-decline" class="btn btn-link">Decline</button>
+        </div>
+        <p class="record-status" id="peer-accept-status" hidden></p>
+      </div>
     </section>
 
     <section id="view-decisions" class="view view-decisions" hidden>
