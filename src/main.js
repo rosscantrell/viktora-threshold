@@ -778,6 +778,26 @@ async function renderIntegrationDoctor() {
       step = "calendar-link status";
       try { ics = await tauri.core.invoke("ics_source_status"); } catch { /* card falls back to local-only */ }
     }
+    // WP-COMPANION-NETWORK-UI increment 2 — colleague connections. The peer
+    // channel health rows ride the check-in packet's intake section (the same
+    // ledger as plaud/email). Best-effort: engines without the lane (or with
+    // intake off) serve no peer rows ⇒ calm absence; a FAILED fetch is the
+    // one case we can't tell ⇒ an honest couldn't-check note, never silence.
+    let peerIntake = null;
+    let peerIntakeFailed = false;
+    if (report?.engine?.state === "reachable") {
+      step = "connections";
+      try {
+        const brief = await tauri.core.invoke("fetch_checkin_brief", {
+          lens: null,
+          tzOffsetMinutes: -new Date().getTimezoneOffset(),
+        });
+        peerIntake = brief && brief.intake ? brief.intake : null;
+      } catch (e) {
+        console.warn("[doctor] connections check failed:", e);
+        peerIntakeFailed = true;
+      }
+    }
     // Previously-granted local calendar: refresh the live state silently.
     if (!lastCalendarProbe && report?.calendarLocal?.readerPresent && localStorage.getItem(CAL_GRANT_KEY)) {
       step = "calendar refresh";
@@ -787,7 +807,11 @@ async function renderIntegrationDoctor() {
     const stamp = document.createElement("p");
     stamp.className = "doctor-card-detail";
     stamp.textContent = `Checked ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
-    body.replaceChildren(...buildDoctorCards(report, ics), stamp);
+    body.replaceChildren(
+      ...buildDoctorCards(report, ics),
+      ...buildConnectionCards(peerIntake, peerIntakeFailed),
+      stamp,
+    );
   } catch (err) {
     console.error("[doctor] render failed at", step, err);
     body.replaceChildren(doctorNote("err", `Couldn't check connections (${step}): ${err}`));
@@ -1265,6 +1289,67 @@ function buildOneNoteCard(report) {
     pill: "Unavailable",
     pillState: "blocked",
   });
+}
+
+// WP-COMPANION-NETWORK-UI increment 2 — one doctor card per linked colleague.
+// Data: the check-in packet's intake.channels peer rows (label, state,
+// reconnectHint, pending/failed depths — same ledger as plaud/email).
+// States map to the doctor grammar: ok ⇒ Ready; stale ⇒ Quiet (attention, one
+// look); disconnected ⇒ blocked with the reconnect hint spelled out. Held
+// sends surface as a count + a jump to the outbox — never silent. Engines
+// without the lane serve no peer rows ⇒ no cards (calm absence).
+function buildConnectionCards(intake, fetchFailed) {
+  if (fetchFailed) {
+    return [doctorNote("warn", "Couldn't check your colleague connections — Refresh to retry.")];
+  }
+  const rows = (intake && Array.isArray(intake.channels) ? intake.channels : []).filter(
+    (ch) => String(ch.channel || "").startsWith("peer:"),
+  );
+  const cards = [];
+  for (const ch of rows) {
+    const h = ch.health || {};
+    const side = peerSideLabel(h.label, String(ch.channel).slice(5));
+    const waiting = ch.pending || 0;
+    const held = ch.failed || 0;
+    const lastBit = h.lastIngestAt ? ` Last exchange ${doctorRelTime(h.lastIngestAt)}.` : "";
+
+    let pill = "Ready";
+    let pillState = "ready";
+    let detail;
+    if (h.state === "disconnected") {
+      pill = "Disconnected";
+      pillState = "blocked";
+      detail = h.reconnectHint || `The connection to ${side} isn't working — it needs to be reconnected before anything can go through.`;
+    } else if (h.state === "stale") {
+      pill = "Quiet";
+      pillState = "action";
+      detail = `Nothing has gone through in a while.${lastBit}`;
+    } else {
+      detail = `Connected — questions, answers, and handoffs flow when you send them.${lastBit}`;
+    }
+    if (held > 0) {
+      detail += ` ${held} couldn't send — held in your outbox with the error.`;
+      // A held send needs the user even when the link itself reads fine —
+      // never a green pill over a stuck message.
+      if (pillState === "ready") {
+        pill = "Held";
+        pillState = "action";
+      }
+    } else if (waiting > 0) {
+      detail += ` ${waiting} waiting for you to send.`;
+    }
+
+    const actions = [];
+    if (held > 0 || waiting > 0) {
+      actions.push({
+        label: held > 0 ? "Review held items" : "Review & send",
+        primary: held > 0,
+        onClick: () => enterOutboxView(),
+      });
+    }
+    cards.push(doctorCard({ name: side, detail, pill, pillState, actions }));
+  }
+  return cards;
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
