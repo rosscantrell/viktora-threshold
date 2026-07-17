@@ -2209,6 +2209,45 @@ async fn outbox_decide(
         .map_err(|e| format!("outbox_decide: parse response failed: {e}"))
 }
 
+/// WP-COMPANION-NETWORK-UI — POST /api/outbox/:id/dispatch-peer: the human's
+/// SEND action for an outbox item addressed to a linked colleague. The server
+/// marks the item `sent` ONLY on the other side's ack; a failed attempt comes
+/// back 200 `{ok:false, item, error}` with the item held pending and a visible
+/// `lastDispatchError` (fail-closed-but-VISIBLE — the card renders the held
+/// state, never a fake "sent"). Flag-off servers reply `{enabled:false}`.
+/// 30s timeout: the server relays to the peer engine inside this call.
+#[tauri::command]
+async fn outbox_dispatch_peer(
+    state: tauri::State<'_, AppState>,
+    item_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/outbox/{}/dispatch-peer",
+        cfg.base_url.trim_end_matches('/'),
+        item_id
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("outbox_dispatch_peer: parse response failed: {e}"))
+}
+
 // ── WP-CHECKIN-ROUTINES — engine prework-runner schedule ──
 //
 // The Settings routines card reads/writes the engine's three unattended
@@ -9729,6 +9768,7 @@ pub fn run() {
             fetch_decision_log,
             fetch_outbox,
             outbox_decide,
+            outbox_dispatch_peer,
             fetch_prework_config,
             save_prework_config,
             outbox_artifact_save,

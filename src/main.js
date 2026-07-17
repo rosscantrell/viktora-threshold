@@ -5564,6 +5564,138 @@ async function loadTodayPlan() {
   catch (e) { console.warn("[main] Your plan render:", e); }
   try { renderPreworkStaging(data && data.prework); }
   catch (e) { console.warn("[main] prework render:", e); renderPreworkStaging(null); }
+  try { renderPeerArrivals(data && data.intake); }
+  catch (e) { console.warn("[main] peer arrivals render:", e); }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// WP-COMPANION-NETWORK-UI — the peer surfaces of the check-in packet.
+// Everything here traces to an envelope document a human on the other side
+// approved sending; every card/row keeps that provenance openable. Plain
+// language only: "<label>'s side", kinds as Question/Answer/Handoff/Receipt.
+// ══════════════════════════════════════════════════════════════════════════
+
+// Kind → the user-facing noun (canon; never transport jargon).
+const PEER_KIND_LABELS = { question: "question", answer: "answer", handoff: "handoff", receipt: "receipt" };
+
+function peerKindLabel(kind) {
+  const k = PEER_KIND_LABELS[String(kind || "").toLowerCase()];
+  return k ? k[0].toUpperCase() + k.slice(1) : "Message";
+}
+
+/** "elena-p" → "Elena's side" when a label is known, else the raw id (honest
+ *  fallback — never invent a name). `labelByPeerId` comes from the intake
+ *  channel health rows; outbox items carry their own server-joined label. */
+function peerSideLabel(label, peerId) {
+  if (label) return /'s side$/i.test(label) ? label : `${label}'s side`;
+  return peerId || "a linked colleague";
+}
+
+/** Append text rendering ONLY its **bold** emphasis (safe spans — words are
+ *  untouched; unbalanced markers render literally). */
+function appendWithBold(el, text) {
+  const parts = String(text).split("**");
+  if (parts.length % 2 === 0) { el.textContent = text; return; } // unbalanced
+  parts.forEach((part, i) => {
+    if (!part) return;
+    if (i % 2) {
+      const b = document.createElement("strong");
+      b.textContent = part;
+      el.appendChild(b);
+    } else {
+      el.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
+// The per-render label join: channel "peer:<id>" → its health row's label.
+let _peerLabelById = new Map();
+
+// "From your colleagues" — intake receipts from peer channels only. Counts per
+// peer read like speech: "2 questions, 1 receipt from Elena's side". Rows are
+// openable when the receipt carries its document id (provenance invariant).
+function renderPeerArrivals(intake) {
+  const section = document.getElementById("today-peer-section");
+  const list = document.getElementById("today-peer-list");
+  const countEl = document.getElementById("today-peer-count");
+  const overflowEl = document.getElementById("today-peer-overflow");
+  if (!section || !list) return;
+
+  _peerLabelById = new Map();
+  const channels = intake && Array.isArray(intake.channels) ? intake.channels : [];
+  for (const ch of channels) {
+    const id = String(ch.channel || "");
+    if (id.startsWith("peer:")) {
+      _peerLabelById.set(id.slice(5), (ch.health && ch.health.label) || null);
+    }
+  }
+
+  const received = intake && Array.isArray(intake.received) ? intake.received : [];
+  const rows = received.filter((r) => String(r.channel || "").startsWith("peer:"));
+  if (!rows.length) {
+    section.hidden = true; // calm absence — nothing peer-sent since last look
+    return;
+  }
+
+  // Per-peer kind tally → "2 questions, 1 receipt from Elena's side".
+  const byPeer = new Map();
+  for (const r of rows) {
+    const peerId = String(r.channel).slice(5);
+    if (!byPeer.has(peerId)) byPeer.set(peerId, new Map());
+    const kinds = byPeer.get(peerId);
+    const kind = PEER_KIND_LABELS[String(r.envelopeKind || "").toLowerCase()] || "message";
+    kinds.set(kind, (kinds.get(kind) || 0) + 1);
+  }
+  const phrases = [];
+  for (const [peerId, kinds] of byPeer) {
+    const bits = [];
+    for (const kind of ["question", "answer", "handoff", "receipt", "message"]) {
+      const n = kinds.get(kind);
+      if (n) bits.push(`${n} ${kind}${n === 1 ? "" : "s"}`);
+    }
+    phrases.push(`${bits.join(", ")} from ${peerSideLabel(_peerLabelById.get(peerId), peerId)}`);
+  }
+  if (countEl) countEl.textContent = phrases.join(" · ");
+
+  list.innerHTML = "";
+  for (const r of rows) {
+    const row = document.createElement("div");
+    row.className = "today-peer-row";
+    const kind = document.createElement("span");
+    kind.className = "today-peer-kind";
+    kind.dataset.kind = String(r.envelopeKind || "").toLowerCase();
+    kind.textContent = peerKindLabel(r.envelopeKind);
+    row.appendChild(kind);
+    const text = document.createElement("span");
+    text.className = "today-peer-text";
+    // The kind column already says Question/Answer/… — trim the envelope
+    // title's matching "<Kind> — " prefix so the row doesn't say it twice.
+    const kindWord = peerKindLabel(r.envelopeKind);
+    const title = (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
+    text.textContent = title;
+    if (title.length > 64) text.title = r.title || title;
+    row.appendChild(text);
+    const when = document.createElement("span");
+    when.className = "today-peer-when";
+    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+    if (!Number.isNaN(ms)) {
+      when.textContent = new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    }
+    row.appendChild(when);
+    if (r.docId) {
+      row.classList.add("is-openable");
+      row.addEventListener("click", () => openSourcePanel(r.docId, null));
+    }
+    list.appendChild(row);
+  }
+  if (overflowEl) {
+    // The packet caps receipts; the overflow count spans ALL channels, so word
+    // it honestly rather than claiming the tail is peer-sent.
+    const extra = (intake && intake.receivedOverflow) || 0;
+    overflowEl.textContent = extra ? `+${extra} more arrived across your channels` : "";
+    overflowEl.hidden = !extra;
+  }
+  section.hidden = false;
 }
 
 // The reconciliation stratum. Buckets render in the mockup-D grammar: moved
@@ -5690,6 +5822,14 @@ function renderPreworkStaging(prework) {
   const list = document.getElementById("today-prework-list");
   if (list) {
     list.innerHTML = "";
+    // WP-COMPANION-NETWORK-UI — accept cards lead the stratum: a decision the
+    // other side already made is the cheapest win on the board (doctrine),
+    // and NOTHING is resolved until the user's tap (the cards are inert).
+    const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
+    for (const card of cards) {
+      try { list.appendChild(renderAcceptCard(card)); }
+      catch (e) { console.warn("[main] renderAcceptCard:", e); }
+    }
     const items = prework && Array.isArray(prework.items) ? prework.items : [];
     for (const item of items) {
       try { list.appendChild(renderPreworkRow(item)); }
@@ -5698,6 +5838,82 @@ function renderPreworkStaging(prework) {
   }
   _preparedSettled.prework = true;
   reconcilePreparedState();
+}
+
+// The flagship trust artifact: "<peer>'s side answered your question — accept
+// and file it?" The summary is EXTRACTION-GROUNDED server-side — render it
+// VERBATIM (full text, no editing, no lossy truncation; re-deriving it here
+// would reopen the faithfulness hole). The tap is the ONLY way a peer answer
+// closes a question; failure keeps the card with a visible error.
+function renderAcceptCard(card) {
+  const wrap = document.createElement("div");
+  wrap.className = "today-accept-card";
+
+  const head = document.createElement("p");
+  head.className = "today-accept-head";
+  head.textContent = `✦ ${peerSideLabel(card.peerLabel, null)} answered your question — accept and file it?`;
+  wrap.appendChild(head);
+
+  const summary = document.createElement("p");
+  summary.className = "today-accept-summary";
+  // VERBATIM content — the only rendering applied is the summary's own
+  // **bold** emphasis (safe spans, no innerHTML; the words are untouched).
+  appendWithBold(summary, card.summary || "");
+  wrap.appendChild(summary);
+
+  const actions = document.createElement("div");
+  actions.className = "today-accept-actions";
+
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "today-accept-btn";
+  accept.textContent = "Accept & close";
+  accept.addEventListener("click", async () => {
+    accept.disabled = true;
+    accept.textContent = "Filing…";
+    try {
+      const r = await tauri.core.invoke("answer_question", {
+        factKey: card.questionId,
+        answer: true,
+      });
+      if (!r || r.ok !== true) throw new Error((r && r.error) || "not recorded");
+      // Closed for good — the question never re-asks. Show the quiet receipt
+      // in place, then let the next refresh drop the card naturally.
+      const done = document.createElement("p");
+      done.className = "today-accept-done";
+      done.textContent = `✓ Filed — closed on the answer from ${peerSideLabel(card.peerLabel, null)}.`;
+      wrap.replaceChildren(done);
+      wrap.classList.add("is-done");
+      reconcilePreparedState();
+      showToast({
+        kind: "success",
+        title: "Accepted",
+        body: "The answer is filed with their message as its evidence. It won't ask again.",
+      });
+    } catch (e) {
+      console.warn("[main] accept card close failed:", e);
+      accept.disabled = false;
+      accept.textContent = "Accept & close";
+      showToast({
+        kind: "failure",
+        title: "Couldn't file that",
+        body: "Nothing was closed. Try again in a moment.",
+      });
+    }
+  });
+  actions.appendChild(accept);
+
+  if (card.answerDocId) {
+    const view = document.createElement("button");
+    view.type = "button";
+    view.className = "btn btn-link";
+    view.textContent = "See their full answer";
+    view.addEventListener("click", () => openSourcePanel(card.answerDocId, null));
+    actions.appendChild(view);
+  }
+
+  wrap.appendChild(actions);
+  return wrap;
 }
 
 function renderPreworkRow(item) {
@@ -5761,11 +5977,13 @@ function renderPreworkRow(item) {
 function reconcilePreparedState() {
   const countEl = document.getElementById("today-prepared-count");
   const emptyEl = document.getElementById("today-prepared-empty");
+  const accepts = document.querySelectorAll("#today-prework-list .today-accept-card:not(.is-done)").length;
   const staged = document.querySelectorAll("#today-prework-list .today-draft-item").length;
   const drafts = document.querySelectorAll("#today-outbox-list .today-draft-item").length;
-  const n = staged + drafts;
+  const n = accepts + staged + drafts;
   if (countEl) {
     const parts = [];
+    if (accepts) parts.push(`${accepts} answered — accept?`);
     if (staged) parts.push(`${staged} awaiting review`);
     if (drafts) parts.push(`${drafts} to send`);
     countEl.textContent = parts.join(" · ");
@@ -5831,7 +6049,16 @@ function renderDraftRow(item) {
   row.appendChild(text);
   const tag = document.createElement("span");
   tag.className = "today-draft-tag";
-  tag.textContent = "approved, awaiting send";
+  // WP-COMPANION-NETWORK-UI — a held peer send is NEVER silent: the compact
+  // row itself says so (the expanded card carries the error + retry).
+  if (item.addressedToPeer && item.lastDispatchError) {
+    tag.textContent = "held — couldn't send";
+    tag.classList.add("is-held");
+  } else if (item.addressedToPeer) {
+    tag.textContent = `to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`;
+  } else {
+    tag.textContent = "approved, awaiting send";
+  }
   row.appendChild(tag);
   const detail = document.createElement("div");
   detail.className = "today-draft-detail";
@@ -16618,8 +16845,19 @@ function renderOutboxCard(item) {
   const chip = document.createElement("span");
   chip.className = "record-chip";
   chip.dataset.type = item.type || "";
-  chip.textContent = outboxTypeLabel(item.type);
+  // WP-COMPANION-NETWORK-UI — peer-addressed items are coordination messages:
+  // the chip speaks their kind (Question/Answer/Handoff/Receipt), not the
+  // email mechanics underneath.
+  chip.textContent = item.addressedToPeer && item.envelopeKind
+    ? peerKindLabel(item.envelopeKind)
+    : outboxTypeLabel(item.type);
   header.appendChild(chip);
+  if (item.addressedToPeer) {
+    const to = document.createElement("span");
+    to.className = "record-chip outbox-peer-chip";
+    to.textContent = `to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`;
+    header.appendChild(to);
+  }
   // WP-OUTBOX-COMPANION-CARD — provenance: agent-drafted items say so (the
   // ✦ glyph is the companion's mark everywhere else in the app).
   if (item.proposedBy === "mcp-agent") {
@@ -16769,6 +17007,26 @@ function renderOutboxCard(item) {
     card.appendChild(link);
   }
 
+  // WP-COMPANION-NETWORK-UI — a failed send HOLDS the item here with its error
+  // in view (fail-closed-but-VISIBLE): never silently pending, never fake-sent.
+  if (item.addressedToPeer && item.lastDispatchError) {
+    card.classList.add("is-held");
+    const held = document.createElement("div");
+    held.className = "outbox-held";
+    const line = document.createElement("p");
+    line.className = "outbox-held-line";
+    line.textContent = "Couldn't send — holding it here until it goes through.";
+    held.appendChild(line);
+    const err = document.createElement("p");
+    err.className = "outbox-held-error";
+    const at = item.lastDispatchError.at ? Date.parse(item.lastDispatchError.at) : NaN;
+    err.textContent =
+      (item.lastDispatchError.message || "The other side couldn't be reached.") +
+      (Number.isNaN(at) ? "" : ` · last tried ${new Date(at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}`);
+    held.appendChild(err);
+    card.appendChild(held);
+  }
+
   const actions = document.createElement("div");
   actions.className = "record-actions";
   const dismissBtn = document.createElement("button");
@@ -16798,22 +17056,101 @@ function renderOutboxCard(item) {
     actions.appendChild(copyBtn);
   }
 
-  const sentBtn = document.createElement("button");
-  sentBtn.type = "button";
-  sentBtn.className = "btn btn-primary btn-compact";
-  sentBtn.textContent = "Mark sent";
-  sentBtn.addEventListener("click", () => outboxDecide(item.id, "sent", card));
-  actions.appendChild(sentBtn);
+  if (item.addressedToPeer) {
+    // The REAL send: the app relays through Apolla to the other side and the
+    // item goes "sent" only on their ack. "Mark sent" would be a fake-sent
+    // hazard for these, so it doesn't render here.
+    const sendBtn = document.createElement("button");
+    sendBtn.type = "button";
+    sendBtn.className = "outbox-send-peer-btn";
+    sendBtn.textContent = item.lastDispatchError
+      ? "Try again"
+      : `Send to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`;
+    sendBtn.addEventListener("click", () => outboxSendToPeer(item, card, sendBtn));
+    actions.appendChild(sendBtn);
+  } else {
+    const sentBtn = document.createElement("button");
+    sentBtn.type = "button";
+    sentBtn.className = "btn btn-primary btn-compact";
+    sentBtn.textContent = "Mark sent";
+    sentBtn.addEventListener("click", () => outboxDecide(item.id, "sent", card));
+    actions.appendChild(sentBtn);
+  }
 
   card.appendChild(actions);
 
   return card;
 }
 
+// The human send gate for a peer-addressed item. Success removes the card (the
+// other side ack'd); failure re-renders it IN PLACE with the held state + error
+// + retry — the item stays visible until it truly goes or the user dismisses.
+async function outboxSendToPeer(item, card, btn) {
+  const side = peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer);
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "Sending…";
+  let result;
+  try {
+    result = await tauri.core.invoke("outbox_dispatch_peer", { itemId: item.id });
+  } catch (err) {
+    console.warn("[main] outbox_dispatch_peer failed:", err);
+    btn.disabled = false;
+    btn.textContent = label;
+    showToast({ kind: "failure", title: "Couldn't reach Apolla", body: "Nothing was sent. Try again in a moment." });
+    return;
+  }
+  if (result && result.enabled === false) {
+    btn.disabled = false;
+    btn.textContent = label;
+    showToast({
+      kind: "failure",
+      title: "Sending isn't turned on",
+      body: "This workspace can't send to linked colleagues yet.",
+    });
+    return;
+  }
+  if (result && result.ok === true) {
+    // In Today the card sits inside a compact draft row — the whole row goes
+    // (a sent item lingering as "to send" would be the fake-pending lie).
+    const wrap = card && card.closest && card.closest(".today-draft-item");
+    const node = wrap || card;
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+    reconcilePreparedState();
+    showToast({ kind: "success", title: `Sent to ${side}`, body: "They have it — you'll see their reply when it lands." });
+    return;
+  }
+  // Held: re-render the card from the server's item (it carries the recorded
+  // error); fall back to a local annotation so the hold is NEVER invisible.
+  const updated = (result && result.item) || {
+    ...item,
+    lastDispatchError: { message: (result && result.error) || "The other side couldn't be reached.", at: new Date().toISOString() },
+  };
+  try {
+    // Flip the enclosing compact row's tag too (Today) so the hold is visible
+    // without expanding.
+    const wrap = card.closest && card.closest(".today-draft-item");
+    const tag = wrap && wrap.querySelector(".today-draft-tag");
+    if (tag) { tag.textContent = "held — couldn't send"; tag.classList.add("is-held"); }
+    card.replaceWith(renderOutboxCard(updated));
+  }
+  catch (e) { console.warn("[main] held re-render failed:", e); btn.disabled = false; btn.textContent = "Try again"; }
+  showToast({
+    kind: "failure",
+    title: "Couldn't send",
+    body: (result && result.error) || "It's held in your outbox with the error — try again when they're back.",
+  });
+}
+
 async function outboxDecide(itemId, action, card) {
   try {
     await tauri.core.invoke("outbox_decide", { itemId, action });
-    if (card && card.parentNode) card.parentNode.removeChild(card);
+    // In Today the card lives inside a compact draft row — remove the row too,
+    // so a decided item doesn't linger as a stale "to send" line.
+    const wrap = card && card.closest && card.closest(".today-draft-item");
+    const node = wrap || card;
+    if (node && node.parentNode) node.parentNode.removeChild(node);
+    reconcilePreparedState();
     const remaining = document.querySelectorAll("#outbox-list .record-card").length;
     const statusEl = document.getElementById("outbox-status");
     if (remaining === 0 && statusEl) {
