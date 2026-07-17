@@ -1,6 +1,6 @@
 # WP-BYOM — Bring Your Own Model: the engine's inference on a customer's private AI
 
-**Date:** 2026-07-08 · **Status:** brief approved-pending-Ross-redline · **Sequencing (Ross ruling):** does NOT hold the 0.10.x release train; runs concurrently while MCP v2 + email capture are in pilot. **Owner lanes:** engine (Phase 1), eval (Phase 2 — the hard one), Threshold app (Phase 3).
+**Date:** 2026-07-08 · **Status:** Phases 1+2 SHIPPED (engine #525/#526, 2026-07-16/17) · live acceptance PASSED 2026-07-17 · six-outcomes addendum below (Ross-confirmed 2026-07-17) · **Sequencing (Ross ruling):** does NOT hold the 0.10.x release train; runs concurrently while MCP v2 + email capture are in pilot. **Owner lanes:** engine (Phase 1), eval (Phase 2 — the hard one), Threshold app (Phase 3).
 
 ## 0. The one-paragraph version
 
@@ -50,3 +50,42 @@ The Privacy panel grows from read-only to deployment-level selector: per-surface
 ## 5. Non-goals
 
 Per-customer prompt engineering; model hosting of any kind; certifying the three pinned surfaces on non-streaming providers (they stay pinned-and-reported until Phase 1.1 lands); any change to default deployments (flags off, byte-equal until opted in).
+
+---
+
+## Addendum 2026-07-17 — the six user-facing outcomes (Ross-confirmed frame)
+
+**Status update.** Phase 1 shipped (engine #525: provider-portable streaming — native SSE on local/fireworks/bedrock-Claude, buffered on Converse; `endpoint:` alias + `LOCAL_AUTH_HEADER`/`LOCAL_EXTRA_HEADERS`/`LOCAL_STREAM_IDLE_TIMEOUT_MS`; three-way `processingLocus`; stream-telemetry gap closed). Phase 2 shipped (engine #526: certification store/gates/CLI/boot-check; fixes #531/#535/#537). **Live acceptance passed 2026-07-17** on a ross-corpus golden slice: GLM-5.2-on-Fireworks **generation CERTIFIED** (0 fabrications); GLM-5.2 **extraction FAILED** the verbatim floor (85% < 89% — the harness independently reproduced the June "GLM over-extracts, generation-only" ruling); **negative control passed** (gpt-oss-120b failed extraction via the emission gate: 41 vs 85 baseline records — the silent-recall-collapse mode). Ground-truth corrections vs §1: `LOCAL_API_KEY` bearer auth already existed (#315); only the decision-log editor ever streamed — `EVAL_MODEL` and the contract validator are `create()`-only, pinned by judge/policy, not transport.
+
+### A. The offer, as outcomes
+
+| # | Outcome | Lane | Mechanism | Status |
+|---|---|---|---|---|
+| 1 | Threshold-managed models | substrate | today's default (Viktora keys, `ENGINE_PROFILE`) | shipped |
+| 2 | Their subscription (Claude Max, ChatGPT Plus) | assistant | MCP v2 connectors (OAuth) — their plan pays for their assistant's usage | shipped; needs product framing/copy only |
+| 3 | Their own API key | substrate | facade lanes (`anthropic:`/`fireworks:`/`local:`/`endpoint:`) + Phase 3 key store/selector | plumbing shipped; UI = Phase 3 |
+| 4 | Org-approved model, minimal IT | substrate | engine-side org config users inherit automatically; Phase 3b profile import for personal deployments | Phase 3/3b |
+| 5 | Self-hosted, own hardware | substrate | `local:`/`endpoint:` lane + sovereignty tiers + certification | shipped (P1+P2) |
+| 6 | Self-hosted, own cloud | substrate | `bedrock:…@region` own tenancy, or `endpoint:` at their VPC gateway | shipped (P1+P2) |
+
+### B. The two-lane boundary (binding)
+
+**Substrate inference** — extraction, records, receipts, frames, synthesis: everything persisted into the field's derived state — runs engine-side on deployment-routed, certified models (outcomes 1/3/4/5/6, one mechanism). **Assistant-lane inference** — a user's own AI reading/writing the field over MCP — is outcome 2, on the user's model and bill. The rule: *anything persisted into derived state is substrate (engine-routed + certified); anything ephemeral in a conversation is assistant-lane.* Assistants contribute through capture/proposal channels only (`ingest_doc`, `propose_*`) — never derivation.
+
+Substrate inference on a consumer subscription is **not offerable**: consumer plans expose no API surface a third-party server may draw on (Anthropic's subscription-for-tooling is first-party-only). Watch-item: if "Sign in with ChatGPT"-class programs open to third parties, a *subscription grant* becomes a new credential type in the grants layer — design the store to admit it; do not build on it today.
+
+### C. Unit-of-selection ruling
+
+Substrate model choice is **per-deployment** (org-level), not per-user: shared-corpus coherence (one user's model choice would rewrite everyone's derived state), certification provenance ("this corpus is certified on X"), org-state stability, and cost attribution. Personal deployments collapse user==deployment, so individuals keep the full menu. If a pilot org demands per-user choice, the only defensible middle tier is per-user routing on the read-only **query lane** — noted and deferred until demanded.
+
+### D. Phase 3b — model profile import (the click-a-link path)
+
+For outcomes 3/4/5: a small signed JSON profile (endpoint URL, per-surface-group model ids, auth header name, expected locus) delivered as a `threshold://` deep link or file. Settings → import → the app writes engine config through the Phase 3 admin API → health check → certification status → posture panel updates. Keys stay server-side; the user pastes at most their own key; IT publishes the link once. For org pilots (outcome 4) inference is engine-side, so users inherit the org grant by doing nothing — the profile path exists for personal and self-hosted deployments.
+
+### E. Provider coverage (v1)
+
+Anthropic direct + everything OpenAI-compatible (OpenAI, Azure OpenAI via `LOCAL_AUTH_HEADER=api-key`, Together, DeepInfra, Fireworks, vLLM/Ollama/gateways) + Bedrock own-tenancy. Gemini/Vertex deferred until a buyer asks. Negative-control candidates and provider walls are recorded in `server/ai/CERTIFICATION.md` (engine).
+
+### F. Out of scope (unchanged, one addition)
+
+§5 non-goals stand. Added: a consumer-grade "everything on my laptop" one-installer bundle (engine + model runtime packaging) is its own WP, not BYOM.
