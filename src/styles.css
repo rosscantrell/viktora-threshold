@@ -6470,6 +6470,12 @@ button.rec-source {
 }
 .privacy-chip.is-sovereign { color: var(--success-text); background: var(--success-soft); }
 .privacy-chip.is-cloud { color: var(--text-secondary); background: var(--surface-2); }
+/* WP-BYOM P3 — three-way locus + certification chips. */
+.privacy-chip.is-orgcloud { color: var(--accent-text); background: var(--accent-soft); }
+.privacy-chip.is-certified { color: var(--success-text); background: var(--success-soft); }
+.privacy-chip.is-uncertified { color: var(--warn-text); background: var(--warn-soft); }
+.privacy-chip.is-warn { color: var(--warn-text); background: var(--warn-soft); }
+.privacy-surface-chips { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
 .privacy-caveat {
   margin: 0;
