@@ -2646,6 +2646,139 @@ code {
 .today-draft-detail[hidden] {
   display: none;
 }
+/* WP-COMPANION-NETWORK-UI — a held peer send flags itself on the compact row
+   (soft red = blocked, per the status-word canon; amber stays ①'s). */
+.today-draft-tag.is-held {
+  color: var(--glass-danger);
+}
+
+/* WP-COMPANION-NETWORK-UI — the accept card: the one-tap close on a question a
+   linked colleague's side already answered. Same glass footing as the draft
+   rows; the summary renders verbatim and may run several lines. */
+.today-accept-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.today-accept-head {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-primary);
+}
+.today-accept-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.today-accept-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Same fight as .record-actions: the legacy global .btn-link is absolutely
+   positioned — flow it in the actions row instead. */
+.today-accept-actions .btn-link {
+  position: static;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+}
+.today-accept-actions .btn-link:hover { color: var(--glass-text); }
+/* The card's one primary wears the house amber-tint (heads-up/draft-follow-up
+   grammar) — never the legacy blue. */
+.today-accept-btn,
+.outbox-send-peer-btn {
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 12px;
+  border-radius: 7px;
+  background: rgba(255, 196, 64, 0.14);
+  border: 1px solid rgba(255, 196, 64, 0.5);
+  color: var(--glass-accent);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.today-accept-btn:hover,
+.outbox-send-peer-btn:hover {
+  background: rgba(255, 196, 64, 0.22);
+}
+.today-accept-btn:disabled,
+.outbox-send-peer-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.today-accept-done {
+  margin: 0;
+  font-size: 12px;
+  color: var(--glass-success);
+}
+
+/* WP-COMPANION-NETWORK-UI — "From your colleagues": quiet receipt rows of what
+   arrived from linked peers since the user last looked. Same panel footing as
+   the plan stratum; kinds are tinted-ghost words, never filled pills. */
+.today-peer-panel {
+  padding: 10px 14px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--edge-highlight);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#today-peer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.today-peer-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-radius: var(--radius-sm);
+}
+.today-peer-row.is-openable {
+  cursor: pointer;
+}
+.today-peer-row.is-openable:hover .today-peer-text {
+  color: var(--text-primary);
+}
+.today-peer-kind {
+  flex: none;
+  min-width: 58px;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+}
+.today-peer-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.today-peer-when {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--glass-text-faint);
+  white-space: nowrap;
+}
+.today-peer-overflow {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--glass-text-faint);
+}
+.today-peer-overflow[hidden] {
+  display: none;
+}
 
 /* ③ Your plan — reconciliation rows: quiet mark (✓ done, · open) + text +
    quiet tag; ✦ rides the text for companion-side items. No amber (① owns it).
@@ -3405,6 +3538,40 @@ code {
 .outbox-artifact-name { color: var(--glass-text); }
 .outbox-artifact-act { font-size: 11px; }
 .outbox-linked { font-size: 11px; color: var(--glass-text-faint); }
+
+/* WP-COMPANION-NETWORK-UI — the addressed chip ("to Elena's side"): a tinted
+   ghost in the companion-chip register, sentence case (doubled selector for
+   the same uppercase-override reason as above). */
+.record-chip.outbox-peer-chip {
+  background: transparent;
+  color: var(--glass-text-dim);
+  border: 1px solid var(--glass-border);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  font-weight: 500;
+}
+/* A held peer send is needs-attention: the amber left border (the canon's one
+   amber use on cards) + the error spelled out. Never silent, never fake-sent. */
+.record-card.is-held {
+  border-left: 2px solid var(--glass-accent);
+}
+.outbox-held {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.outbox-held-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--glass-text);
+}
+.outbox-held-error {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--glass-danger);
+  overflow-wrap: anywhere;
+}
 
 /* Contradictions — compact inline warning chips, not panels. */
 .log-contradictions-list {
