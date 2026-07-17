@@ -122,6 +122,8 @@ const VIEWS = [
   // WP-Outlook-Writeback — staged Outbox surface (registered here so showView()
   // can actually un-hide it; without this the view stays hidden = blank screen).
   "view-outbox",
+  // WP-PEER-HANDSHAKE H2 — the invitation accept screen (deep-link only).
+  "view-peer-accept",
 ];
 
 // ───────── WP-ONENOTE-EXPORT-04 constants ─────────
@@ -488,6 +490,18 @@ async function wireBackendEvents() {
     await handleAuthCallback(token);
   });
 
+  // WP-PEER-HANDSHAKE H2 — an invitation deep link. The Rust shell parsed
+  // apolla-threshold://peer-invite?token&host (host scheme-checked) and emits
+  // { token, host }; the accept screen takes it from there.
+  await tauri.event.listen("threshold://peer-invite", async (event) => {
+    const p = event.payload || {};
+    if (!p.token || !p.host) {
+      console.warn("[peer-invite] payload missing token or host");
+      return;
+    }
+    await enterPeerAcceptView(p.token, p.host);
+  });
+
   // Drag-drop paths from WindowEvent::DragDrop in the Rust shell.
   // Emit a pre-flight toast per dropped path, then kick off ingestion.
   await tauri.event.listen("threshold://drop-paths", async (event) => {
@@ -800,6 +814,7 @@ async function renderIntegrationDoctor() {
     // one case we can't tell ⇒ an honest couldn't-check note, never silence.
     let peerIntake = null;
     let peerIntakeFailed = false;
+    let peerInvites = null;
     if (report?.engine?.state === "reachable") {
       step = "connections";
       try {
@@ -812,7 +827,22 @@ async function renderIntegrationDoctor() {
         console.warn("[doctor] connections check failed:", e);
         peerIntakeFailed = true;
       }
+      // WP-PEER-HANDSHAKE H2 — outstanding invitations. {enabled:false} (or an
+      // old engine's 404) ⇒ the invite affordance stays hidden; a real list ⇒
+      // the composer button shows and invite cards render.
+      step = "invitations";
+      try {
+        const inv = await tauri.core.invoke("fetch_peer_invites");
+        if (inv && inv.enabled !== false && Array.isArray(inv.invites || inv.items)) {
+          peerInvites = inv.invites || inv.items;
+        }
+      } catch (e) {
+        console.warn("[doctor] invites check unavailable (old engine?):", e);
+      }
     }
+    wirePeerInviteComposer();
+    const inviteBtn = document.getElementById("btn-peer-invite");
+    if (inviteBtn) inviteBtn.hidden = peerInvites === null;
     // Opted-in local calendar: refresh the live state silently. Gated on the
     // durable opt-in (calendar.localReadOptIn), so a stock install never spawns
     // the reader from a render. This replaced the old CAL_GRANT_KEY localStorage
@@ -833,6 +863,7 @@ async function renderIntegrationDoctor() {
     body.replaceChildren(
       ...buildDoctorCards(report, ics),
       ...buildConnectionCards(peerIntake, peerIntakeFailed),
+      ...buildPeerInviteCards(peerInvites),
       stamp,
     );
   } catch (err) {
@@ -1412,6 +1443,316 @@ function buildConnectionCards(intake, fetchFailed) {
     cards.push(doctorCard({ name: side, detail, pill, pillState, actions }));
   }
   return cards;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// WP-PEER-HANDSHAKE H2 — connect-by-invitation. v1 is invite-by-email ONLY:
+// no directory, no search, no browse (load-bearing for the sovereignty
+// story). The composer + invite cards live in Settings → Connections; the
+// accept screen is reached only via the invite email's deep link.
+// ══════════════════════════════════════════════════════════════════════════
+
+// Wire scope ⇄ product language (§2 of the handshake brief — the wire words
+// never surface).
+const PEER_SCOPE_LABELS = {
+  question: "Ask each other's companions questions",
+  answer: "Ask each other's companions questions",
+  handoff: "Pass work items to each other",
+  receipt: "Confirm each other's completions",
+};
+
+/** Wire scopes → deduped plain-language phrases (question+answer collapse). */
+function peerScopePhrases(scopes) {
+  const out = [];
+  for (const s of Array.isArray(scopes) ? scopes : []) {
+    const label = PEER_SCOPE_LABELS[String(s).toLowerCase()];
+    if (label && !out.includes(label)) out.push(label);
+  }
+  return out;
+}
+
+/** Composer checkboxes → wire scopes (question implies answer — one lane). */
+function peerComposerScopes() {
+  const scopes = [];
+  if (document.getElementById("peer-scope-question")?.checked) scopes.push("question", "answer");
+  if (document.getElementById("peer-scope-handoff")?.checked) scopes.push("handoff");
+  if (document.getElementById("peer-scope-receipt")?.checked) scopes.push("receipt");
+  return scopes;
+}
+
+// ── The invite composer (Settings → Connections) ──
+let _peerComposerWired = false;
+
+function wirePeerInviteComposer() {
+  if (_peerComposerWired) return;
+  _peerComposerWired = true;
+  const openBtn = document.getElementById("btn-peer-invite");
+  const composer = document.getElementById("peer-invite-composer");
+  const sendBtn = document.getElementById("btn-peer-invite-send");
+  const closeBtn = document.getElementById("btn-peer-invite-close");
+  if (!openBtn || !composer || !sendBtn || !closeBtn) return;
+  openBtn.addEventListener("click", () => {
+    composer.hidden = !composer.hidden;
+    if (!composer.hidden) document.getElementById("peer-invite-email")?.focus();
+  });
+  closeBtn.addEventListener("click", () => { composer.hidden = true; });
+  sendBtn.addEventListener("click", async () => {
+    const email = (document.getElementById("peer-invite-email")?.value || "").trim();
+    const note = (document.getElementById("peer-invite-note")?.value || "").trim();
+    const scopes = peerComposerScopes();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      showToast({ kind: "failure", title: "Check the email", body: "That address doesn't look complete." });
+      return;
+    }
+    if (!scopes.length) {
+      showToast({ kind: "failure", title: "Pick at least one", body: "A connection has to carry something." });
+      return;
+    }
+    sendBtn.disabled = true;
+    const orig = sendBtn.textContent;
+    sendBtn.textContent = "Sending…";
+    try {
+      const r = await tauri.core.invoke("peer_invite_create", {
+        email,
+        proposedScopes: scopes,
+        note: note || null,
+        label: null,
+      });
+      if (r && r.enabled === false) {
+        showToast({ kind: "failure", title: "Not available", body: "Connecting workspaces isn't turned on here yet." });
+        return;
+      }
+      if (r && r.error) throw new Error(r.message || r.error);
+      composer.hidden = true;
+      const emailEl = document.getElementById("peer-invite-email");
+      const noteEl = document.getElementById("peer-invite-note");
+      if (emailEl) emailEl.value = "";
+      if (noteEl) noteEl.value = "";
+      showToast({
+        kind: "success",
+        title: `Invitation sent to ${email}`,
+        body: "You'll see it here as Invited until they accept.",
+      });
+      renderIntegrationDoctor();
+    } catch (err) {
+      console.warn("[peer-invite] create failed:", err);
+      showToast({ kind: "failure", title: "Couldn't send the invitation", body: String(err) });
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = orig;
+    }
+  });
+}
+
+/** Days until an ISO instant, floored at 0 (for the Invited countdown). */
+function peerInviteDaysLeft(iso) {
+  const ms = Date.parse(iso) - Date.now();
+  return Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 86400e3)) : null;
+}
+
+// One card per outstanding invitation (§3 lifecycle: Invited → … ). Active
+// links render from the health rows in buildConnectionCards; these are the
+// pre-link states: sent (countdown + Resend/Cancel), declined and expired
+// (quiet history + Invite again). Cancelled rows stay in the ledger, not here.
+function buildPeerInviteCards(invites) {
+  const cards = [];
+  for (const inv of Array.isArray(invites) ? invites : []) {
+    const who = inv.label || inv.invitedEmail || "them";
+    if (inv.state === "sent") {
+      const days = peerInviteDaysLeft(inv.expiresAt);
+      cards.push(doctorCard({
+        name: who,
+        detail:
+          `Invited — waiting for them to accept.` +
+          (days !== null ? ` The invitation is good for ${days} more day${days === 1 ? "" : "s"}.` : ""),
+        pill: "Invited",
+        pillState: "checking",
+        actions: [
+          { label: "Resend", link: true, onClick: () => peerInviteResend(inv) },
+          { label: "Cancel", link: true, onClick: () => peerInviteCancel(inv) },
+        ],
+      }));
+    } else if (inv.state === "declined") {
+      cards.push(doctorCard({
+        name: who,
+        detail: "They declined this invitation." +
+          (inv.declineNote ? ` Their note: “${inv.declineNote}”` : ""),
+        pill: "Declined",
+        pillState: "blocked",
+      }));
+    } else if (inv.state === "expired") {
+      cards.push(doctorCard({
+        name: who,
+        detail: "The invitation expired before they accepted.",
+        pill: "Expired",
+        pillState: "blocked",
+        actions: [{ label: "Invite again", link: true, onClick: () => peerInviteResend(inv) }],
+      }));
+    }
+    // accepted ⇒ the live link's health card is the surface; cancelled ⇒ quiet.
+  }
+  return cards;
+}
+
+async function peerInviteResend(inv) {
+  try {
+    const r = await tauri.core.invoke("peer_invite_create", {
+      email: inv.invitedEmail,
+      proposedScopes: inv.proposedScopes || ["question", "answer"],
+      note: inv.note || null,
+      label: inv.label || null,
+    });
+    if (r && r.error) throw new Error(r.message || r.error);
+    showToast({ kind: "success", title: `Invitation re-sent to ${inv.invitedEmail}` });
+  } catch (err) {
+    showToast({ kind: "failure", title: "Couldn't re-send", body: String(err) });
+  }
+  renderIntegrationDoctor();
+}
+
+async function peerInviteCancel(inv) {
+  try {
+    const r = await tauri.core.invoke("peer_invite_cancel", { inviteId: inv.inviteId });
+    if (r && r.error) throw new Error(r.message || r.error);
+    showToast({ kind: "success", title: "Invitation cancelled", body: "The link in their email no longer works." });
+  } catch (err) {
+    showToast({ kind: "failure", title: "Couldn't cancel", body: String(err) });
+  }
+  renderIntegrationDoctor();
+}
+
+// ── The accept screen (deep-link only) ──
+let _peerAcceptCtx = null; // { token, host, proposedScopes }
+
+async function enterPeerAcceptView(token, host) {
+  state.inWizard = false;
+  showView("view-peer-accept");
+  const sub = document.getElementById("peer-accept-sub");
+  const who = document.getElementById("peer-accept-who");
+  const note = document.getElementById("peer-accept-note");
+  const hostEl = document.getElementById("peer-accept-host");
+  const scopesEl = document.getElementById("peer-accept-scopes");
+  const statusEl = document.getElementById("peer-accept-status");
+  const acceptBtn = document.getElementById("btn-peer-accept");
+  const declineBtn = document.getElementById("btn-peer-decline");
+  if (statusEl) { statusEl.hidden = true; statusEl.textContent = ""; }
+  if (sub) sub.textContent = "Checking the invitation…";
+  if (who) who.textContent = "";
+  if (note) note.hidden = true;
+  if (hostEl) hostEl.textContent = "";
+  if (acceptBtn) acceptBtn.disabled = true;
+  if (declineBtn) declineBtn.disabled = true;
+
+  let landing;
+  try {
+    landing = await tauri.core.invoke("peer_invite_lookup", { host, token });
+  } catch (err) {
+    // Expired / consumed / unreachable — one honest line, no dead buttons.
+    if (sub) sub.textContent = "";
+    if (who) who.textContent = String(err);
+    return;
+  }
+  _peerAcceptCtx = { token, host, proposedScopes: landing.proposedScopes || [] };
+  const label = landing.inviterLabel || "A colleague";
+  if (sub) sub.textContent = "They'll see what you choose to allow — you can narrow it.";
+  if (who) who.textContent = `${label} wants to connect your workspaces.`;
+  if (note && landing.note) {
+    note.textContent = `“${landing.note}”`;
+    note.hidden = false;
+  }
+  if (hostEl) hostEl.textContent = `Their workspace: ${landing.host || host}`;
+  if (scopesEl) {
+    // Rebuild the checkbox list from the PROPOSED scopes only — B can
+    // narrow by unticking, never widen (the engine enforces it too).
+    for (const el of [...scopesEl.querySelectorAll(".peer-scope-row")]) el.remove();
+    for (const phrase of peerScopePhrases(_peerAcceptCtx.proposedScopes)) {
+      const row = document.createElement("label");
+      row.className = "peer-scope-row";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = true;
+      cb.dataset.phrase = phrase;
+      const span = document.createElement("span");
+      span.textContent = phrase;
+      row.append(cb, span);
+      scopesEl.appendChild(row);
+    }
+  }
+  if (acceptBtn) acceptBtn.disabled = false;
+  if (declineBtn) declineBtn.disabled = false;
+}
+
+/** The ticked phrases → wire scopes (inverse of peerScopePhrases, bounded by
+ *  the proposal — an unticked phrase drops ALL its wire scopes). */
+function peerAcceptedScopes() {
+  const ticked = new Set(
+    [...document.querySelectorAll("#peer-accept-scopes input:checked")].map((cb) => cb.dataset.phrase),
+  );
+  return (_peerAcceptCtx?.proposedScopes || []).filter((s) => {
+    const label = PEER_SCOPE_LABELS[String(s).toLowerCase()];
+    return label && ticked.has(label);
+  });
+}
+
+async function peerAcceptInvite() {
+  if (!_peerAcceptCtx) return;
+  const scopes = peerAcceptedScopes();
+  const statusEl = document.getElementById("peer-accept-status");
+  if (!scopes.length) {
+    showToast({ kind: "failure", title: "Nothing selected", body: "Tick at least one — or Decline." });
+    return;
+  }
+  const acceptBtn = document.getElementById("btn-peer-accept");
+  if (acceptBtn) { acceptBtn.disabled = true; acceptBtn.textContent = "Connecting…"; }
+  try {
+    const r = await tauri.core.invoke("peer_handshake_accept", {
+      inviteToken: _peerAcceptCtx.token,
+      inviterBaseUrl: _peerAcceptCtx.host,
+      acceptedScopes: scopes,
+      label: null,
+    });
+    if (r && r.enabled === false) throw new Error("Connecting workspaces isn't turned on for your workspace yet.");
+    if (r && r.error) throw new Error(r.message || r.error);
+    const side = peerSideLabel(r && r.label, r && r.peerId);
+    showToast({
+      kind: "success",
+      title: "Connected",
+      body: `You and ${side} can now: ${peerScopePhrases((r && r.activeScopes) || scopes).join(" · ").toLowerCase()}.`,
+    });
+    _peerAcceptCtx = null;
+    // Land on the Connections cards — the new link renders Active there.
+    enterStandaloneConfigure();
+    switchSettingsPanel("integrations");
+  } catch (err) {
+    console.warn("[peer-invite] accept failed:", err);
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "error";
+      statusEl.textContent = `Couldn't connect: ${err}`;
+    }
+  } finally {
+    if (acceptBtn) { acceptBtn.disabled = false; acceptBtn.textContent = "Accept"; }
+  }
+}
+
+async function peerDeclineInvite() {
+  if (!_peerAcceptCtx) return;
+  const declineBtn = document.getElementById("btn-peer-decline");
+  if (declineBtn) declineBtn.disabled = true;
+  try {
+    await tauri.core.invoke("peer_invite_decline", {
+      host: _peerAcceptCtx.host,
+      token: _peerAcceptCtx.token,
+      note: null,
+    });
+    showToast({ kind: "success", title: "Declined", body: "They'll see you passed — not why." });
+  } catch (err) {
+    // The invite may already be gone — either way it can't be accepted now.
+    console.warn("[peer-invite] decline failed:", err);
+    showToast({ kind: "failure", title: "Couldn't reach their workspace", body: String(err) });
+  }
+  _peerAcceptCtx = null;
+  goHome();
 }
 
 // Renders the read-only "where does my data go" posture into #privacy-body,
@@ -17397,6 +17738,21 @@ async function enterOutboxView() {
     }
   }
 }
+
+// Wire the accept screen's two verbs once (same posture as the outbox header).
+(function wirePeerAcceptButtons() {
+  const wire = () => {
+    const accept = document.getElementById("btn-peer-accept");
+    if (accept) accept.onclick = () => peerAcceptInvite();
+    const decline = document.getElementById("btn-peer-decline");
+    if (decline) decline.onclick = () => peerDeclineInvite();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", wire);
+  } else {
+    wire();
+  }
+})();
 
 // Wire the Outbox header buttons once (idempotent onclick assignment).
 (function wireOutboxHeaderButtons() {

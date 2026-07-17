@@ -596,6 +596,45 @@ pub fn parse_auth_deep_link(url: &url::Url) -> Option<AuthCallback> {
     Some(AuthCallback { token })
 }
 
+/// WP-PEER-HANDSHAKE H2 — the invite deep link:
+/// `apolla-threshold://peer-invite?token=<invite-token>&host=<inviter-baseUrl>`
+/// (dev scheme in debug builds). Carries B into their OWN app's accept
+/// screen; the app then reads the invite's public landing JSON from `host`.
+#[derive(Clone, serde::Serialize)]
+pub struct PeerInviteCallback {
+    pub token: String,
+    pub host: String,
+}
+
+pub fn parse_peer_invite_deep_link(url: &url::Url) -> Option<PeerInviteCallback> {
+    if url.scheme() != DEEP_LINK_SCHEME {
+        return None;
+    }
+    let host_ok = url.host_str() == Some("peer-invite");
+    let path_ok = url.path().trim_start_matches('/').split('/').next() == Some("peer-invite")
+        && url.host_str().is_none();
+    if !host_ok && !path_ok {
+        return None;
+    }
+    let mut token: Option<String> = None;
+    let mut host: Option<String> = None;
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "token" => token = Some(v.into_owned()),
+            "host" => host = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    let (token, host) = (token?, host?);
+    // The host is the inviter's engine origin — refuse anything that isn't
+    // plain http(s) (a deep link is attacker-postable; never let it smuggle
+    // another scheme into the app's fetch path).
+    if token.is_empty() || !(host.starts_with("https://") || host.starts_with("http://")) {
+        return None;
+    }
+    Some(PeerInviteCallback { token, host })
+}
+
 /// Per-user config directory. DEV builds use a distinct "Viktora Threshold
 /// Dev" directory so `tauri dev` never reads/writes the installed release's
 /// `config.json` (and vice-versa). Compile-time `debug_assertions` is true
@@ -2287,6 +2326,225 @@ async fn outbox_dispatch_peer(
     resp.json::<serde_json::Value>()
         .await
         .map_err(|e| format!("outbox_dispatch_peer: parse response failed: {e}"))
+}
+
+// ── WP-PEER-HANDSHAKE H2 — connect-by-invitation IPCs ──
+//
+// The app half of the handshake protocol (engine H1: peer-invites store +
+// routes). Three lanes: the OWN-engine bearer lane (create/list/cancel,
+// handshake accept), and two PUBLIC calls against the INVITER's engine
+// (landing lookup, decline) authenticated only by the single-use invite
+// token. Flag-off engines answer {enabled:false} — the UI lands calm.
+
+/// Shared client for the handshake IPCs (same posture as the outbox lanes).
+fn handshake_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))
+}
+
+/// GET /api/peer/invites — the invite ledger for the Connections cards.
+#[tauri::command]
+async fn fetch_peer_invites(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/peer/invites", cfg.base_url.trim_end_matches('/'));
+    let resp = handshake_client()?
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_peer_invites: parse response failed: {e}"))
+}
+
+/// POST /api/peer/invites — send an invitation. The engine mints the token,
+/// stores only its hash, and sends the email; nothing secret returns here.
+#[tauri::command]
+async fn peer_invite_create(
+    state: tauri::State<'_, AppState>,
+    email: String,
+    proposed_scopes: Vec<String>,
+    note: Option<String>,
+    label: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/api/peer/invites", cfg.base_url.trim_end_matches('/'));
+    let mut body = serde_json::json!({ "email": email, "proposedScopes": proposed_scopes });
+    if let Some(n) = note {
+        body["note"] = serde_json::json!(n);
+    }
+    if let Some(l) = label {
+        body["label"] = serde_json::json!(l);
+    }
+    let resp = handshake_client()?
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("peer_invite_create: parse response failed: {e}"))
+}
+
+/// POST /api/peer/invites/:id/cancel.
+#[tauri::command]
+async fn peer_invite_cancel(
+    state: tauri::State<'_, AppState>,
+    invite_id: String,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/peer/invites/{}/cancel",
+        cfg.base_url.trim_end_matches('/'),
+        invite_id
+    );
+    let resp = handshake_client()?
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("peer_invite_cancel: parse response failed: {e}"))
+}
+
+/// GET <inviter-host>/peer/invite/<token> (Accept: application/json) — the
+/// PUBLIC landing payload the accept screen renders (who's asking, note,
+/// proposed scopes). No bearer: the single-purpose token IS the capability.
+/// The host comes from the deep link and was scheme-checked at parse.
+#[tauri::command]
+async fn peer_invite_lookup(host: String, token: String) -> Result<serde_json::Value, String> {
+    if !(host.starts_with("https://") || host.starts_with("http://")) {
+        return Err("peer_invite_lookup: host must be http(s)".into());
+    }
+    let url = format!(
+        "{}/peer/invite/{}",
+        host.trim_end_matches('/'),
+        urlencoding_minimal(&token)
+    );
+    let resp = handshake_client()?
+        .get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the inviter's workspace: {e}"))?;
+    let status = resp.status();
+    if status.as_u16() == 410 || status.as_u16() == 404 {
+        // Consumed / expired / cancelled / unknown — deliberately
+        // indistinguishable server-side. One calm story for all of them.
+        return Err("This invitation is no longer valid.".into());
+    }
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("peer_invite_lookup: parse response failed: {e}"))
+}
+
+/// POST own-engine /api/peer/handshake/accept — B's half of the exchange.
+/// The engine does the server-to-server complete-call; both bearer tokens
+/// only ever travel engine↔engine, never through the app.
+#[tauri::command]
+async fn peer_handshake_accept(
+    state: tauri::State<'_, AppState>,
+    invite_token: String,
+    inviter_base_url: String,
+    accepted_scopes: Vec<String>,
+    label: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/peer/handshake/accept",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let mut body = serde_json::json!({
+        "inviteToken": invite_token,
+        "inviterBaseUrl": inviter_base_url,
+        "acceptedScopes": accepted_scopes,
+    });
+    if let Some(l) = label {
+        body["label"] = serde_json::json!(l);
+    }
+    let resp = handshake_client()?
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("peer_handshake_accept: parse response failed: {e}"))
+}
+
+/// POST <inviter-host>/api/peer/handshake/decline — B declines, straight
+/// against the inviter's engine (works even before B has any engine of their
+/// own configured). Token-authenticated, consumes the invite.
+#[tauri::command]
+async fn peer_invite_decline(
+    host: String,
+    token: String,
+    note: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if !(host.starts_with("https://") || host.starts_with("http://")) {
+        return Err("peer_invite_decline: host must be http(s)".into());
+    }
+    let url = format!(
+        "{}/api/peer/handshake/decline",
+        host.trim_end_matches('/')
+    );
+    let mut body = serde_json::json!({ "inviteToken": token });
+    if let Some(n) = note {
+        body["note"] = serde_json::json!(n);
+    }
+    let resp = handshake_client()?
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach the inviter's workspace: {e}"))?;
+    let status = resp.status();
+    if status.as_u16() == 410 || status.as_u16() == 404 {
+        return Err("This invitation is no longer valid.".into());
+    }
+    if !status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("peer_invite_decline: parse response failed: {e}"))
 }
 
 // ── WP-CHECKIN-ROUTINES — engine prework-runner schedule ──
@@ -9587,6 +9845,14 @@ pub fn run() {
                             if let Err(e) = app_handle.emit("threshold://auth-callback", &callback) {
                                 log::warn!("emit auth-callback failed: {e}");
                             }
+                        } else if let Some(invite) = parse_peer_invite_deep_link(&url) {
+                            // WP-PEER-HANDSHAKE H2 — an invitation link. Emit
+                            // to the frontend, which opens the accept screen
+                            // (token redacted from the log).
+                            log::info!("deep-link parsed as peer invite (host={}, token redacted)", invite.host);
+                            if let Err(e) = app_handle.emit("threshold://peer-invite", &invite) {
+                                log::warn!("emit peer-invite failed: {e}");
+                            }
                         } else {
                             log::warn!("deep-link unrecognized — host={:?} path={}", url.host_str(), url.path());
                         }
@@ -9906,6 +10172,12 @@ pub fn run() {
             fetch_outbox,
             outbox_decide,
             outbox_dispatch_peer,
+            fetch_peer_invites,
+            peer_invite_create,
+            peer_invite_cancel,
+            peer_invite_lookup,
+            peer_handshake_accept,
+            peer_invite_decline,
             fetch_prework_config,
             save_prework_config,
             outbox_artifact_save,
@@ -11097,6 +11369,44 @@ mod tests {
         let cb = parse_auth(&scheme_url("auth?token=ab%2Bcd%2Fef%3D"))
             .expect("encoded token parses");
         assert_eq!(cb.token, "ab+cd/ef=");
+    }
+
+    // ───── WP-PEER-HANDSHAKE H2 — invite deep-link parser ─────
+
+    fn parse_invite(s: &str) -> Option<PeerInviteCallback> {
+        let url = url::Url::parse(s).expect("test URL parses");
+        parse_peer_invite_deep_link(&url)
+    }
+
+    #[test]
+    fn peer_invite_deep_link_happy_path() {
+        let cb = parse_invite(&scheme_url(
+            "peer-invite?token=VnL2UnrwPyN6EXlZ&host=https%3A%2F%2Fross.viktora.ai",
+        ))
+        .expect("parses");
+        assert_eq!(cb.token, "VnL2UnrwPyN6EXlZ");
+        assert_eq!(cb.host, "https://ross.viktora.ai");
+    }
+
+    #[test]
+    fn peer_invite_deep_link_rejects_wrong_scheme_or_host() {
+        assert!(parse_invite("https://peer-invite?token=abc&host=https://x.y").is_none());
+        assert!(parse_invite(&scheme_url("auth?token=abc&host=https://x.y")).is_none());
+    }
+
+    #[test]
+    fn peer_invite_deep_link_rejects_missing_fields() {
+        assert!(parse_invite(&scheme_url("peer-invite?token=abc")).is_none());
+        assert!(parse_invite(&scheme_url("peer-invite?host=https%3A%2F%2Fx.y")).is_none());
+        assert!(parse_invite(&scheme_url("peer-invite?token=&host=https%3A%2F%2Fx.y")).is_none());
+    }
+
+    #[test]
+    fn peer_invite_deep_link_rejects_non_http_host() {
+        // The host feeds the app's fetch path — a deep link must never
+        // smuggle another scheme in.
+        assert!(parse_invite(&scheme_url("peer-invite?token=abc&host=file%3A%2F%2F%2Fetc")).is_none());
+        assert!(parse_invite(&scheme_url("peer-invite?token=abc&host=javascript%3Aalert(1)")).is_none());
     }
 
     #[test]
