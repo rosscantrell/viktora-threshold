@@ -335,6 +335,25 @@ async function bootstrap() {
     // tidbit panel view. Falls through to the main view if no tidbit is
     // available (covers: user opened #tidbit manually with no pending,
     // pending was cleared by a previous view, IPC failure).
+    // WP-PEER-HANDSHAKE H2 — the invite deep link. on_open_url stashed the
+    // {token, host} and expanded the shell here with #peer-invite; take the
+    // pending callback (single read, cleared on take) and open the accept
+    // screen. Nothing pending (manual #peer-invite visit, stale hash) falls
+    // through to the main view — calm, never a dead screen.
+    if (window.location.hash === "#peer-invite") {
+      let pending = null;
+      try {
+        pending = await tauri.core.invoke("take_pending_peer_invite");
+      } catch (err) {
+        console.warn("[main] take_pending_peer_invite failed:", err);
+      }
+      if (pending && pending.token && pending.host) {
+        await enterPeerAcceptView(pending.token, pending.host);
+        return;
+      }
+      // fall through to the normal boot views
+    }
+
     if (window.location.hash === "#tidbit") {
       // WP-THRESHOLD-LOG-UX — the post-capture panel is records-primary now.
       // Fetch BOTH the pending records (the always-present body) and the
@@ -488,18 +507,6 @@ async function wireBackendEvents() {
   await tauri.event.listen("threshold://auth-callback", async (event) => {
     const token = (event.payload || {}).token;
     await handleAuthCallback(token);
-  });
-
-  // WP-PEER-HANDSHAKE H2 — an invitation deep link. The Rust shell parsed
-  // apolla-threshold://peer-invite?token&host (host scheme-checked) and emits
-  // { token, host }; the accept screen takes it from there.
-  await tauri.event.listen("threshold://peer-invite", async (event) => {
-    const p = event.payload || {};
-    if (!p.token || !p.host) {
-      console.warn("[peer-invite] payload missing token or host");
-      return;
-    }
-    await enterPeerAcceptView(p.token, p.host);
   });
 
   // Drag-drop paths from WindowEvent::DragDrop in the Rust shell.

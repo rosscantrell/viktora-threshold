@@ -176,6 +176,13 @@ pub struct AppState {
     /// overwritten by a newer capture's tidbit. Single-value (not a queue):
     /// the wow-loop wants "what just happened," not history.
     pub pending_tidbit: Mutex<Option<Tidbit>>,
+    /// WP-PEER-HANDSHAKE H2 — the invite deep link that launched (or was
+    /// delivered to) the app. The resident shell boots widget.html, where
+    /// main.js's listeners don't exist yet, so `on_open_url` STASHES the
+    /// callback here and expands the window to `index.html#peer-invite`;
+    /// main.js's bootstrap takes it via `take_pending_peer_invite` (single
+    /// read, cleared on take — the pending_tidbit pattern).
+    pub pending_peer_invite: Mutex<Option<PeerInviteCallback>>,
     /// WP-THRESHOLD-LOG-UX — most recent decision/commitment records returned
     /// by `poll_for_records` for the just-captured document. Parallel to
     /// `pending_tidbit` (never a modification of it): populated when a capture's
@@ -2506,6 +2513,20 @@ async fn peer_handshake_accept(
     resp.json::<serde_json::Value>()
         .await
         .map_err(|e| format!("peer_handshake_accept: parse response failed: {e}"))
+}
+
+/// WP-PEER-HANDSHAKE H2 — single-read pickup of the invite deep link that
+/// expanded (or launched) the app. Cleared on take so a later #peer-invite
+/// visit with nothing pending lands calm (the pending_tidbit pattern).
+#[tauri::command]
+fn take_pending_peer_invite(
+    state: tauri::State<AppState>,
+) -> Result<Option<PeerInviteCallback>, String> {
+    let mut pending = state
+        .pending_peer_invite
+        .lock()
+        .map_err(|_| "pending_peer_invite mutex poisoned".to_string())?;
+    Ok(pending.take())
 }
 
 /// POST <inviter-host>/api/peer/handshake/decline — B declines, straight
@@ -9846,12 +9867,30 @@ pub fn run() {
                                 log::warn!("emit auth-callback failed: {e}");
                             }
                         } else if let Some(invite) = parse_peer_invite_deep_link(&url) {
-                            // WP-PEER-HANDSHAKE H2 — an invitation link. Emit
-                            // to the frontend, which opens the accept screen
-                            // (token redacted from the log).
+                            // WP-PEER-HANDSHAKE H2 — an invitation link. The
+                            // resident shell may be sitting on widget.html
+                            // (main.js not loaded), so STASH the callback and
+                            // expand to index.html#peer-invite; the bootstrap
+                            // takes it via take_pending_peer_invite (the
+                            // pending_tidbit pattern). Works for cold starts
+                            // and already-expanded windows alike (expand just
+                            // re-navigates). Token redacted from the log.
                             log::info!("deep-link parsed as peer invite (host={}, token redacted)", invite.host);
-                            if let Err(e) = app_handle.emit("threshold://peer-invite", &invite) {
-                                log::warn!("emit peer-invite failed: {e}");
+                            {
+                                let state = app_handle.state::<AppState>();
+                                let mut pending = state.pending_peer_invite.lock().expect("pending_peer_invite mutex poisoned");
+                                *pending = Some(invite);
+                            }
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                if let Err(e) = widget_expand(
+                                    app_handle.state::<AppState>(),
+                                    window,
+                                    Some("peer-invite".into()),
+                                ) {
+                                    log::warn!("peer-invite expand failed: {e}");
+                                }
+                            } else {
+                                log::warn!("peer-invite deep link: no main window to expand");
                             }
                         } else {
                             log::warn!("deep-link unrecognized — host={:?} path={}", url.host_str(), url.path());
@@ -9886,6 +9925,7 @@ pub fn run() {
             app.manage(AppState {
                 config: Mutex::new(preloaded_cfg.clone()),
                 pending_tidbit: Mutex::new(None),
+                pending_peer_invite: Mutex::new(None),
                 pending_records: Mutex::new(None),
             });
 
@@ -10178,6 +10218,7 @@ pub fn run() {
             peer_invite_lookup,
             peer_handshake_accept,
             peer_invite_decline,
+            take_pending_peer_invite,
             fetch_prework_config,
             save_prework_config,
             outbox_artifact_save,
