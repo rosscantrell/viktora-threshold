@@ -5978,9 +5978,12 @@ function reconcilePreparedState() {
   const countEl = document.getElementById("today-prepared-count");
   const emptyEl = document.getElementById("today-prepared-empty");
   const accepts = document.querySelectorAll("#today-prework-list .today-accept-card:not(.is-done)").length;
+  const acceptsDone = document.querySelectorAll("#today-prework-list .today-accept-card.is-done").length;
   const staged = document.querySelectorAll("#today-prework-list .today-draft-item").length;
   const drafts = document.querySelectorAll("#today-outbox-list .today-draft-item").length;
-  const n = accepts + staged + drafts;
+  // Done accept cards keep the stratum visibly non-empty (their ✓ line IS the
+  // content) but never count toward the header numbers.
+  const n = accepts + staged + drafts + acceptsDone;
   if (countEl) {
     const parts = [];
     if (accepts) parts.push(`${accepts} answered — accept?`);
