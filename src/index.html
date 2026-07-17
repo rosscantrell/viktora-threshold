@@ -802,6 +802,24 @@
         <button type="button" class="today-log-line" id="today-plan-log-line" hidden></button>
       </section>
 
+      <!-- WP-COMPANION-NETWORK-UI — what arrived from linked colleagues since
+           the user last looked (the check-in packet's intake receipts, peer
+           rows only; other channels keep their existing receipt surfaces).
+           Kinds render as Question/Answer/Handoff/Receipt — plain language,
+           never transport jargon. HONESTLY HIDDEN when nothing peer-sent
+           arrived (calm absence, not an empty box). A Receipt row is a
+           report, never a "done" — the confirm lives in the ratify lane. -->
+      <section class="today-brief-section" id="today-peer-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">From your colleagues</h2>
+          <span class="today-section-count" id="today-peer-count"></span>
+        </div>
+        <div class="today-peer-panel">
+          <div id="today-peer-list"></div>
+          <p class="today-peer-overflow" id="today-peer-overflow" hidden></p>
+        </div>
+      </section>
+
       <!-- ④ Prepared for you — AI-prepared work products awaiting the user's
            review (drafts from the Draft-follow-up lane and the companion's
            proposals; ✦ marks companion work; some still need a recipient or
