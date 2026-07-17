@@ -387,6 +387,14 @@ async function bootstrap() {
       return;
     }
 
+    // WP-BYOM Phase 3 — deep-link straight to Settings → Privacy (render-look
+    // loop + future posture deep-links; nothing sets this hash in production).
+    if (window.location.hash === "#privacy") {
+      enterStandaloneConfigure();
+      switchSettingsPanel("privacy");
+      return;
+    }
+
     // WP-PLAUD-04a — when widget_expand was invoked with
     // target_tab="plaud-queue" (from the right-click menu's "Plaud Sync
     // Queue" item), land in the queue view.
@@ -1439,10 +1447,35 @@ async function renderSovereignty() {
     ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
     : '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 10h-1V7a5 5 0 0 0-9.6-2"></path><rect x="3" y="10" width="18" height="11" rx="2"></rect></svg>';
 
-  const surfaceRow = (label, surf) => {
-    const where = surf.dataLeavesOrg
-      ? '<span class="privacy-chip is-cloud">Cloud</span>'
-      : '<span class="privacy-chip is-sovereign">Your infrastructure</span>';
+  // Three-way processing locus (WP-BYOM P1): your box / your cloud tenancy /
+  // the model vendor's cloud. Older engines send no processingLocus — fall
+  // back to the original binary dataLeavesOrg read.
+  const LOCUS_CHIP = {
+    "org-hardware": '<span class="privacy-chip is-sovereign">Your hardware</span>',
+    "org-cloud": '<span class="privacy-chip is-orgcloud">Your cloud</span>',
+    "vendor-cloud": '<span class="privacy-chip is-cloud">Provider cloud</span>',
+  };
+  // Certification status (WP-BYOM P2). Standard Claude models carry no chip —
+  // they ARE the quality bar; chips mark bring-your-own routing only. Every
+  // non-good state is visible, never blank (fail-closed-but-visible).
+  const CERT_CHIP = {
+    certified: '<span class="privacy-chip is-certified">✓ Certified</span>',
+    uncertified: '<span class="privacy-chip is-uncertified">Not certified</span>',
+    failed: '<span class="privacy-chip is-uncertified">Failed certification</span>',
+    invalidated: '<span class="privacy-chip is-uncertified">Re-certify — endpoint changed</span>',
+  };
+  const certByVar = {};
+  for (const row of (s.certification && s.certification.surfaces) || []) {
+    certByVar[row.surfaceVar] = row.status;
+  }
+
+  const surfaceRow = (label, surf, certVar, extraChip) => {
+    const where =
+      LOCUS_CHIP[surf.processingLocus] ||
+      (surf.dataLeavesOrg
+        ? '<span class="privacy-chip is-cloud">Cloud</span>'
+        : '<span class="privacy-chip is-sovereign">Your infrastructure</span>');
+    const cert = ((certVar && CERT_CHIP[certByVar[certVar]]) || "") + (extraChip || "");
     return (
       '<div class="privacy-surface">' +
       '<div class="privacy-surface-main"><span class="privacy-surface-label">' +
@@ -1450,7 +1483,7 @@ async function renderSovereignty() {
       '</span><span class="privacy-surface-model">' +
       escapeHtml(surf.model) +
       "</span></div>" +
-      where +
+      '<div class="privacy-surface-chips">' + cert + where + "</div>" +
       "</div>"
     );
   };
@@ -1475,9 +1508,9 @@ async function renderSovereignty() {
 
   html +=
     '<div class="privacy-surfaces">' +
-    surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation) +
-    surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction) +
-    surfaceRow("Query understanding", s.surfaces.query) +
+    surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation, "SYNTHESIS_MODEL") +
+    surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction, "EXTRACTION_MODEL") +
+    surfaceRow("Query understanding", s.surfaces.query, "PLANNER_MODEL") +
     // The semantic index is a fourth data channel: record summaries are
     // embedded, and with a cloud provider (Voyage) those vectors leave the
     // org — this row is what explains a missing "fully sovereign" checkmark.
@@ -1486,7 +1519,16 @@ async function renderSovereignty() {
       ? surfaceRow("Semantic index (embeddings)", {
           model: s.embeddings.modelId || s.embeddings.provider || "embeddings",
           dataLeavesOrg: s.embeddings.dataLeavesOrg,
-        })
+          // Locus rides along (WP-BYOM P1): Voyage → vendor-cloud, local → your
+          // hardware. Not certifiable — no certVar (different quality axis).
+          processingLocus: s.embeddings.processingLocus,
+        },
+        null,
+        // Partial coverage after an embedder swap = quiet capability loss —
+        // surface it (amber) until the backfill closes the gap. 100% = silence.
+        s.embeddings.coverage && s.embeddings.coverage.pct < 100
+          ? '<span class="privacy-chip is-warn">Coverage ' + s.embeddings.coverage.pct + "%</span>"
+          : "")
       : "") +
     "</div>";
 
@@ -1499,7 +1541,7 @@ async function renderSovereignty() {
     html +=
       '<p class="privacy-caveat">⚠ ' +
       s.pinnedToCloud.length +
-      " advanced surface(s) still use the cloud (live-streaming features that can't run on-prem yet): <code>" +
+      " advanced surface(s) still run on the standard cloud models. They can now be moved to your own certified model — your administrator routes them explicitly; they are never moved automatically: <code>" +
       s.pinnedToCloud.map((v) => escapeHtml(v)).join("</code>, <code>") +
       "</code>.</p>";
   } else if (s.fullySovereign) {
