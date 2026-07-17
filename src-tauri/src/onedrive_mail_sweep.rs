@@ -630,6 +630,22 @@ pub fn build_import_body(m: &MailFileV1, capture: Capture) -> serde_json::Value 
     if capture == Capture::Backfill {
         obj.insert("capture".into(), capture.as_str().into());
     }
+    // WP-INBOX-RECIPROCITY — direction. Only `sent` is stamped; `inbox` is the
+    // engine's default for an absent field, so a live inbox body stays
+    // BYTE-IDENTICAL to what previous builds produced (the v1-compat lock), and
+    // an older engine ignores the extra key.
+    //
+    // This reverses the old "mailbox is transport metadata, NOT sent" call. It
+    // has to: the engine's reciprocity gate needs DIRECTION — outbound is never
+    // gated and is what teaches the correspondent set — and the engine cannot
+    // infer it (owner-canon resolves aliases; it doesn't say "this is me").
+    // Outlook's own label is the ground truth, and we were throwing it away.
+    //
+    // Anything other than exactly `sent` is omitted ⇒ engine treats it as inbox
+    // ⇒ gated. An odd label fails to the conservative side.
+    if mailbox_label(m) == "sent" {
+        obj.insert("mailbox".into(), "sent".into());
+    }
     serde_json::Value::Object(obj)
 }
 
@@ -867,6 +883,38 @@ mod tests {
 
     // ── parse_mail_file: schema + required-field enforcement ──
 
+    /// WP-INBOX-RECIPROCITY: `sent` is stamped so the engine can learn
+    /// correspondents from outbound mail; `inbox` is NOT, so a live inbox body
+    /// stays byte-identical to what earlier builds sent (the v1-compat lock the
+    /// module header promises). The engine defaults an absent mailbox to inbox.
+    #[test]
+    fn import_body_stamps_mailbox_only_for_sent() {
+        let mut m = MailFileV1::default();
+        m.schema_version = Some(1);
+        m.from = "a@x.com".into();
+        m.internet_message_id = "<m1@x.com>".into();
+        m.body_html = "<p>hi</p>".into();
+
+        // sent ⇒ stamped
+        m.mailbox = Some("sent".into());
+        let sent = build_import_body(&m, Capture::Live);
+        assert_eq!(sent.get("mailbox").and_then(|v| v.as_str()), Some("sent"));
+
+        // inbox ⇒ omitted (byte-identical to the pre-change body)
+        m.mailbox = Some("inbox".into());
+        let inbox = build_import_body(&m, Capture::Live);
+        assert!(inbox.get("mailbox").is_none(), "inbox must not be stamped");
+
+        // absent ⇒ omitted (mailbox_label defaults to inbox)
+        m.mailbox = None;
+        assert!(build_import_body(&m, Capture::Live).get("mailbox").is_none());
+
+        // An odd label fails to the CONSERVATIVE side: omitted ⇒ engine treats
+        // it as inbox ⇒ gated. Never silently trusted as outbound.
+        m.mailbox = Some("drafts".into());
+        assert!(build_import_body(&m, Capture::Live).get("mailbox").is_none());
+    }
+
     #[test]
     fn parse_accepts_valid_v1() {
         let m = parse_mail_file(&valid_json("<abc@host>", "inbox")).expect("valid");
@@ -964,10 +1012,18 @@ mod tests {
         assert_eq!(body["internetMessageId"], "<reply@host>");
         assert_eq!(body["inReplyTo"], "<root@host>");
         assert_eq!(body["references"], serde_json::json!(["<root@host>", "<mid2@host>"]));
-        // Transport metadata is NOT sent to the engine; live ⇒ no capture stamp.
+        // schemaVersion stays transport-only; live ⇒ no capture stamp.
         assert!(body.get("schemaVersion").is_none());
-        assert!(body.get("mailbox").is_none());
         assert!(body.get("capture").is_none());
+        // WP-INBOX-RECIPROCITY — this assertion used to be
+        // `assert!(body.get("mailbox").is_none())`, pinning the old "mailbox is
+        // transport metadata, NOT sent" decision. That decision is deliberately
+        // reversed: the engine's reciprocity gate needs DIRECTION (outbound is
+        // never gated and is what teaches the correspondent set) and cannot
+        // infer it. This fixture is a SENT message, so the label now rides along.
+        // Inbox bodies are still byte-identical to before — see
+        // import_body_stamps_mailbox_only_for_sent, which pins both directions.
+        assert_eq!(body["mailbox"], "sent");
     }
 
     #[test]

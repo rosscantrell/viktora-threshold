@@ -276,6 +276,46 @@ pub struct AppConfig {
     /// `auto_import` / `email_follow`.
     #[serde(default)]
     pub onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig,
+    /// WP-CALENDAR (ICS-first posture) — local-calendar-read opt-in.
+    /// `#[serde(default)]` (struct-level) ⇒ legacy configs without the field
+    /// deserialize to `local_read_opt_in: false`, i.e. an existing install
+    /// STOPS reading the local calendar on upgrade until the user opts back
+    /// in. That silent-stop is intentional (see `CalendarConfig`), not a
+    /// migration bug — additive-only schema delta, same pattern as
+    /// `auto_import` / `email_follow` / `onedrive_mail`.
+    #[serde(default)]
+    pub calendar: CalendarConfig,
+}
+
+/// WP-CALENDAR — local-calendar-read settings.
+///
+/// The availability lane has two producers that write the SAME engine store:
+/// the engine's ICS poller (the user pastes a published busy-times link; the
+/// engine fetches it server-side) and this app's local calendar read. The ICS
+/// path is the default door because the local read is COM-shaped on Windows —
+/// it spawns a hidden-window PowerShell that instantiates
+/// `Outlook.Application` + MAPI, which is exactly the pattern Outlook's
+/// programmatic-access guard, GPO object-model restrictions, and EDR
+/// heuristics are built to intercept. Doing that automatically, every 30
+/// minutes, indefinitely, is the liability; the CODE existing is not.
+///
+/// Hence: OFF by default, and the automatic paths are gated on it
+/// (`calendar_read_window`). A default install never spawns the subprocess at
+/// all. A user whose org blocks calendar publishing — the ICS door — can still
+/// deliberately turn the local read on and keep an availability lane; if their
+/// org also blocks the object model, the read fails visibly on the card rather
+/// than silently in a background tick.
+///
+/// `probe_calendar_live` is deliberately NOT gated: it IS the opt-in gesture
+/// (a click), and it must be able to run to prove the read works before we
+/// persist the flag.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct CalendarConfig {
+    /// True once the user has explicitly chosen to let Threshold read this
+    /// computer's calendar (and the proving read succeeded). Gates every
+    /// AUTOMATIC local read. Default false — ICS is the front door.
+    pub local_read_opt_in: bool,
 }
 
 impl Default for AppConfig {
@@ -293,6 +333,7 @@ impl Default for AppConfig {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            calendar: CalendarConfig::default(),
         }
     }
 }
@@ -6303,12 +6344,62 @@ async fn run_onenote_send_inline(
 /// isn't stalled while the reader subprocess launches. On the read error path
 /// we surface `user_message()` (plain product language) rather than the raw
 /// Display, so a caller can show it verbatim.
+///
+/// GATED on `calendar.local_read_opt_in` (see `CalendarConfig`). This is the
+/// AUTOMATIC path — the widget's 30-min tick — and an un-opted-in install must
+/// never spawn the reader subprocess (on Windows: hidden PowerShell +
+/// `Outlook.Application` COM, the shape org protections intercept). The gate
+/// lives in Rust rather than only in the JS caller so a stale webview can't
+/// resurrect the tick. Returns `CalendarLocalOff` — a distinct, typed no-op the
+/// caller treats as "not configured", NOT as a read failure.
 #[tauri::command]
-async fn calendar_read_window(days: u32) -> Result<calendar_read::CalendarReadResult, String> {
+async fn calendar_read_window(
+    state: tauri::State<'_, AppState>,
+    days: u32,
+) -> Result<calendar_read::CalendarReadResult, String> {
+    let opted_in = state
+        .config
+        .lock()
+        .expect("config mutex poisoned")
+        .as_ref()
+        .map(|c| c.calendar.local_read_opt_in)
+        .unwrap_or(false);
+    if !opted_in {
+        return Err(CALENDAR_LOCAL_OFF.to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || calendar_read::read_window(days))
         .await
         .map_err(|e| format!("join error: {}", e))?
         .map_err(|e| e.user_message().to_string())
+}
+
+/// Sentinel returned by `calendar_read_window` when the local read isn't opted
+/// into. The JS tick matches on it to stay quiet (this is the DEFAULT state,
+/// not a fault); anything else is a real read failure worth a warn.
+pub const CALENDAR_LOCAL_OFF: &str = "CALENDAR_LOCAL_OFF";
+
+/// `calendar_local_set_opt_in` — flip the local-calendar-read opt-in.
+///
+/// A narrow read-modify-write of the single field rather than a `save_config`
+/// round-trip of the whole struct: the card is one of several surfaces that can
+/// be open at once, and shipping a whole AppConfig back from a webview to
+/// change one bool is how a concurrent write (hotkey, widget position) gets
+/// clobbered. Writes disk + refreshes the AppState cache the Rust-side gate in
+/// `calendar_read_window` reads, so the tick honours the new value immediately.
+#[tauri::command]
+fn calendar_local_set_opt_in(
+    state: tauri::State<AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut guard = state.config.lock().expect("config mutex poisoned");
+    let mut cfg = guard
+        .clone()
+        .ok_or_else(|| "No config loaded yet — connect first.".to_string())?;
+    cfg.calendar.local_read_opt_in = enabled;
+    save_config_to_disk(&cfg)?;
+    *guard = Some(cfg);
+    log::info!("calendar local read opt-in = {}", enabled);
+    Ok(())
 }
 
 /// Structured outcome of an availability push. `pushed` = the engine accepted a
@@ -6700,41 +6791,87 @@ async fn ics_source_set(
         }
     };
 
-    // 2. Fetch once, capped, sniff for BEGIN:VCALENDAR. Plain external GET (no
-    //    bearer — this isn't the engine).
+    // 2. Fetch (retried), capped, sniff for BEGIN:VCALENDAR. Plain external GET
+    //    (no bearer — this isn't the engine).
+    //
+    // RETRIED, and the distinction matters more than the timeout. A measured
+    // 8-hour probe of a live OWA feed failed ~5% of fetches (a 30s hang, an
+    // ECONNRESET). This code used to make ONE attempt and map `Err(_)` — the
+    // error DISCARDED — onto "That link didn't return a calendar. Check you
+    // copied the Publish → ICS link." So 1 user in 20 pasting a perfectly good
+    // link was told it was wrong and sent back to OWA to fix nothing.
+    //
+    // A hang doesn't heal by waiting longer, so the fix is attempts, not
+    // patience: 10s each, 3 tries ⇒ a ~5% blip becomes ~1-in-8000, at which
+    // point "couldn't reach it" is the honest verdict rather than a smear on the
+    // user's link. Only TRANSIENT failures retry; a 4xx or a 200 of non-calendar
+    // bytes is a real answer and retrying it only delays a correct verdict.
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(ICS_FETCH_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("HTTP client init failed: {e}"))?;
-    let mut resp = match client.get(&url).send().await {
-        Ok(r) => r,
-        Err(_) => {
-            return Ok(IcsSetResult {
-                ok: false,
-                stage: "fetch".into(),
-                configured: None,
-                engine_status: None,
-                note: Some(
-                    integration_doctor::IcsValidationError::NotCalendar
-                        .user_message()
-                        .to_string(),
-                ),
-            })
+
+    let fetch_err = |e: integration_doctor::IcsValidationError| IcsSetResult {
+        ok: false,
+        stage: e.stage().into(),
+        configured: None,
+        engine_status: None,
+        note: Some(e.user_message().to_string()),
+    };
+
+    let mut resp = None;
+    let mut last_transient: Option<String> = None;
+    for attempt in 1..=integration_doctor::ICS_FETCH_ATTEMPTS {
+        match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => {
+                resp = Some(r);
+                break;
+            }
+            Ok(r) if r.status().is_server_error() => {
+                // 5xx is the origin having a moment — worth another try.
+                last_transient = Some(format!("HTTP {}", r.status().as_u16()));
+            }
+            Ok(r) => {
+                // 4xx: a real answer. The link is dead or was unpublished/rotated
+                // (we saw exactly this when republishing minted a new URL and the
+                // old one began serving an error). Don't retry, don't blame the
+                // paste — say what happened.
+                log::warn!("ics_source_set: link returned HTTP {}", r.status().as_u16());
+                return Ok(fetch_err(integration_doctor::IcsValidationError::NotServing));
+            }
+            Err(e) => {
+                // Timeout / reset / DNS. Keep the reason for the log — the old
+                // code threw this away, which is why the bug was invisible.
+                last_transient = Some(if e.is_timeout() {
+                    format!("timeout after {}s", integration_doctor::ICS_FETCH_TIMEOUT_SECS)
+                } else {
+                    format!("{e}")
+                });
+            }
+        }
+        if attempt < integration_doctor::ICS_FETCH_ATTEMPTS {
+            log::warn!(
+                "ics_source_set: attempt {attempt}/{} failed ({}) — retrying",
+                integration_doctor::ICS_FETCH_ATTEMPTS,
+                last_transient.as_deref().unwrap_or("unknown"),
+            );
+            tokio::time::sleep(Duration::from_millis(
+                integration_doctor::ICS_FETCH_RETRY_DELAY_MS,
+            ))
+            .await;
+        }
+    }
+    let mut resp = match resp {
+        Some(r) => r,
+        None => {
+            log::warn!(
+                "ics_source_set: unreachable after {} attempts ({})",
+                integration_doctor::ICS_FETCH_ATTEMPTS,
+                last_transient.as_deref().unwrap_or("unknown"),
+            );
+            return Ok(fetch_err(integration_doctor::IcsValidationError::Unreachable));
         }
     };
-    if !resp.status().is_success() {
-        return Ok(IcsSetResult {
-            ok: false,
-            stage: "fetch".into(),
-            configured: None,
-            engine_status: None,
-            note: Some(
-                integration_doctor::IcsValidationError::NotCalendar
-                    .user_message()
-                    .to_string(),
-            ),
-        });
-    }
     // Read up to the byte cap, then stop (don't slurp a hostile huge body).
     let mut buf: Vec<u8> = Vec::new();
     loop {
@@ -10165,6 +10302,7 @@ pub fn run() {
             ics_source_set,
             ics_source_status,
             ics_source_clear,
+            calendar_local_set_opt_in,
             // WP-INTAKE (ONBOARD) commit 2 — Power Automate flow-package generator.
             generate_flow_package,
             // WP-INTAKE E5-app — email thread-following sweep, driven by the
@@ -10675,6 +10813,45 @@ mod tests {
         assert!(cfg.last_used.is_none());
     }
 
+    /// A config written by a build that predates the calendar field must land
+    /// on opt-in FALSE. This is the load-bearing assertion of the ICS-first
+    /// posture: on upgrade, every existing install stops its automatic local
+    /// calendar read (hidden PowerShell + Outlook COM on Windows) until the
+    /// user deliberately turns it back on. If `#[serde(default)]` is ever
+    /// dropped from AppConfig or CalendarConfig, serde would reject the legacy
+    /// file instead — this pins the quiet-upgrade path.
+    #[test]
+    fn legacy_config_without_calendar_field_defaults_to_local_read_off() {
+        let legacy = r#"{
+            "base_url": "https://hosted.viktora.ai",
+            "bearer_token": "t",
+            "mode": "workspace"
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(legacy).expect("legacy config must load");
+        assert!(
+            !parsed.calendar.local_read_opt_in,
+            "legacy configs must NOT auto-enable the local calendar read"
+        );
+    }
+
+    /// The opt-in must survive a save/load round-trip in the camelCase shape the
+    /// webview reads (`cfg.calendar.localReadOptIn` in main.js). A snake_case
+    /// serialization would silently read back as `undefined` in JS — i.e. the
+    /// card would show "off" for a user who is opted in, and the two gates
+    /// (JS render-probe, Rust tick) would disagree.
+    #[test]
+    fn calendar_opt_in_round_trips_as_camel_case() {
+        let mut cfg = AppConfig::default();
+        cfg.calendar.local_read_opt_in = true;
+        let json = serde_json::to_string(&cfg).expect("should serialize");
+        assert!(
+            json.contains("\"localReadOptIn\":true"),
+            "expected camelCase localReadOptIn in: {json}"
+        );
+        let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
+        assert!(parsed.calendar.local_read_opt_in);
+    }
+
     #[test]
     fn config_round_trips_through_json() {
         let cfg = AppConfig {
@@ -10690,6 +10867,7 @@ mod tests {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            calendar: CalendarConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
@@ -10756,6 +10934,7 @@ mod tests {
             dismissed_record_ids: Vec::new(),
             email_follow: email_follow::EmailFollowState::default(),
             onedrive_mail: onedrive_mail_sweep::OneDriveMailConfig::default(),
+            calendar: CalendarConfig::default(),
         };
         let json = serde_json::to_string(&cfg).expect("should serialize");
         let parsed: AppConfig = serde_json::from_str(&json).expect("should deserialize");
