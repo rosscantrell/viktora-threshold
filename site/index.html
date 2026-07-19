@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threshold — the deadline was in the thread the whole time</title>
-<meta name="description" content="Threshold watches the work you give it and keeps the promises in front of you before they're due. Forward an email, a note, a screenshot, a recording — that's the whole workflow.">
+<title>Threshold — the to-do list that builds itself</title>
+<meta name="description" content="Threshold watches the work you give it and keeps the promises in front of you before they're due. It's the to-do list that builds itself — out of the emails, notes, and meetings you already have.">
 <style>
 /* ─────────────────────────────────────────────────────────────────────────
    Design tokens lifted verbatim from the Threshold app (src/styles.css).
@@ -64,6 +64,7 @@ body{
 }
 
 img,video{max-width:100%;display:block}
+[hidden]{display:none!important} /* survives the video/img display:block rules */
 
 a{color:var(--accent-hover);text-decoration:none}
 a:hover{color:var(--accent)}
@@ -87,17 +88,26 @@ a:hover{color:var(--accent)}
 }
 .topbar .nav-cta:hover{background:var(--accent-hover);color:#fff}
 
-/* ── Hero ───────────────────────────────────────────────────────────── */
-.hero{padding:76px 0 44px;text-align:center}
+/* ── Hero (split: story left, form right — the form IS the call to action) */
+.hero{padding:64px 0 44px}
+.hero-grid{
+  display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,0.85fr);
+  gap:48px;align-items:center;
+}
+.kicker{
+  font-size:15px;color:var(--text-secondary);margin-bottom:14px;
+  font-style:italic;letter-spacing:0.01em;
+}
 .hero h1{
-  font-size:clamp(30px,5.2vw,52px);
-  line-height:1.14;font-weight:600;letter-spacing:-0.015em;
-  max-width:16ch;margin:0 auto;
+  font-size:clamp(26px,3.8vw,40px);
+  line-height:1.18;font-weight:600;letter-spacing:-0.015em;
 }
 .hero .lede{
-  margin:22px auto 0;max-width:60ch;
-  font-size:clamp(16px,2.2vw,19px);color:var(--text-secondary);
+  margin:18px 0 0;max-width:56ch;
+  font-size:clamp(16px,2vw,18px);color:var(--text-secondary);
 }
+.hero-form{margin:0}
+#join{scroll-margin-top:90px} /* the sticky topbar must not cover the form on #join jumps */
 .cta-btn{
   display:inline-block;margin-top:30px;
   font-size:17px;font-weight:600;color:var(--accent-text);
@@ -119,6 +129,15 @@ a:hover{color:var(--accent)}
 .media-card video,.media-card img{width:100%;height:auto;display:block}
 
 .hero-video{position:relative;background:#0e0f14}
+.tour-btn{
+  position:absolute;right:14px;bottom:14px;z-index:2;
+  font-family:inherit;font-size:13px;font-weight:600;color:var(--text-primary);
+  background:rgba(21,22,29,0.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--border-strong);border-radius:var(--radius-pill);
+  padding:8px 16px;cursor:pointer;
+  transition:background .18s var(--ease),border-color .18s var(--ease);
+}
+.tour-btn:hover{background:rgba(21,22,29,0.92);border-color:var(--accent-ring)}
 
 /* ── Sections ───────────────────────────────────────────────────────── */
 section{padding:56px 0}
@@ -241,6 +260,9 @@ footer{
 footer .dot{margin:0 8px;opacity:.5}
 
 /* ── Responsive ─────────────────────────────────────────────────────── */
+@media (max-width:880px){
+  .hero-grid{grid-template-columns:1fr;gap:32px}
+}
 @media (max-width:760px){
   .feature{grid-template-columns:1fr;gap:24px}
   .feature.reverse .feature-copy{order:1}
@@ -268,24 +290,64 @@ footer .dot{margin:0 8px;opacity:.5}
   </div>
 </header>
 
-<!-- ── Hero ────────────────────────────────────────────────────────── -->
+<!-- ── Hero: story left, form right (the form IS the CTA), video below ── -->
 <div class="wrap">
   <div class="hero">
-    <h1>The deadline was in the thread the whole time.</h1>
-    <p class="lede">Someone on your team made a promise three weeks ago, at the bottom of an email you were barely on. Nobody put it on a list. Someone had to ask. Threshold exists so that never happens again.</p>
-    <a class="cta-btn" href="#join">Ask for a beta invite</a>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="kicker">The deadline was in the thread the whole time.</p>
+        <h1>Threshold watches the work you give it and keeps the promises in front of you before they're due.</h1>
+        <p class="lede">It's the to-do list that builds itself — out of the emails, notes, and meetings you already have. Nobody writes it. Nobody grooms it. It's just there, and it's right.</p>
+      </div>
 
-    <!-- HERO VIDEO: ~62s screencast — forward → receipt → Today fills →
-         plan unfolds → date-move ripple → close. Poster shown until play. -->
+      <form class="form-card hero-form" id="waitlist-form"
+            method="POST" action="/api/waitlist"
+            novalidate>
+        <span id="join"></span>
+        <!-- Honeypot: humans never fill this; bots do. -->
+        <div class="hp" aria-hidden="true">
+          <label for="wl-company">Company</label>
+          <input type="text" id="wl-company" name="company" tabindex="-1" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="wl-name">Name</label>
+          <input type="text" id="wl-name" name="name" placeholder="Your name" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label for="wl-email">Work email</label>
+          <input type="email" id="wl-email" name="email" placeholder="you@company.com" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="wl-role">One line about what you run</label>
+          <input type="text" id="wl-role" name="role" placeholder="e.g. agency lead, program manager, chief of staff" autocomplete="off">
+        </div>
+        <button type="submit" id="wl-submit">Join the beta</button>
+        <p class="form-note">
+          No password, no download to try. Prefer email?
+          <a href="mailto:beta@viktora.ai?subject=Threshold%20beta%20invite&amp;body=Name%3A%20%0AWork%20email%3A%20%0AOne%20line%20about%20what%20I%20run%3A%20">Ask for an invite by email</a>.
+        </p>
+        <div class="form-status" id="form-status" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+
+    <!-- HERO VIDEO: autoplaying muted ~20s loop (capture → list fills →
+         companion takes one). "Watch the full tour" swaps in the long cut
+         with controls. Reduced-motion users keep the poster. -->
     <div class="media-card hero-video">
-      <video
-        controls playsinline preload="none"
+      <video class="loopclip" id="hero-loop" muted loop playsinline preload="none"
         poster="assets/hero-poster.jpg"
-        title="Threshold hero screencast: forward an email, get a receipt, Today fills with promises, a worked-back plan unfolds, and moving a date ripples through the plan.">
-        <source src="assets/hero.webm" type="video/webm">
-        <source src="assets/hero.mp4" type="video/mp4">
+        title="A promise arrives, the list writes itself, and the companion takes an item.">
+        <source src="assets/hero-loop.webm" type="video/webm">
+        <source src="assets/hero-loop.mp4" type="video/mp4">
         <img src="assets/02-today-wide.jpg" alt="The Threshold Today view — the full two-week deadline outlook." loading="lazy">
       </video>
+      <video id="hero-tour" controls playsinline preload="none" hidden
+        poster="assets/hero-poster.jpg"
+        title="The full Threshold tour: forward an email, get a receipt, Today fills, the companion takes an item, a worked-back plan unfolds, and every claim opens to its receipt.">
+        <source src="assets/hero.webm" type="video/webm">
+        <source src="assets/hero.mp4" type="video/mp4">
+      </video>
+      <button type="button" class="tour-btn" id="tour-btn">Watch the full tour</button>
     </div>
   </div>
 </div>
@@ -294,7 +356,7 @@ footer .dot{margin:0 8px;opacity:.5}
 <section class="problem">
   <div class="wrap">
     <div class="section-eyebrow">The problem, plainly</div>
-    <p class="section-lead">You're accountable for work you don't personally do. The promises that sink you don't live in your task tracker — they live in side threads, forwarded decks, and meeting notes. For example, someone says, "I should have something by the 30th." Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every system that could is homework: somebody has to file, tag, and groom it, forever — which is exactly the job nobody was doing the day the deadline slipped.</p>
+    <p class="section-lead">You're accountable for work you don't do yourself. The promises that sink you live in side threads and meeting notes — <em>"I should have something by the 30th."</em> Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every tool that could is homework somebody has to do forever.</p>
   </div>
 </section>
 
@@ -302,14 +364,14 @@ footer .dot{margin:0 8px;opacity:.5}
 <section>
   <div class="wrap">
     <div class="section-eyebrow">What Threshold does</div>
-    <h2>Threshold watches the work you give it and keeps the promises in front of you before they're due.</h2>
+    <h2>How it works.</h2>
 
     <!-- 1 -->
     <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">1</span>
-        <h3>Forward an email — or a note, a screenshot, a recording. That's the whole workflow.</h3>
-        <p>Every workspace gets a private capture address, and connects to the sources your work already lives in. Threshold files every commitment it finds — who promised what, by when, in their exact words — and replies with a receipt. Nothing invented; if it finds nothing, the receipt says so.</p>
+        <h3>Forward it. That's the whole workflow.</h3>
+        <p>Email, note, screenshot, recording — Threshold files every promise it finds, in the promiser's exact words, and replies with a receipt. If it finds nothing, the receipt says so.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
@@ -328,18 +390,18 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="feature reverse">
       <div class="feature-copy">
         <span class="feature-num">2</span>
-        <h3>A two-week windshield, not a rear-view mirror.</h3>
-        <p>Today opens with every promise due in the next two weeks and who owns it. The bigger ones get a worked-back plan — the latest date each step can start and still make the deadline. When that date passes with nothing seen, the item turns amber before it's late, not after.</p>
+        <h3>See two weeks ahead.</h3>
+        <p>Today opens on everything coming due — who owns it, what's drifting, what's gone quiet. Amber before it's late, not after, with a short no-blame heads-up staged one tap away. Nothing sends itself.</p>
       </div>
       <div class="feature-media">
         <div class="stack">
-          <img src="assets/21-workback-crop.jpg" alt="A worked-back plan — the latest date each step can start and still make the deadline." loading="lazy" width="1344" height="420">
           <!-- animation B: click a swimlane → the plan unfolds -->
           <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-b-poster.jpg"
                  title="Clicking a swimlane unfolds the worked-back plan.">
             <source src="assets/clip-b.webm" type="video/webm">
             <source src="assets/clip-b.mp4" type="video/mp4">
           </video>
+          <img src="assets/27-headsup-crop.jpg" alt="A drifting item — due in two days, no draft observed — with a staged heads-up one tap away." loading="lazy" width="666" height="200">
         </div>
       </div>
     </div>
@@ -348,31 +410,16 @@ footer .dot{margin:0 8px;opacity:.5}
     <div class="feature">
       <div class="feature-copy">
         <span class="feature-num">3</span>
-        <h3>You stay the editor.</h3>
-        <p>Every plan is correctable in place — mark a step done, rule it out, move the date, undo any of it. When Threshold isn't sure, it asks instead of guessing — and your answers teach it.</p>
+        <h3>Start the day with a plan. End it with less on it.</h3>
+        <p>Three times a day, your companion walks the list with you. Items it can take, it takes — it drafts, you comment, it revises. Your work, off your plate, still your name on it.</p>
       </div>
       <div class="feature-media">
-        <div class="stack">
-          <img src="assets/28-name-ask.png" alt="Threshold asks what a workstream should be called instead of guessing." loading="lazy" width="1096">
-          <!-- animation C: move the date → bars, tags, and ordering ripple -->
-          <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-c-poster.jpg"
-                 title="Moving the date ripples through the bars, tags, and ordering; then undo restores it.">
-            <source src="assets/clip-c.webm" type="video/webm">
-            <source src="assets/clip-c.mp4" type="video/mp4">
-          </video>
-        </div>
-      </div>
-    </div>
-
-    <!-- 4 -->
-    <div class="feature reverse">
-      <div class="feature-copy">
-        <span class="feature-num">4</span>
-        <h3>Put out the fire before it starts.</h3>
-        <p>When something starts drifting, you see it early — while there's still time to reshuffle, pull someone in, or deliver part now and buy room for the rest. If a heads-up is the right call, one tap stages a short, no-blame note that waits in your outbox. Nothing sends itself.</p>
-      </div>
-      <div class="feature-media">
-        <img src="assets/27-headsup-crop.jpg" alt="A drifting item — due in two days, no draft observed — with a staged heads-up one tap away." loading="lazy" width="666" height="200">
+        <!-- animation D: check-in unfolds → companion takes an item → draft lands -->
+        <video class="loopclip" muted loop playsinline preload="none" poster="assets/clip-d-poster.jpg"
+               title="A check-in unfolds; the companion offers to draft an item, and the draft lands in Prepared for you.">
+          <source src="assets/clip-d.webm" type="video/webm">
+          <source src="assets/clip-d.mp4" type="video/mp4">
+        </video>
       </div>
     </div>
   </div>
@@ -383,7 +430,7 @@ footer .dot{margin:0 8px;opacity:.5}
   <div class="wrap">
     <div class="trust-card">
       <div class="section-eyebrow">No homework</div>
-      <p class="section-lead">You've tried the boards, the Gantt charts, the color-coded lists with everyone's name tagged on them. You groom them for an hour and nobody looks again. Every one of them asks the same thing: that somebody keep it current, forever — the job that never gets done. Threshold doesn't ask. Forward what matters and it does the filing — the emails, the meeting notes, the running log of decisions and commitments — organized and kept current on its own. When it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
+      <p class="section-lead">You've tried the boards and the color-coded lists — every one of them asks somebody to keep it current, forever. That's the job that never gets done. Threshold doesn't ask: the filing, the organizing, and the keeping-current happen on their own, and when it isn't sure, it asks you one small question instead of handing you a system to manage.</p>
     </div>
   </div>
 </section>
@@ -393,44 +440,17 @@ footer .dot{margin:0 8px;opacity:.5}
   <div class="wrap">
     <div class="trust-card">
       <div class="section-eyebrow">Trust, stated plainly</div>
-      <p class="section-lead">Threshold only sees what you forward or connect. Every claim it makes carries a receipt — the exact words, the source document, the date. When it can't see enough to judge, it says so instead of guessing.</p>
+      <p class="section-lead">Threshold only sees what you forward or connect. Every claim it makes carries a receipt — the exact words, the source document, the date. When it can't see enough to judge, it says so and asks instead of guessing. Every plan is correctable in place — mark a step done, move the date, undo any of it. And you choose where the reading happens: our models, or keys you control.</p>
     </div>
   </div>
 </section>
 
-<!-- ── CTA (repeated, the only one) ────────────────────────────────── -->
-<section class="join" id="join">
+<!-- ── Return CTA (the one form lives in the hero) ─────────────────── -->
+<section class="join">
   <div class="wrap">
     <h2>Join the beta.</h2>
     <p class="section-lead">Threshold works for one person from day one — you don't need your team, your IT department, or anyone's permission to start. We're letting people in in small waves.</p>
-
-    <form class="form-card" id="waitlist-form"
-          method="POST" action="/api/waitlist"
-          novalidate>
-      <!-- Honeypot: humans never fill this; bots do. -->
-      <div class="hp" aria-hidden="true">
-        <label for="wl-company">Company</label>
-        <input type="text" id="wl-company" name="company" tabindex="-1" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="wl-name">Name</label>
-        <input type="text" id="wl-name" name="name" placeholder="Your name" autocomplete="name" required>
-      </div>
-      <div class="field">
-        <label for="wl-email">Work email</label>
-        <input type="email" id="wl-email" name="email" placeholder="you@company.com" autocomplete="email" required>
-      </div>
-      <div class="field">
-        <label for="wl-role">One line about what you run</label>
-        <input type="text" id="wl-role" name="role" placeholder="e.g. agency lead, program manager, chief of staff" autocomplete="off">
-      </div>
-      <button type="submit" id="wl-submit">Join the beta</button>
-      <p class="form-note">
-        No password, no download to try. Prefer email?
-        <a href="mailto:beta@viktora.ai?subject=Threshold%20beta%20invite&amp;body=Name%3A%20%0AWork%20email%3A%20%0AOne%20line%20about%20what%20I%20run%3A%20">Ask for an invite by email</a>.
-      </p>
-      <div class="form-status" id="form-status" role="status" aria-live="polite"></div>
-    </form>
+    <a class="cta-btn" href="#join">Ask for a beta invite</a>
   </div>
 </section>
 
@@ -472,14 +492,24 @@ footer .dot{margin:0 8px;opacity:.5}
 })();
 
 /* ─────────────────────────────────────────────────────────────────────────
-   Hero video: when it finishes, return to the poster frame instead of resting
-   on the last (dark) frame — otherwise a played-through hero reads as a blank
-   page. load() re-displays the poster because preload is 'none'.
+   Hero video: the muted loop autoplays (via the loopclip observer above);
+   "Watch the full tour" swaps in the long cut with controls + sound. When
+   the tour finishes, return to the poster frame instead of resting on the
+   last (dark) frame. load() re-displays the poster because preload is 'none'.
    ───────────────────────────────────────────────────────────────────────── */
 (function(){
-  var hero = document.querySelector('.hero-video video');
-  if (!hero) return;
-  hero.addEventListener('ended', function(){ try { hero.load(); } catch(e){} });
+  var loop = document.getElementById('hero-loop');
+  var tour = document.getElementById('hero-tour');
+  var btn  = document.getElementById('tour-btn');
+  if (!loop || !tour || !btn) return;
+  btn.addEventListener('click', function(){
+    try { loop.pause(); } catch(e){}
+    loop.hidden = true;
+    btn.hidden = true;
+    tour.hidden = false;
+    try { tour.load(); tour.play().catch(function(){}); } catch(e){}
+  });
+  tour.addEventListener('ended', function(){ try { tour.load(); } catch(e){} });
 })();
 
 /* ─────────────────────────────────────────────────────────────────────────
