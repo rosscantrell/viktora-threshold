@@ -410,7 +410,7 @@ async function bootstrap() {
 
     // WP-BYOM Phase 3 — deep-link straight to Settings → Privacy (render-look
     // loop + future posture deep-links; nothing sets this hash in production).
-    if (window.location.hash === "#privacy") {
+    if (window.location.hash === "#privacy" || window.location.hash.startsWith("#privacy-pick-")) {
       enterStandaloneConfigure();
       switchSettingsPanel("privacy");
       return;
@@ -1789,6 +1789,16 @@ async function renderSovereignty() {
     return;
   }
 
+  // WP-BYOM P3B — the routing state (GET /api/model-routing) drives the per-surface
+  // "Change…" picker + the pending-restart banner. Best-effort: an older engine
+  // without the route leaves routing null and the panel stays read-only (increment A
+  // behaviour). Stashed for the picker's apply/re-fetch cycle.
+  let routing = null;
+  try {
+    routing = await tauri.core.invoke("get_model_routing", { baseUrl, bearerToken: bearerToken || null });
+  } catch { /* older engine → read-only panel, no Change affordances */ }
+  _routingCtx = { baseUrl, bearerToken, routing };
+
   const POSTURE_CLASS = { "on-prem": "is-sovereign", hybrid: "is-hybrid", cloud: "is-cloud", mixed: "is-hybrid", unconfigured: "is-unconfigured" };
   const cls = POSTURE_CLASS[s.posture] || "is-cloud";
   const lockIcon = s.posture === "on-prem"
@@ -1817,13 +1827,21 @@ async function renderSovereignty() {
     certByVar[row.surfaceVar] = row.status;
   }
 
-  const surfaceRow = (label, surf, certVar, extraChip) => {
+  // A surface is routable from the panel when the engine reports routing AND this
+  // surface maps to a routing group (generation/extraction/query). Embeddings is a
+  // different axis (provider, not a *_MODEL var) — no Change affordance yet.
+  const routeGroup = (g) => (routing && routing.surfaces ? g : null);
+
+  const surfaceRow = (label, surf, certVar, extraChip, group) => {
     const where =
       LOCUS_CHIP[surf.processingLocus] ||
       (surf.dataLeavesOrg
         ? '<span class="privacy-chip is-cloud">Cloud</span>'
         : '<span class="privacy-chip is-sovereign">Your infrastructure</span>');
     const cert = ((certVar && CERT_CHIP[certByVar[certVar]]) || "") + (extraChip || "");
+    const change = group
+      ? '<button type="button" class="privacy-change" data-route-group="' + group + '" data-route-label="' + escapeHtml(label) + '">Change…</button>'
+      : "";
     return (
       '<div class="privacy-surface">' +
       '<div class="privacy-surface-main"><span class="privacy-surface-label">' +
@@ -1831,7 +1849,7 @@ async function renderSovereignty() {
       '</span><span class="privacy-surface-model">' +
       escapeHtml(surf.model) +
       "</span></div>" +
-      '<div class="privacy-surface-chips">' + cert + where + "</div>" +
+      '<div class="privacy-surface-chips">' + cert + where + change + "</div>" +
       "</div>"
     );
   };
@@ -1842,6 +1860,20 @@ async function renderSovereignty() {
     '<div><p class="privacy-banner-headline">' + escapeHtml(s.headline) + "</p>" +
     (s.tier ? '<p class="privacy-banner-sub">Tier: ' + escapeHtml(s.tier) + "</p>" : "") +
     "</div></div>";
+
+  // WP-BYOM P3B — a routing change is written to a persisted overlay and takes
+  // effect at the next engine restart (model specs are read into module constants
+  // at boot, so a live swap would half-apply). Say that plainly, and offer the
+  // restart only where the engine advertises it can recycle itself (PM2 droplets).
+  if (routing && routing.pendingRestart) {
+    html +=
+      '<div class="privacy-restart">' +
+      '<span class="privacy-restart-text">A model change is saved and takes effect after the engine restarts.</span>' +
+      (routing.restartAvailable
+        ? '<button type="button" class="privacy-change is-restart" id="privacy-restart-btn">Restart engine</button>'
+        : '<span class="privacy-restart-note">Your administrator restarts the engine to apply it.</span>') +
+      "</div>";
+  }
 
   // A deployment with no AI provider configured isn't a cloud posture — it
   // isn't processing anything. Say that plainly instead of listing default
@@ -1856,9 +1888,9 @@ async function renderSovereignty() {
 
   html +=
     '<div class="privacy-surfaces">' +
-    surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation, "SYNTHESIS_MODEL") +
-    surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction, "EXTRACTION_MODEL") +
-    surfaceRow("Query understanding", s.surfaces.query, "PLANNER_MODEL") +
+    surfaceRow("Generation (synthesis, cards, insights)", s.surfaces.generation, "SYNTHESIS_MODEL", "", routeGroup("generation")) +
+    surfaceRow("Extraction / ingestion (your documents)", s.surfaces.extraction, "EXTRACTION_MODEL", "", routeGroup("extraction")) +
+    surfaceRow("Query understanding", s.surfaces.query, "PLANNER_MODEL", "", routeGroup("query")) +
     // The semantic index is a fourth data channel: record summaries are
     // embedded, and with a cloud provider (Voyage) those vectors leave the
     // org — this row is what explains a missing "fully sovereign" checkmark.
@@ -1897,6 +1929,184 @@ async function renderSovereignty() {
   }
 
   body.innerHTML = html;
+
+  // Wire the routing affordances (present only when the engine reported routing).
+  for (const btn of body.querySelectorAll(".privacy-change[data-route-group]")) {
+    btn.addEventListener("click", () =>
+      openModelPicker(btn.dataset.routeGroup, btn.dataset.routeLabel));
+  }
+  const restartBtn = document.getElementById("privacy-restart-btn");
+  if (restartBtn) restartBtn.addEventListener("click", restartRoutingEngine);
+
+  // Dev render-look hook: #privacy-pick-<group> opens the picker on load so the
+  // modal state is screenshottable in the shim loop. Guarded to the debug hash;
+  // nothing triggers it in production.
+  const pick = /#privacy-pick-(generation|extraction|query)/.exec(window.location.hash || "");
+  if (pick) openModelPicker(pick[1], pick[1][0].toUpperCase() + pick[1].slice(1));
+}
+
+// ── WP-BYOM P3B — the model picker (recipe-first) ──────────────────────────
+// Context stashed by renderSovereignty so the picker can PUT + re-fetch.
+let _routingCtx = { baseUrl: "", bearerToken: "", routing: null };
+
+// Recipe-first catalog: named, human-legible options per surface, cost/sovereignty
+// forward. `spec:""` clears the override → back to the managed Claude default.
+// Locus is DETERMINISTIC from the spec prefix (shown before picking); certification
+// is resolved against the engine's certifiedSpecs for the surface (source of truth
+// stays server-side — the PUT re-checks and 409s a stale pick).
+const ROUTING_RECIPES = {
+  generation: [
+    { name: "Economy", spec: "fireworks:accounts/fireworks/models/glm-5p2", sub: "GLM-5.2 — about 7× cheaper than premium" },
+    { name: "Premium (managed)", spec: "", sub: "Claude — the Threshold default" },
+    { name: "Your hardware", spec: "endpoint:gemma3:27b", sub: "Gemma-3-27B on your own box" },
+  ],
+  extraction: [
+    { name: "Managed", spec: "claude-haiku-4-5-20251001", sub: "Haiku — fast, faithful, lower cost" },
+    { name: "Premium (managed)", spec: "", sub: "Claude — the Threshold default" },
+    { name: "Your hardware", spec: "endpoint:gemma3:27b", sub: "Gemma-3-27B via vLLM on your box" },
+  ],
+  query: [
+    { name: "Premium (managed)", spec: "", sub: "Claude — the Threshold default" },
+    { name: "Your hardware", spec: "endpoint:gemma3:27b", sub: "Gemma-3-27B on your own box" },
+  ],
+};
+
+function locusForSpec(spec) {
+  if (!spec) return "vendor-cloud"; // cleared → managed Claude
+  if (spec.startsWith("local:") || spec.startsWith("endpoint:")) return "org-hardware";
+  if (spec.startsWith("bedrock:")) return "org-cloud";
+  return "vendor-cloud";
+}
+const LOCUS_LABEL = { "org-hardware": "Your hardware", "org-cloud": "Your cloud", "vendor-cloud": "Provider cloud" };
+const LOCUS_CLASS = { "org-hardware": "is-sovereign", "org-cloud": "is-orgcloud", "vendor-cloud": "is-cloud" };
+
+function certForSpec(group, spec) {
+  // certifiedSpecs[group] = specs cleared to run (certified OR baseline-trusted).
+  // "" (managed default) is always baseline-trusted. Anything not listed shows as
+  // uncertified — pickable, but the confirm makes the override explicit.
+  if (!spec) return "certified";
+  const certified = (_routingCtx.routing && _routingCtx.routing.certifiedSpecs && _routingCtx.routing.certifiedSpecs[group]) || [];
+  return certified.includes(spec) ? "certified" : "uncertified";
+}
+
+function openModelPicker(group, label) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane privacy-picker";
+
+  const title = document.createElement("div");
+  title.className = "pg-pane-title";
+  title.textContent = "Choose the " + label.toLowerCase() + " model";
+  pane.appendChild(title);
+
+  const help = document.createElement("p");
+  help.className = "privacy-picker-help";
+  help.textContent = "Pick a recipe. Each shows where it runs and whether it's certified for this surface — the engine only accepts a certified model unless you override.";
+  pane.appendChild(help);
+
+  const list = document.createElement("div");
+  list.className = "privacy-recipes";
+  for (const r of ROUTING_RECIPES[group] || []) {
+    const locus = locusForSpec(r.spec);
+    const cert = certForSpec(group, r.spec);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "privacy-recipe";
+    row.innerHTML =
+      '<div class="privacy-recipe-main">' +
+      '<span class="privacy-recipe-name">' + escapeHtml(r.name) + "</span>" +
+      '<span class="privacy-recipe-sub">' + escapeHtml(r.sub) + "</span>" +
+      "</div>" +
+      '<div class="privacy-recipe-chips">' +
+      (cert === "certified"
+        ? '<span class="privacy-chip is-certified">✓ Certified</span>'
+        : '<span class="privacy-chip is-uncertified">Not certified</span>') +
+      '<span class="privacy-chip ' + LOCUS_CLASS[locus] + '">' + LOCUS_LABEL[locus] + "</span>" +
+      "</div>";
+    row.addEventListener("click", () => { pgClose(overlay); confirmRoutingChoice(group, label, r, locus, cert); });
+    list.appendChild(row);
+  }
+  pane.appendChild(list);
+
+  // Advanced escape hatch — a raw model spec for power users.
+  const adv = document.createElement("details");
+  adv.className = "privacy-advanced";
+  adv.innerHTML =
+    "<summary>Advanced — enter a model spec</summary>" +
+    '<div class="privacy-adv-row">' +
+    '<input type="text" class="privacy-adv-input" placeholder="e.g. endpoint:my-model or fireworks:...">' +
+    '<button type="button" class="pg-btn pg-btn-primary privacy-adv-go">Use</button>' +
+    "</div>";
+  adv.querySelector(".privacy-adv-go").addEventListener("click", () => {
+    const spec = adv.querySelector(".privacy-adv-input").value.trim();
+    if (!spec) return;
+    pgClose(overlay);
+    const locus = locusForSpec(spec);
+    confirmRoutingChoice(group, label, { name: spec, spec, sub: "custom model spec" }, locus, certForSpec(group, spec));
+  });
+  pane.appendChild(adv);
+
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "pg-btn pg-btn-ghost";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  actions.appendChild(cancel);
+  pane.appendChild(actions);
+
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+function confirmRoutingChoice(group, label, recipe, locus, cert) {
+  // Certified/managed picks apply directly; an uncertified pick surfaces the
+  // override decision plainly (fail-closed-but-visible — the user OWNS the risk).
+  if (cert === "certified") return applyRouting(group, recipe.spec, false);
+
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane pg-confirm";
+  pane.innerHTML =
+    '<div class="pg-pane-title">Route to an uncertified model?</div>' +
+    '<div class="pg-confirm-body">“' + escapeHtml(recipe.name) + "” hasn't passed certification for the " +
+    escapeHtml(label.toLowerCase()) + " surface. It may lose findings or fabricate — the panel will keep flagging it until it's certified. Route it anyway?</div>";
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.className = "pg-btn pg-btn-ghost"; cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button"; go.className = "pg-btn pg-btn-primary"; go.textContent = "Route anyway";
+  go.addEventListener("click", () => { pgClose(overlay); applyRouting(group, recipe.spec, true); });
+  actions.appendChild(cancel); actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+}
+
+async function applyRouting(group, spec, override) {
+  const { baseUrl, bearerToken } = _routingCtx;
+  try {
+    await tauri.core.invoke("put_model_routing", {
+      baseUrl, bearerToken: bearerToken || null, group, spec: spec || null, override: !!override,
+    });
+    await renderSovereignty(); // re-GET → refreshed chips + pending banner
+    showToast({ kind: "success", title: "Model change saved", body: "It takes effect after the engine restarts." });
+  } catch (err) {
+    showToast({ kind: "failure", title: "Couldn't change the model", body: String(err) });
+  }
+}
+
+async function restartRoutingEngine() {
+  const { baseUrl, bearerToken } = _routingCtx;
+  try {
+    await tauri.core.invoke("restart_routing_engine", { baseUrl, bearerToken: bearerToken || null });
+    showToast({ kind: "success", title: "Restarting", body: "The engine is applying your model changes." });
+  } catch (err) {
+    showToast({ kind: "failure", title: "Couldn't restart", body: String(err) });
+  }
 }
 
 // ───────── Email capture (WP-EM1b) ─────────

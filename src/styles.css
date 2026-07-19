@@ -6554,6 +6554,44 @@ button.rec-source {
 .privacy-chip.is-uncertified { color: var(--warn-text); background: var(--warn-soft); }
 .privacy-chip.is-warn { color: var(--warn-text); background: var(--warn-soft); }
 .privacy-surface-chips { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* WP-BYOM P3B — per-surface Change affordance + pending-restart banner + picker. */
+.privacy-change {
+  appearance: none; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text-secondary); font: inherit; font-size: 12px; line-height: 1;
+  padding: 5px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  transition: background .12s ease, color .12s ease, border-color .12s ease;
+}
+.privacy-change:hover { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-ring); }
+.privacy-restart {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 10px 0 4px; padding: 10px 14px; border-radius: 10px;
+  background: var(--accent-soft); border: 1px solid var(--accent-ring);
+}
+.privacy-restart-text { color: var(--text-primary); font-size: 13px; flex: 1; min-width: 220px; }
+.privacy-restart-note { color: var(--text-secondary); font-size: 12px; }
+.privacy-change.is-restart { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+
+.privacy-picker { max-width: 460px; width: 100%; }
+.privacy-picker-help { color: var(--text-secondary); font-size: 13px; margin: 4px 0 14px; line-height: 1.45; }
+.privacy-recipes { display: flex; flex-direction: column; gap: 8px; }
+.privacy-recipe {
+  appearance: none; text-align: left; width: 100%; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface-1); transition: border-color .12s ease, background .12s ease;
+}
+.privacy-recipe:hover { border-color: var(--accent-ring); background: var(--surface-2); }
+.privacy-recipe-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.privacy-recipe-name { color: var(--text-primary); font-weight: 600; font-size: 14px; }
+.privacy-recipe-sub { color: var(--text-secondary); font-size: 12px; }
+.privacy-recipe-chips { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.privacy-advanced { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.privacy-advanced summary { color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.privacy-adv-row { display: flex; gap: 8px; margin-top: 10px; }
+.privacy-adv-input {
+  flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface-1); color: var(--text-primary); font: inherit; font-size: 13px;
+}
 
 .privacy-caveat {
   margin: 0;

@@ -1087,6 +1087,135 @@ async fn get_sovereignty(
         .map_err(|e| format!("Bad JSON from {}: {}", url, e))
 }
 
+// WP-BYOM P3B — model-routing admin passthroughs. Same posture as
+// get_sovereignty: thin, generic JSON, bearer optional; the ENGINE owns all
+// policy (cert enforcement, group expansion, judge refusal). The app never
+// interprets routing beyond display.
+#[tauri::command]
+async fn get_model_routing(
+    base_url: String,
+    bearer_token: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/model-routing", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let mut req = client.get(&url);
+    if let Some(token) = bearer_token {
+        if !token.trim().is_empty() {
+            req = req.bearer_auth(token.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", url, e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Server returned status {} from {}", status.as_u16(), url));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from {}: {}", url, e))
+}
+
+#[tauri::command]
+async fn put_model_routing(
+    base_url: String,
+    bearer_token: Option<String>,
+    group: Option<String>,
+    var: Option<String>,
+    spec: Option<String>,
+    r#override: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/model-routing", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let mut body = serde_json::Map::new();
+    if let Some(g) = group {
+        body.insert("group".into(), serde_json::Value::String(g));
+    }
+    if let Some(v) = var {
+        body.insert("var".into(), serde_json::Value::String(v));
+    }
+    // null spec = clear the override (engine contract); send explicit null.
+    body.insert(
+        "spec".into(),
+        spec.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+    );
+    if let Some(o) = r#override {
+        body.insert("override".into(), serde_json::Value::Bool(o));
+    }
+    let mut req = client.put(&url).json(&serde_json::Value::Object(body));
+    if let Some(token) = bearer_token {
+        if !token.trim().is_empty() {
+            req = req.bearer_auth(token.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", url, e))?;
+    let status = resp.status();
+    let json = resp
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from {}: {}", url, e))?;
+    if !status.is_success() {
+        // Surface the engine's plain-language refusal (409 cert enforcement,
+        // judge policy, unknown var) as the error string the toast shows.
+        let msg = json
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("Server returned status {}", status.as_u16()));
+        return Err(msg);
+    }
+    Ok(json)
+}
+
+#[tauri::command]
+async fn restart_routing_engine(
+    base_url: String,
+    bearer_token: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/model-routing/restart", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let mut req = client.post(&url);
+    if let Some(token) = bearer_token {
+        if !token.trim().is_empty() {
+            req = req.bearer_auth(token.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", url, e))?;
+    let status = resp.status();
+    let json = resp
+        .json::<serde_json::Value>()
+        .await
+        .unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        let msg = json
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("Server returned status {}", status.as_u16()));
+        return Err(msg);
+    }
+    Ok(json)
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Ingestion pipeline (file picker + drag-drop)
 // ───────────────────────────────────────────────────────────────────────────
@@ -10188,6 +10317,9 @@ pub fn run() {
             save_config,
             test_connection,
             get_sovereignty,
+            get_model_routing,
+            put_model_routing,
+            restart_routing_engine,
             // WP-THRESHOLD-APP-AUTH (email-login) — per-user magic-link sign-in
             auth_request_link,
             auth_verify,
