@@ -180,6 +180,16 @@ h2{font-size:clamp(24px,3.4vw,32px);line-height:1.2;font-weight:600;letter-spaci
 .feature-media .stack > *{display:block;width:100%}
 .feature-media .stack > * + *{border-top:1px solid var(--border-subtle)}
 
+/* ── Outcomes ("so that") strip ─────────────────────────────────────── */
+.outcomes{border-top:1px solid var(--border-subtle)}
+.outcome-line{
+  font-size:clamp(18px,2.6vw,23px);line-height:1.4;font-weight:600;
+  letter-spacing:-0.01em;color:var(--text-primary);
+  padding:10px 0;max-width:56ch;
+}
+.outcome-line + .outcome-line{border-top:1px solid var(--border-subtle)}
+.outcome-line em{font-style:normal;color:var(--text-secondary);font-weight:400}
+
 /* ── Trust ──────────────────────────────────────────────────────────── */
 .trust{
   border-top:1px solid var(--border-subtle);
@@ -357,7 +367,9 @@ footer .dot{margin:0 8px;opacity:.5}
 <section class="problem">
   <div class="wrap">
     <div class="section-eyebrow">The problem, plainly</div>
-    <p class="section-lead">You're accountable for work you don't do yourself. The promises that sink you live in side threads and meeting notes — <em>"I should have something by the 30th."</em> Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every tool that could is homework somebody has to do forever.</p>
+    <p class="section-lead">Three weeks ago, someone on your team said <em>"I should have something by the 30th"</em> — at the bottom of an email you were barely on. Nobody put it on a list. The 30th came and went. The client asked first. Now it's an escalation, an apology, and a week of fire-fighting — over a promise you never even made.</p>
+    <p class="section-lead">Search can't find a date you don't know exists. A list can't hold a promise nobody wrote down. And every tool that could is homework somebody has to do forever.</p>
+    <p class="section-lead"><strong>Threshold exists so this never happens to you again.</strong></p>
   </div>
 </section>
 
@@ -421,6 +433,17 @@ footer .dot{margin:0 8px;opacity:.5}
         </video>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ── What changes (Pari's "so that" — calibrated, no absolutes) ──── -->
+<section class="outcomes">
+  <div class="wrap">
+    <div class="section-eyebrow">What changes</div>
+    <p class="outcome-line">Nothing you're accountable for slips by unseen.</p>
+    <p class="outcome-line">You walk into meetings already prepared.</p>
+    <p class="outcome-line">The fire-fighting shrinks — the day goes to the work only you can do.</p>
+    <p class="outcome-line">And the list itself costs you nothing to keep. <em>That's the whole point.</em></p>
   </div>
 </section>
 
