@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!--
+  WP-VOICE-THRESHOLD-ENTRY Spike-0 (§F) — THROWAWAY mic probe. DO NOT SHIP.
+
+  Answers ONE question: is tauri://localhost (the PROD origin — dev builds
+  load http://localhost and will lie) a secure context that exposes
+  navigator.mediaDevices with a working getUserMedia?
+
+  Reached via the widget right-click menu "Voice Probe (spike)" item →
+  widget_expand("voice-probe") → #voice-probe hash → this page. The page,
+  the menu item, and the hash route are all removed after the spike; the
+  Info.plist / entitlements.plist keys stay (V1 needs them).
+
+  Self-contained on purpose: no app CSS/JS imports, so the verdict can't be
+  confounded by anything else in the bundle.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Voice Probe — Spike-0</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 48px;
+      background: #101418;
+      color: #e8edf2;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    h1 { font-size: 28px; margin: 0 0 24px; font-weight: 600; }
+    .row { font-size: 24px; margin: 12px 0; }
+    .row b { display: inline-block; min-width: 340px; font-weight: 500; color: #9fb0c0; }
+    #verdict {
+      margin-top: 40px;
+      font-size: 96px;
+      font-weight: 800;
+      letter-spacing: 2px;
+    }
+    .go { color: #34d399; }
+    .nogo { color: #f87171; }
+    .pending { color: #fbbf24; font-size: 48px; }
+    #detail { font-size: 20px; margin-top: 16px; color: #9fb0c0; max-width: 900px; }
+    button {
+      margin-top: 40px; margin-right: 12px;
+      font-size: 18px; padding: 10px 22px;
+      background: #1f2933; color: #e8edf2;
+      border: 1px solid #3a4754; border-radius: 8px; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Spike-0 — prod-scheme getUserMedia probe</h1>
+  <div class="row"><b>page origin:</b> <span id="origin">…</span></div>
+  <div class="row"><b>window.isSecureContext:</b> <span id="secure">…</span></div>
+  <div class="row"><b>navigator.mediaDevices:</b> <span id="mediadev">…</span></div>
+  <div class="row"><b>getUserMedia({audio:true}):</b> <span id="gum">not run yet</span></div>
+  <div id="verdict" class="pending">RUNNING…</div>
+  <div id="detail">macOS will ask for microphone access the first time this runs (once per install).</div>
+  <button id="again">Run probe again</button>
+  <button onclick="window.location.replace('index.html')">Back to app</button>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function verdict(go, detail) {
+      const v = $("verdict");
+      v.textContent = go ? "GO" : "NO-GO";
+      v.className = go ? "go" : "nogo";
+      $("detail").textContent = detail;
+    }
+
+    async function probe() {
+      $("origin").textContent = window.location.protocol + "//" + window.location.host
+        + "  (origin: " + window.origin + ")";
+      $("secure").textContent = String(window.isSecureContext);
+      const md = navigator.mediaDevices;
+      $("mediadev").textContent = md ? "EXISTS" : "UNDEFINED";
+
+      // The error CLASS is the finding, not just pass/fail:
+      //  - mediaDevices undefined / TypeError → the prod scheme is NOT treated
+      //    as a secure context → NO-GO (ship the call window from the droplet's
+      //    https origin instead — §F fallback).
+      //  - NotAllowedError → the context is FINE (the API ran); permission was
+      //    denied (TCC or WebKit). Fix permission, not origin.
+      if (!md || typeof md.getUserMedia !== "function") {
+        $("gum").textContent = "unreachable — navigator.mediaDevices is "
+          + (md ? "present but has no getUserMedia" : "undefined");
+        verdict(false,
+          "NO-GO — insecure-context class. WKWebView does not expose mediaDevices "
+          + "under this origin. V1 call window must load the droplet-served https "
+          + "page (§F fallback). This does NOT kill the WP.");
+        return;
+      }
+      try {
+        const stream = await md.getUserMedia({ audio: true });
+        const label = (stream.getAudioTracks()[0] || {}).label || "(unnamed device)";
+        stream.getTracks().forEach((t) => t.stop());
+        $("gum").textContent = "SUCCESS — live audio track from: " + label;
+        verdict(true,
+          "GO — the bundled origin is mic-capable. V1 call window ships as a "
+          + "bundled page.");
+      } catch (err) {
+        $("gum").textContent = err.name + ": " + err.message;
+        if (err.name === "NotAllowedError") {
+          verdict(false,
+            "NotAllowedError — the CONTEXT is fine (getUserMedia ran) but permission "
+            + "was denied. If you dismissed/denied the macOS prompt: System Settings → "
+            + "Privacy & Security → Microphone → enable Viktora Threshold, then Run "
+            + "probe again. If you never saw a prompt, report this exact screen.");
+        } else if (err.name === "NotFoundError") {
+          verdict(false,
+            "NotFoundError — context fine, permission fine, but no audio input "
+            + "device was found. Check input devices and Run probe again.");
+        } else {
+          verdict(false,
+            "Unexpected " + err.name + " — context reached getUserMedia but it "
+            + "failed. Report this exact screen.");
+        }
+      }
+    }
+
+    $("again").addEventListener("click", probe);
+    probe();
+  </script>
+</body>
+</html>

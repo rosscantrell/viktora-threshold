@@ -9186,6 +9186,11 @@ const MENU_ONENOTE_BROWSE: &str = "menu.onenote_browse";
 /// group (just below the capture surfaces) since it's the always-on "what needs
 /// attention" entry point.
 const MENU_LOG: &str = "menu.log";
+/// WP-VOICE-THRESHOLD-ENTRY Spike-0 — TEMPORARY "Voice Probe (spike)" item.
+/// Expands the widget with target_tab="voice-probe"; main.js's hash-router
+/// replaces to the throwaway voice-probe.html. Constant, menu item, and
+/// handler arm are all removed together after the spike verdict is read.
+const MENU_VOICE_PROBE: &str = "menu.voice_probe";
 /// Debug-only: surfaces a "Open Console" item in the right-click menu
 /// that opens Tauri's devtools for diagnosis. Constant + menu builder
 /// branch + event handler arm are all #[cfg(debug_assertions)] gated so
@@ -9251,6 +9256,10 @@ fn build_widget_menu(
     // handler, and flip VIEW_VISIBILITY.edges back on in main.js.
     let expand = MenuItem::with_id(app, MENU_EXPAND, "Expand…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, MENU_SETTINGS, "Settings…", true, None::<&str>)?;
+    // Spike-0 TEMPORARY — sits just above the Quit separator, out of the
+    // capture/review groups. Removed with the probe page after the verdict.
+    let voice_probe =
+        MenuItem::with_id(app, MENU_VOICE_PROBE, "Voice Probe (spike)", true, None::<&str>)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit Threshold", true, None::<&str>)?;
 
@@ -9278,6 +9287,7 @@ fn build_widget_menu(
                 &onenote_browse,
                 &expand,
                 &settings,
+                &voice_probe,
                 &sep2,
                 &quit,
                 &sep_dev,
@@ -9300,6 +9310,7 @@ fn build_widget_menu(
             &onenote_browse,
             &expand,
             &settings,
+            &voice_probe,
             &sep2,
             &quit,
         ],
@@ -10660,6 +10671,18 @@ pub fn run() {
                         // unregistered, hierarchy miss).
                         log::info!("menu onenote_send_section fired");
                         fire_onenote_send_active_section_flow(app.clone()).await;
+                    }
+                    MENU_VOICE_PROBE => {
+                        // Spike-0 TEMPORARY — expand into the mic probe page.
+                        // The "voice-probe" fragment routes main.js's bootstrap
+                        // to location.replace("voice-probe.html").
+                        if let Err(e) = widget_expand(
+                            app.state::<AppState>(),
+                            window.clone(),
+                            Some("voice-probe".into()),
+                        ) {
+                            log::warn!("menu voice_probe failed: {e}");
+                        }
                     }
                     MENU_QUIT => {
                         log::info!("menu quit");
