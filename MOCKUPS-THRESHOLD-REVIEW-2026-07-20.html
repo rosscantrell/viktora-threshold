@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Threshold — UI review: Today decrowding · Needs-you (ratify) view · voice entry (2026-07-20)</title>
+<style>
+  body { background:#0e0f13; color:#c9ccd1; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; padding:32px; }
+  .note { max-width:940px; margin:0 auto 28px; font-size:14px; line-height:1.6; color:#9aa0a6; }
+  .note strong { color:#e8eaed; }
+  .mock { max-width:940px; margin:0 auto 40px; background:#171921; border-radius:12px; padding:16px; }
+  .mock > p.cap { font-size:13px; color:#9aa0a6; margin:0 0 12px; line-height:1.5; }
+  .mock > p.cap b { color:#e8eaed; font-weight:600; }
+  table.inv { max-width:940px; margin:0 auto 36px; border-collapse:collapse; font-size:12px; width:100%; }
+  table.inv th { text-align:left; color:#e8eaed; font-weight:600; padding:6px 10px; border-bottom:0.5px solid #33363f; }
+  table.inv td { padding:6px 10px; border-bottom:0.5px solid #23252d; color:#c6c9ce; vertical-align:top; line-height:1.45; }
+  table.inv td.src { color:#9aa0a6; font-family:ui-monospace,Menlo,monospace; font-size:11px; }
+  table.inv td.warn { color:#ffc440; }
+  .verdict { max-width:940px; margin:0 auto 36px; font-size:13px; line-height:1.65; color:#c6c9ce; background:#171921; border-radius:12px; padding:16px 18px; }
+  .verdict b { color:#e8eaed; }
+  h2.sec { max-width:940px; margin:40px auto 12px; font-size:15px; color:#e8eaed; font-weight:600; }
+
+  /* ── in-mock app chrome (approximation of glass.css tokens) ── */
+  .app { background:#101218; border:0.5px solid #23252d; border-radius:10px; padding:0; overflow:hidden; }
+  .appnav { display:flex; align-items:center; gap:2px; padding:8px 12px; border-bottom:0.5px solid #23252d; font-size:12px; color:#9aa0a6; }
+  .appnav .dest { padding:4px 10px; border-radius:7px; cursor:default; }
+  .appnav .dest.active { background:rgba(255,255,255,0.07); color:#e8eaed; }
+  .appnav .dest .pill { display:inline-block; margin-left:5px; background:#ffc440; color:#1a1405; border-radius:999px; font-size:10px; font-weight:700; padding:0 6px; line-height:15px; vertical-align:1px; }
+  .appnav .spacer { flex:1; }
+  .appnav .mic { display:inline-flex; align-items:center; gap:6px; border:0.5px solid #3a3d46; border-radius:999px; padding:3px 11px; color:#c9ccd1; font-size:11.5px; }
+  .appbody { padding:16px 20px 20px; }
+  .vh1 { font-size:19px; color:#e8eaed; font-weight:650; margin:0; }
+  .vsub { font-size:12px; color:#9aa0a6; margin:2px 0 14px; }
+  .strat { margin:0 0 18px; }
+  .strat-head { display:flex; align-items:baseline; gap:8px; margin:0 0 7px; }
+  .strat-title { font-size:12.5px; font-weight:650; color:#e8eaed; letter-spacing:0.01em; }
+  .strat-count { font-size:11px; color:#9aa0a6; }
+  .row { display:flex; align-items:baseline; gap:9px; padding:6.5px 10px; border:0.5px solid #23252d; border-radius:8px; margin-bottom:5px; font-size:12.5px; background:rgba(255,255,255,0.015); }
+  .row .k { flex:0 0 auto; font-size:10.5px; border:0.5px solid #3a3d46; border-radius:999px; padding:0.5px 8px; color:#9aa0a6; }
+  .row .k.amber { border-color:#7a5c14; color:#ffc440; }
+  .row .t { flex:1; color:#c9ccd1; }
+  .row .m { flex:0 0 auto; font-size:11px; color:#9aa0a6; }
+  .row.due .bar { flex:0 0 92px; height:3px; border-radius:2px; background:#23252d; position:relative; align-self:center; }
+  .row.due .bar i { position:absolute; left:0; top:0; bottom:0; width:55%; background:#3d4250; border-radius:2px; }
+  .row.due .bar b { position:absolute; top:-2.5px; left:70%; width:1.5px; height:8px; background:#9aa0a6; }
+  .quiet-line { font-size:11.5px; color:#9aa0a6; padding:4px 10px; cursor:default; }
+  .quiet-line u { text-decoration:none; border-bottom:0.5px solid #3a3d46; }
+  .qcard { border:0.5px solid #33363f; border-radius:10px; padding:12px 14px; background:rgba(255,255,255,0.02); }
+  .qcard .q { font-size:13px; color:#e8eaed; line-height:1.5; margin:0 0 9px; }
+  .qcard .verbs { display:flex; gap:8px; }
+  .btnp { font-size:11.5px; border-radius:7px; padding:4px 12px; background:#e8eaed; color:#14151a; font-weight:600; }
+  .btns { font-size:11.5px; border-radius:7px; padding:4px 12px; border:0.5px solid #3a3d46; color:#c9ccd1; }
+  .btnl { font-size:11.5px; padding:4px 6px; color:#9aa0a6; }
+  .empty { font-size:12px; color:#9aa0a6; padding:4px 10px; }
+
+  /* needs-you card */
+  .ncard { border:0.5px solid #33363f; border-radius:10px; padding:11px 14px; margin-bottom:8px; background:rgba(255,255,255,0.02); }
+  .ncard .nh { display:flex; align-items:baseline; gap:8px; margin-bottom:4px; }
+  .ncard .nh .k { font-size:10.5px; border:0.5px solid #3a3d46; border-radius:999px; padding:0.5px 8px; color:#9aa0a6; }
+  .ncard .nh .k.amber { border-color:#7a5c14; color:#ffc440; }
+  .ncard .nh .who { font-size:11px; color:#9aa0a6; }
+  .ncard .nt { font-size:13px; color:#e8eaed; line-height:1.5; margin:0 0 3px; }
+  .ncard .nev { font-size:11.5px; color:#9aa0a6; line-height:1.5; margin:0 0 9px; }
+  .ncard .verbs { display:flex; gap:8px; align-items:center; }
+  .grp { margin:0 0 20px; }
+  .grp-title { font-size:12.5px; font-weight:650; color:#e8eaed; margin:0 0 7px; }
+  .grp-sub { font-size:11px; color:#9aa0a6; font-weight:400; margin-left:6px; }
+
+  /* call pill */
+  .pill-mock { width:280px; background:#14161d; border:0.5px solid #33363f; border-radius:14px; padding:12px 14px; box-shadow:0 12px 40px rgba(0,0,0,0.5); }
+  .pill-mock .st { display:flex; align-items:center; gap:8px; font-size:12px; color:#e8eaed; margin-bottom:8px; }
+  .pill-mock .dot { width:7px; height:7px; border-radius:50%; background:#7ec97e; }
+  .pill-mock .line { font-size:11.5px; color:#9aa0a6; line-height:1.5; margin-bottom:10px; }
+  .pill-mock .verbs { display:flex; gap:8px; }
+  kbd.hash { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#9aa0a6; }
+</style>
+</head>
+<body>
+
+<div class="note"><strong>Threshold UI review — proposal for Ross (2026-07-20)</strong> —
+Three concerns raised: ① Today is crowded again, ② there's no view to ratify items, ③ the voice
+agent needs a home in the app. This doc is the propose-before-code step, in the same format that
+settled the 2026-07-12 Concept-D ruling. First the inventory of what changed since that ruling
+and where ratification actually lives today, then the concepts. Design language per the binding
+rubric: deep glass, 0.5px hairlines, ghost chips, amber ONLY on urgency/primary action, sentence
+case. Nothing here is code; Ross picks the shape.</div>
+
+<h2 class="sec">Inventory 1 — Today since the Concept-D ruling (4 strata then, 6 sections now)</h2>
+<table class="inv">
+<tr><th>#</th><th>Section</th><th>Ruled in Concept D?</th><th>Data source</th><th>Density notes</th></tr>
+<tr><td>1</td><td>Your plan (reconciliation)</td><td>yes — ①</td><td class="src">fetch_checkin_brief → todaysPlan</td><td>honestly hidden without a plan capture; fine</td></tr>
+<tr><td>2</td><td>Don't miss</td><td>yes — ② (cap 4)</td><td class="src">vigilance voids + no-precursor join</td><td>capped; fine</td></tr>
+<tr><td>3</td><td>Due this week (+ fortnight)</td><td>yes — ③</td><td class="src">fetch_decision_log_full</td><td>EVERY open commitment due through Friday = uncapped runway rows on a loaded week</td></tr>
+<tr><td>4</td><td>From your colleagues</td><td class="warn">no — added by companion-network UI (#182)</td><td class="src">fetch_checkin_brief → intake (peer rows)</td><td class="warn">organized by TRANSPORT (who sent it), not intention; uncapped within the packet; its questions/handoffs/receipts each already have an intention-home elsewhere</td></tr>
+<tr><td>5</td><td>Prepared for you (prework list + outbox list)</td><td>half — was "Your plan / drafts"</td><td class="src">fetch_checkin_brief → prework + fetch_outbox</td><td class="warn">mixes two intentions: "review this" (staged prework) and "approved, awaiting send" (status)</td></tr>
+<tr><td>6</td><td>One question (+ filed-automatically line)</td><td>yes — ④</td><td class="src">fetch_question + name/merge asks + proxy wants-your-eye</td><td>ONE card honored, but the rest-count now fronts a second queue behind a toggle</td></tr>
+</table>
+
+<h2 class="sec">Inventory 2 — where "ratify" lives right now (six surfaces, no destination)</h2>
+<table class="inv">
+<tr><th>Surface</th><th>What gets ratified</th><th>Reachable from</th></tr>
+<tr><td>Proxy inbox <kbd class="hash">#proxy-queue</kbd></td><td>adjudicate-band filings — confirm / dismiss</td><td class="warn">widget badge + right-click ONLY — not in the nav</td></tr>
+<tr><td>Today ④ One question</td><td>QE asks (merge? name this? looks done?)</td><td>Today</td></tr>
+<tr><td>Today — Filed automatically line</td><td>high-confidence filings — undo</td><td>Today (collapsed)</td></tr>
+<tr><td>Today ⑤ / Outbox view</td><td>drafts — approve / dismiss (send lives in Outlook)</td><td>Today + nav Outbox</td></tr>
+<tr><td>Today ⑤ prework list</td><td>staged pre-work — review</td><td>Today</td></tr>
+<tr><td>Relationships</td><td>edge confirm / dismiss</td><td>nav</td></tr>
+</table>
+
+<div class="verdict">
+<b>Diagnosis in two lines.</b> (1) The crowding recurs because every shipped WP adds its section to
+Today — the sediment mechanism the Concept-D ruling was supposed to stop. Two sections in the code
+even disagree about their stratum numbers now. The two post-ruling arrivals both break the ruling's
+own law ("one section per user INTENTION"): "From your colleagues" is organized by transport, and
+"Prepared for you" fuses review-needed with approved-status. (2) The ratify complaint is exact:
+ratification exists as six scattered affordances, and the single biggest queue (the proxy inbox —
+the surface the widget badge literally counts) has no nav destination at all.
+<br><br>
+<b>The move both concerns share:</b> a "Needs you" destination that absorbs every ratification
+affordance, letting Today shrink back to a calm brief. Voice then gets a natural job: the check-in
+call walks that same queue (§J co-presentation). Concepts below.
+</div>
+
+<!-- ═══════════════════════ CONCEPT 1 ═══════════════════════ -->
+<h2 class="sec">Concept 1 · "Brief / queue split" (recommended)</h2>
+<div class="mock">
+<p class="cap"><b>Today becomes the brief again — read in 30 seconds, one question, nothing else asks
+for a click.</b> Everything that wants a decision moves to Needs&nbsp;you (next mock). Peer arrivals
+stop being a section: peer questions join the question queue, handoffs + receipts go to Needs you,
+and Today keeps only a one-line count. "Due this week" caps at 3 rows + an honest count. Nav: Outbox
+folds INTO Needs you; ⌂ Home (the capture card screen) leaves the nav — the widget is the capture
+surface. Net: nav shrinks 7 → 6 even after adding the new destination.</p>
+<div class="app">
+  <div class="appnav">
+    <span class="dest active">Today</span>
+    <span class="dest">Needs you<span class="pill">7</span></span>
+    <span class="dest">Watching</span>
+    <span class="dest">Log</span>
+    <span class="dest">Relationships</span>
+    <span class="dest">⚙</span>
+    <span class="spacer"></span>
+    <span class="mic">🎙 Check in</span>
+  </div>
+  <div class="appbody">
+    <p class="vh1">Today</p>
+    <p class="vsub">Monday, Jul 20 · 3 open conversations · quiet since Friday</p>
+
+    <div class="strat">
+      <div class="strat-head"><span class="strat-title">Your plan</span><span class="strat-count">captured 8:41 AM · 2 moved · 1 stalled</span></div>
+      <div class="row"><span class="k">moved ✓</span><span class="t">Meridian workback — engineering estimate landed</span></div>
+      <div class="row"><span class="k amber">stalled</span><span class="t">LAA filing draft — nothing seen since Thursday</span><span class="m">chase?</span></div>
+    </div>
+
+    <div class="strat">
+      <div class="strat-head"><span class="strat-title">Don't miss</span><span class="strat-count">2</span></div>
+      <div class="row"><span class="k amber">no reply</span><span class="t">Brian's June-30 spec question — 4 days, nothing sent back</span><span class="m">Thu</span></div>
+      <div class="row"><span class="k amber">due, quiet</span><span class="t">Vendor security questionnaire — due Wed, no movement behind it</span><span class="m">Wed</span></div>
+    </div>
+
+    <div class="strat">
+      <div class="strat-head"><span class="strat-title">Due this week</span><span class="strat-count">3 of 6</span></div>
+      <div class="row due"><span class="t">Meridian pilot readout</span><span class="bar"><i></i><b></b></span><span class="m">Wed</span></div>
+      <div class="row due"><span class="t">LAA filing draft to counsel</span><span class="bar"><i style="width:30%"></i><b style="left:45%"></b></span><span class="m">Thu</span></div>
+      <div class="row due"><span class="t">Q3 vendor renewal decision</span><span class="bar"><i style="width:80%"></i><b style="left:85%"></b></span><span class="m">Fri</span></div>
+      <div class="quiet-line"><u>3 more this week · 4 in the fortnight → Log</u></div>
+    </div>
+
+    <div class="strat">
+      <div class="strat-head"><span class="strat-title">One question for you</span><span class="strat-count">6 more wait in Needs you</span></div>
+      <div class="qcard">
+        <p class="q">"Meridian phase-2" and "Meridian expansion" look like the same workstream — merge them?</p>
+        <div class="verbs"><span class="btnp">Merge</span><span class="btns">Keep separate</span><span class="btnl">Not now</span></div>
+      </div>
+    </div>
+
+    <div class="quiet-line"><u>2 arrivals from Elena's side → Needs you</u> · <u>3 filed automatically → Needs you</u></div>
+  </div>
+</div>
+</div>
+
+<div class="mock">
+<p class="cap"><b>Needs you — the ratification lane, one destination.</b> Everything that waits on a
+call only you can make, grouped by the WEIGHT of the call, not by which pipeline produced it. One
+card grammar (the existing record-card family), the canon verbs. The widget's amber badge points
+here (it already counts exactly this). Empty state is affirmative ("Nothing needs you — all yours").
+Fail-visible: an unreachable source renders its group header with a couldn't-reach line, never a
+silent absence.</p>
+<div class="app">
+  <div class="appnav">
+    <span class="dest">Today</span>
+    <span class="dest active">Needs you<span class="pill">7</span></span>
+    <span class="dest">Watching</span>
+    <span class="dest">Log</span>
+    <span class="dest">Relationships</span>
+    <span class="dest">⚙</span>
+    <span class="spacer"></span>
+    <span class="mic">🎙 Walk me through these</span>
+  </div>
+  <div class="appbody">
+    <p class="vh1">Needs you</p>
+    <p class="vsub">7 waiting · oldest is 4 days · ~5 minutes to clear</p>
+
+    <div class="grp">
+      <p class="grp-title">Calls only you can make<span class="grp-sub">3</span></p>
+      <div class="ncard">
+        <div class="nh"><span class="k amber">conflict</span><span class="who">proxy fleet · filed Fri</span></div>
+        <p class="nt">Two owners recorded for the vendor renewal — Dana (Jun 12) vs. you (Jul 2). Who owns it?</p>
+        <p class="nev">"Dana will carry the renewal…" — standup Jun 12 · "I'll take the renewal decision" — Plaud Jul 2</p>
+        <div class="verbs"><span class="btnp">Dana owns it</span><span class="btns">I own it</span><span class="btnl">Dismiss</span><span class="btnl">Snooze</span></div>
+      </div>
+      <div class="ncard">
+        <div class="nh"><span class="k">question</span><span class="who">Elena's side · 9:12 AM</span></div>
+        <p class="nt">Does the pilot readout include the July ingest numbers, or June-only?</p>
+        <div class="verbs"><span class="btnp">Answer…</span><span class="btnl">Snooze</span></div>
+      </div>
+      <div class="ncard">
+        <div class="nh"><span class="k">name this</span><span class="who">organizer</span></div>
+        <p class="nt">Eight records cluster around "onboarding rework" — is that the workstream's name?</p>
+        <div class="verbs"><span class="btnp">Name it</span><span class="btns">It's part of something else</span><span class="btnl">Not now</span></div>
+      </div>
+    </div>
+
+    <div class="grp">
+      <p class="grp-title">Work awaiting your go<span class="grp-sub">2</span></p>
+      <div class="ncard">
+        <div class="nh"><span class="k">draft reply</span><span class="who">prepared 7:02 AM · needs a recipient check</span></div>
+        <p class="nt">Reply to Brian — answers the June-30 spec question, cites the Jul 2 decision</p>
+        <div class="verbs"><span class="btnp">Approve → Outbox</span><span class="btns">Edit</span><span class="btnl">Dismiss</span></div>
+      </div>
+      <div class="ncard">
+        <div class="nh"><span class="k">handoff</span><span class="who">Elena's side · Fri 4:40 PM</span></div>
+        <p class="nt">Elena passes you the security-questionnaire section 3 (encryption at rest)</p>
+        <div class="verbs"><span class="btnp">Take it</span><span class="btns">Send back with a note</span></div>
+      </div>
+    </div>
+
+    <div class="grp">
+      <p class="grp-title">Confirm what happened<span class="grp-sub">2 · one tap each</span></p>
+      <div class="ncard">
+        <div class="nh"><span class="k">receipt</span><span class="who">Elena's side</span></div>
+        <p class="nt">Elena reports the questionnaire sections 1–2 complete — confirm on your side?</p>
+        <div class="verbs"><span class="btnp">Confirm</span><span class="btns">Not what I see</span></div>
+      </div>
+      <div class="ncard">
+        <div class="nh"><span class="k">filed</span><span class="who">proxy fleet · high confidence</span></div>
+        <p class="nt">3 items filed automatically over the weekend — skim &amp; undo any</p>
+        <div class="verbs"><span class="btns">Review 3</span><span class="btnl">Looks right</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════ CONCEPT 2 ═══════════════════════ -->
+<h2 class="sec">Concept 2 · "Ratify is a walk, not a view"</h2>
+<div class="mock">
+<p class="cap"><b>Same queue, presented one item at a time</b> — the One-question grammar applied to
+the whole ratification backlog. A "Clear the queue" affordance (from Today or the widget) enters a
+focused walk: one card, verbs, next. Progress line, leave any time, order = decision weight then
+age. This is ALSO the voice script: on a call, the companion walks the identical queue and the app
+co-presents each item (§J present() directives) while spoken "confirm / skip / snooze" maps to the
+same PATCH verbs. Cheapest to build on top of Concept 1 (the aggregation is shared); weakest as the
+ONLY shape — skimming/reordering wants the flat view. Recommend: Concept 1 first, walk as increment 2.</p>
+<div class="app">
+  <div class="appbody" style="max-width:560px;margin:0 auto;">
+    <p class="vsub" style="text-align:center;margin-top:4px;">Clearing the queue · 2 of 7 · started 9:14 AM</p>
+    <div class="qcard">
+      <div class="nh" style="display:flex;gap:8px;margin-bottom:6px;"><span class="k amber" style="font-size:10.5px;border:0.5px solid #7a5c14;border-radius:999px;padding:0.5px 8px;color:#ffc440;">conflict</span><span class="who" style="font-size:11px;color:#9aa0a6;">proxy fleet · filed Fri</span></div>
+      <p class="q">Two owners recorded for the vendor renewal — Dana (Jun 12) vs. you (Jul 2). Who owns it?</p>
+      <p style="font-size:11.5px;color:#9aa0a6;line-height:1.5;margin:0 0 10px;">"Dana will carry the renewal…" — standup Jun 12 · "I'll take the renewal decision" — Plaud Jul 2</p>
+      <div class="verbs"><span class="btnp">Dana owns it</span><span class="btns">I own it</span><span class="btnl">Dismiss</span><span class="btnl">Snooze</span><span class="spacer" style="flex:1"></span><span class="btnl">Skip →</span></div>
+    </div>
+    <p class="vsub" style="text-align:center;margin-top:10px;">next: a question from Elena's side</p>
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════ VOICE ═══════════════════════ -->
+<h2 class="sec">Voice — entry affordances (per WP-VOICE-THRESHOLD-ENTRY, unmerged docs branch)</h2>
+<div class="mock">
+<p class="cap"><b>The stack below the button already runs</b> (ElevenLabs ↔ Claude ↔ /mcp/v2, deployed
+on the droplet); the brief on <span style="font-family:ui-monospace,Menlo,monospace">claude/voice-agent-app-integration-179ee0</span>
+specs the app side: a mint route, a dedicated call WebviewWindow (a call inside index.html dies on
+widget collapse), mic entitlements, and Spike-0 (is <span style="font-family:ui-monospace,Menlo,monospace">tauri://localhost</span>
+a secure context for getUserMedia in a PROD build?) as the gate. UI decisions this session adds on
+top: <b>(a)</b> the V1 entry is the nav-right 🎙 button (shown in the mocks above) — context-aware
+label: "Check in" on Today, "Walk me through these" on Needs you; <b>(b)</b> the call pill below;
+<b>(c)</b> co-presentation's first target = the Needs-you walk — the companion ratifies WITH you,
+screen carrying evidence, voice carrying the verbs. Fail-visible: voice unconfigured ⇒ the button
+renders disabled with a plain reason, never hidden, never a dead click.</p>
+<div style="display:flex;gap:24px;align-items:flex-start;">
+  <div class="pill-mock">
+    <div class="st"><span class="dot"></span>In a check-in · 3:12</div>
+    <div class="line">"…pulling up the renewal conflict — it's on your screen. Dana claimed it June 12; you took it July 2. Your call."</div>
+    <div class="verbs"><span class="btns">Mute</span><span class="btns" style="border-color:#7a5c14;color:#ffc440;">Hang up</span></div>
+  </div>
+  <div style="flex:1;font-size:12px;color:#9aa0a6;line-height:1.7;">
+    <b style="color:#e8eaed;">Call pill</b> — small always-on-top WebviewWindow, independent of
+    widget collapse/expand. States: connecting ("macOS will ask for microphone access") →
+    listening / speaking / working. While it runs, present() directives highlight the item under
+    discussion in the main window — the app is the display, the directive is a pointer, never
+    content.<br><br>
+    <b style="color:#e8eaed;">Sequencing</b> — V0 Spike-0 · V1 mint route + call window + the one
+    nav entry · V2 session UX (render-look loop) · V3 routines-chip entry + deep link + the
+    Needs-you walk as the co-presentation target.
+  </div>
+</div>
+</div>
+
+<!-- ═══════════════════════ LIST ITEMS ═══════════════════════ -->
+<h2 class="sec">List items — the Log's cards &amp; controls (added on Ross's ask, 2026-07-20)</h2>
+
+<table class="inv">
+<tr><th>Layer</th><th>What one OPEN card renders (always visible)</th><th>Count</th></tr>
+<tr><td>Header</td><td>type label (Decision/Commitment) + one action badge (Blocked / N waiting / Overdue / Conflict / Decision needed / Share decision)</td><td>2</td></tr>
+<tr><td>Body</td><td>summary line</td><td>1</td></tr>
+<tr><td>Meta</td><td>relationship chip ("Waiting · Brian") + owner · due (both editable)</td><td>2–3</td></tr>
+<tr><td>Actions</td><td>Show receipts → · source badge · Resolve · Snooze · Draft follow-up → · ✕ dismiss</td><td class="warn">up to 6 controls</td></tr>
+<tr><td colspan="2"><b>List chrome around the cards</b> — 4 lenses × 4 status filters (two control systems), frame → workstream → job 3-level collapse, question card, "Patterns I've noticed", facet bar, workload line, bulk-select checkboxes, nursery shelf</td><td class="warn">6+ strata</td></tr>
+</table>
+
+<div class="verdict">
+<b>Diagnosis.</b> (1) The card is a <i>panel</i>, not a list item — four stacked zones and up to six
+always-visible controls mean ~8 expanded items fill a screen; the eye has nowhere to skim. Every
+affordance earned its place individually (receipts, source, resolve/snooze, follow-up, dismiss);
+collectively they belong behind progressive disclosure. (2) Trisha's control confusion ("I pressed
+Open. By project? I don't know what happened") was patched with an explainer sentence, not solved —
+lens × filter is still a 4×4 grid the user must hold in their head. (3) Ordering inside a group is
+capture-order, and the deadline lens assumes date-strata sorting that NEITHER real user does —
+Hollis: due date &gt; source authority &gt; high-value project; Trisha: client-origin first. Priority
+is per-person, and Hollis handed us the shape: <b>list modes</b> — same list, intent-selected views,
+modes = weightings.
+</div>
+
+<div class="mock">
+<p class="cap"><b>Concept L1 · Row grammar with progressive disclosure.</b> Collapsed = ONE line:
+type dot · summary · action badge · owner · due. Click a row → it expands into today's full card
+(verbatim receipt, relationship chip, all six actions) in place. Nothing is removed — it's deferred.
+Same 340px of height: today's card grammar fits 3 items; the row grammar fits 8 plus an expansion.
+The row IS the Today/Needs-you row grammar from the concepts above — one family everywhere.</p>
+<div style="display:flex;gap:16px;align-items:flex-start;">
+  <div style="flex:1;">
+    <p style="font-size:11px;color:#9aa0a6;margin:0 0 8px;">TODAY — card grammar, 3 items visible</p>
+    <div class="ncard">
+      <div class="nh"><span class="k">Commitment</span><span class="k amber">Overdue · due Jul 17</span></div>
+      <p class="nt">LAA filing draft to counsel</p>
+      <p class="nev" style="margin-bottom:4px;">Waiting · Brian &nbsp;·&nbsp; you · due Jul 17</p>
+      <p class="nev" style="border-left:2px solid #33363f;padding-left:8px;">"I'll have the draft to counsel by the 17th…"</p>
+      <div class="verbs"><span class="btnl">Show receipts →</span><span class="btnl">Source</span><span class="btnl">Resolve</span><span class="btnl">Snooze</span><span class="btnl">Draft follow-up →</span><span class="btnl">✕</span></div>
+    </div>
+    <div class="ncard">
+      <div class="nh"><span class="k">Decision</span><span class="k">Share decision</span></div>
+      <p class="nt">Pilot readout includes July ingest numbers</p>
+      <p class="nev" style="margin-bottom:4px;">you · Jul 18</p>
+      <div class="verbs"><span class="btnl">Show receipts →</span><span class="btnl">Source</span><span class="btnl">Resolve</span><span class="btnl">Snooze</span><span class="btnl">✕</span></div>
+    </div>
+    <div class="ncard">
+      <div class="nh"><span class="k">Commitment</span><span class="k">Blocked</span></div>
+      <p class="nt">Vendor renewal decision</p>
+      <p class="nev" style="margin-bottom:4px;">Dana · due Fri</p>
+      <div class="verbs"><span class="btnl">Show receipts →</span><span class="btnl">Source</span><span class="btnl">Resolve</span><span class="btnl">Snooze</span><span class="btnl">✕</span></div>
+    </div>
+  </div>
+  <div style="flex:1;">
+    <p style="font-size:11px;color:#9aa0a6;margin:0 0 8px;">PROPOSED — row grammar, 8 + one expanded</p>
+    <div class="row"><span class="k amber">overdue</span><span class="t">LAA filing draft to counsel</span><span class="m">you · Jul 17</span></div>
+    <div class="qcard" style="margin:0 0 5px;padding:9px 12px;">
+      <p class="nev" style="border-left:2px solid #33363f;padding-left:8px;margin:0 0 8px;">"I'll have the draft to counsel by the 17th…" · Waiting · Brian</p>
+      <div class="verbs"><span class="btns">Resolve</span><span class="btns">Snooze</span><span class="btnl">Receipts</span><span class="btnl">Source</span><span class="btnl">Follow-up</span><span class="btnl">✕</span></div>
+    </div>
+    <div class="row"><span class="k">share</span><span class="t">Pilot readout includes July ingest numbers</span><span class="m">you</span></div>
+    <div class="row"><span class="k">blocked</span><span class="t">Vendor renewal decision</span><span class="m">Dana · Fri</span></div>
+    <div class="row"><span class="k">2 waiting</span><span class="t">Security questionnaire section 3</span><span class="m">Elena · Wed</span></div>
+    <div class="row"><span class="t">Onboarding rework — scope note</span><span class="m">you</span></div>
+    <div class="row"><span class="t">Meridian phase-2 kickoff date</span><span class="m">—</span></div>
+    <div class="row"><span class="t">Q3 headcount ask goes to finance</span><span class="m">Sam · Aug 2</span></div>
+    <div class="row"><span class="t">Demo droplet re-key</span><span class="m">you</span></div>
+  </div>
+</div>
+</div>
+
+<div class="mock">
+<p class="cap"><b>Concept L2 · Modes replace the lens × filter grid</b> (Hollis's best give, and the
+per-person priority finding's surface). One chip row of INTENTS; each mode is a weighting + verb set
+over the same records, sorted by the user's learned priority function — never capture order. The 4×4
+lens/filter grid retires to an "Everything" archive mode (lenses live inside it, unchanged). Modes
+are the natural voice handle — "afternoon, give me the little stuff" sets the mode; the companion
+can also learn to propose one ("you have 20 minutes before your 2pm — catch-up list?").</p>
+<div class="app">
+  <div class="appbody">
+    <div style="display:flex;gap:6px;margin-bottom:14px;">
+      <span class="dest" style="background:rgba(255,255,255,0.07);color:#e8eaed;border-radius:7px;padding:4px 12px;font-size:12px;">⚡ Catch up</span>
+      <span class="dest" style="padding:4px 12px;font-size:12px;color:#9aa0a6;">◎ One focus thing</span>
+      <span class="dest" style="padding:4px 12px;font-size:12px;color:#9aa0a6;">📅 Runway</span>
+      <span class="dest" style="padding:4px 12px;font-size:12px;color:#9aa0a6;">👤 For someone</span>
+      <span class="dest" style="padding:4px 12px;font-size:12px;color:#9aa0a6;">Everything</span>
+    </div>
+    <p class="vsub" style="margin-bottom:10px;">Little stuff you can clear now — 6 items, ~15 minutes · sorted by your priority: due date, then who's waiting</p>
+    <div class="row"><span class="t">Confirm the readout room booking</span><span class="m">2 min</span><span class="k">Resolve</span></div>
+    <div class="row"><span class="t">Answer Elena — July numbers in the readout?</span><span class="m">3 min</span><span class="k">Answer</span></div>
+    <div class="row"><span class="t">Approve the Brian reply draft</span><span class="m">2 min</span><span class="k">Approve</span></div>
+    <div class="row"><span class="t">Demo droplet re-key</span><span class="m">5 min</span><span class="k">Done?</span></div>
+    <div class="quiet-line"><u>2 more · the big items wait in ◎ Focus</u></div>
+  </div>
+</div>
+<p class="cap" style="margin-top:12px;"><b>Mode inventory (v1 = the first three):</b>
+⚡ Catch up — small, clearable, quick-verb items · ◎ One focus thing — the single highest-priority
+item with its full context (receipts, dependencies, workback inline) · 📅 Runway — the deadline
+lens reborn as a mode · 👤 For someone — by-person, feeding the per-person SoP digests ·
+Everything — today's archive with lenses. The priority function starts as due-date default,
+elicited/learned per person (Hollis vs Trisha proved it's not authorable once).</p>
+</div>
+
+<div class="mock">
+<p class="cap"><b>Concept L3 · Done is information</b> (Hollis, called out twice unprompted: falling
+off is information, and so is finishing). Two quiet additions to the list: a done-strip at the top of
+the Log day ("✓ 6 things closed today — 4 by you, 2 confirmed done from captures") as the
+celebration moment, and a "looks done — confirm?" row state when done-detection sees closing
+evidence, which is ALSO a Needs-you confirm card. Costs one row of height; never a modal, never
+confetti.</p>
+<div class="app"><div class="appbody" style="padding-top:12px;">
+  <div class="row" style="border-color:#2a3a2a;"><span class="k" style="color:#7ec97e;border-color:#2f4a2f;">✓ today</span><span class="t" style="color:#9aa0a6;">6 closed — 4 by you, 2 detected from captures</span><span class="m">nice</span></div>
+  <div class="row"><span class="k">looks done</span><span class="t">Security questionnaire sections 1–2 — Elena's receipt says complete</span><span class="k">Confirm</span></div>
+</div></div>
+</div>
+
+<div class="verdict">
+<b>What Ross decides here:</b> ① Concept 1 vs. a variant (does Outbox fold in? does ⌂ leave the
+nav?); ② the group names on Needs you ("Calls only you can make" / "Work awaiting your go" /
+"Confirm what happened"); ③ whether the walk (Concept 2) is increment 2 and the voice
+co-presentation target; ④ merge the voice-entry docs branch and green-light Spike-0; ⑤ list items:
+adopt the L1 row grammar as the ONE row family (Today / Needs you / Log)?; ⑥ modes (L2) — v1 mode
+set, and whether the lens × filter grid retires behind "Everything"; ⑦ the L3 done-strip.
+<br><br>
+<b>Standing-law check:</b> suppressed items keep counts + review affordances (nothing disappears —
+the quiet-lines carry honest counts); plain product language (no "proxy fleet" wording survives to
+the shipped card chrome — the mocks' source chips would say "filed for you"); glass tokens only;
+Dismiss/Snooze verb canon; amber spent only on urgency; every new section arrives with a hard cap
+and an overflow line. Proposed NEW law to stop the sediment recurring: <b>Today accepts no new
+sections — a WP that wants surface area on Today buys a quiet-line count into its own
+destination.</b>
+</div>
+
+</body>
+</html>
