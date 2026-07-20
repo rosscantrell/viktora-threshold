@@ -14368,7 +14368,9 @@ function renderDecisions() {
     for (const it of grp.items) {
       const rec = it && it.record ? it.record : it;
       if (!rec) continue;
-      const card = renderDecisionCard(rec, it.state, docProjects.get(rec.documentId) || []);
+      // WP-THRESHOLD-NEEDS-YOU N0 — the Log renders L1 rows that expand in
+      // place into the full card; the card itself is unchanged.
+      const card = renderRecordRow(rec, it.state, docProjects.get(rec.documentId) || []);
       // MVP-Librarian 2.2 (job-split) — record-level multi-select inside the job
       // detail. A subtle checkbox beside each card; ticking any shows the bulk
       // "Move records to…" bar. Only JOB-grouped records qualify (the move_record
@@ -14583,7 +14585,15 @@ function dependencyEdges(ctx) {
 function jumpToRecord(recordId) {
   if (!recordId) return;
   const sel = window.CSS && CSS.escape ? CSS.escape(recordId) : recordId;
-  const target = document.querySelector(`.decision-card[data-record-id="${sel}"]`);
+  let target = document.querySelector(`.decision-card[data-record-id="${sel}"]`);
+  if (!target) {
+    // N0 — the card may sit behind a collapsed L1 row; expand it first.
+    const wrap = document.querySelector(`.record-row-wrap[data-record-id="${sel}"]`);
+    if (wrap && wrap._expandRow) {
+      wrap._expandRow();
+      target = wrap.querySelector(".decision-card");
+    }
+  }
   if (!target) return;
   const body = target.closest(".decisions-group-body");
   if (body && body.hidden) {
@@ -15039,6 +15049,115 @@ function openShareMenu(anchorBtn, rec, ctx, opts) {
     document.addEventListener("click", _onOutsideReasonClick, true);
     document.addEventListener("keydown", _onReasonMenuKeydown, true);
   }, 0);
+}
+
+// ───────── WP-THRESHOLD-NEEDS-YOU N0 — the L1 row grammar ─────────
+//
+// ONE shared list-item renderer (brief §C.1). Collapsed = a single line:
+// state/action chip · summary · owner · due. Click → the row swaps IN PLACE
+// for today's full card (renderDecisionCard — verbatim receipt, relationship
+// chip, and every existing action). Nothing removed, everything deferred
+// behind the expansion. N1 (Needs-you) and N4 (Catch-up) render from this
+// same component, so the context and expansion set are parameterizable.
+//
+// Expansion survives a same-view re-render via _recordRowsExpanded (the
+// _outlookExpanded / _decisionsExpanded pattern). Expand/collapse toggles DOM
+// PRESENCE — row out, card in — never a [hidden] attribute that a display
+// rule could outrank (house landmine).
+
+const _recordRowsExpanded = new Set(); // recordIds whose row is expanded
+
+function renderRecordRow(rec, recState, projects, opts) {
+  opts = opts || {};
+  const expandedSet = opts.expandedSet || _recordRowsExpanded;
+  const ctx = opts.ctx || _decisionsCtx || {};
+
+  const wrap = document.createElement("div");
+  wrap.className = "record-row-wrap";
+  wrap.dataset.recordId = rec.recordId || "";
+  if (recState) wrap.dataset.state = recState;
+
+  const row = document.createElement("div");
+  row.className = "record-row";
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  row.setAttribute("aria-expanded", "false");
+  row.title = "Show the full card";
+
+  // Chip slot — the SAME action-badge family the card header wears (open
+  // records), or the lifecycle pill (resolved/replaced). No badge → the
+  // summary leads the line. Clickable badges keep their jump/share behaviour
+  // in the row (makeBadge stops propagation, so they never toggle expansion).
+  const isOpen = !recState || recState === "open";
+  if (!isOpen) {
+    const pill = document.createElement("span");
+    pill.className = "record-state-pill";
+    pill.dataset.state = recState;
+    pill.textContent = recState === "superseded" ? "Replaced" : "Resolved";
+    row.appendChild(pill);
+  } else {
+    const badge = buildActionBadge(rec, ctx);
+    if (badge) row.appendChild(badge);
+  }
+
+  const sum = document.createElement("span");
+  sum.className = "record-row-summary";
+  sum.textContent = rec.summary || "";
+  row.appendChild(sum);
+
+  const meta = document.createElement("span");
+  meta.className = "record-row-meta";
+  const bits = [];
+  if (rec.owner) bits.push(prettySlug(rec.owner));
+  if (rec.due) bits.push("due " + formatDueDate(rec.due));
+  meta.textContent = bits.length ? bits.join(" · ") : "—";
+  row.appendChild(meta);
+
+  const collapse = () => {
+    const card = wrap.querySelector(".record-card");
+    if (card) card.remove();
+    delete wrap.dataset.expanded;
+    wrap.appendChild(row);
+    if (rec.recordId) expandedSet.delete(rec.recordId);
+    row.focus();
+  };
+
+  const expand = () => {
+    if (wrap.querySelector(".record-card")) return;
+    const card = renderDecisionCard(rec, recState, projects);
+    // Collapse affordance: a chevron ahead of the type label, and the header
+    // strip itself (its buttons/badges excluded) — the same gesture that
+    // opened the row closes it.
+    const header = card.querySelector(".record-header");
+    if (header) {
+      const chev = document.createElement("button");
+      chev.type = "button";
+      chev.className = "record-row-collapse";
+      chev.textContent = "▾";
+      chev.title = "Collapse to one line";
+      chev.setAttribute("aria-label", "Collapse to one line");
+      header.insertBefore(chev, header.firstChild);
+      header.addEventListener("click", (ev) => {
+        const hit = ev.target.closest("button, [role='button'], a, input, [contenteditable='true']");
+        if (hit && hit !== chev) return;
+        collapse();
+      });
+    }
+    row.remove();
+    wrap.dataset.expanded = "true";
+    wrap.appendChild(card);
+    if (rec.recordId) expandedSet.add(rec.recordId);
+  };
+
+  row.addEventListener("click", () => expand());
+  row.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); expand(); }
+  });
+
+  wrap.appendChild(row);
+  wrap._expandRow = expand; // programmatic entry for jumpToRecord
+  if (rec.recordId && expandedSet.has(rec.recordId)) expand();
+  return wrap;
 }
 
 function renderDecisionCard(rec, recState, projects) {
