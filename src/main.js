@@ -5517,6 +5517,63 @@ async function enterLogView() {
 
   // ④ One question — the organizing-question queue, one at a time.
   loadTodayQuestions().catch((e) => console.warn("[main] Questions:", e));
+
+  // WP-VOICE-THRESHOLD-ENTRY V1 — cheap voice-configuration probe so the
+  // "Check in" entry is honest before it's ever clicked (fail-visible law:
+  // unconfigured ⇒ disabled with the plain reason, never hidden).
+  probeVoiceEntry().catch((e) => console.warn("[main] voice probe:", e));
+}
+
+// ───────── WP-VOICE-THRESHOLD-ENTRY V1 — "Check in" voice entry ─────────────
+//
+// One entry point (Today header). The button starts disabled-while-checking;
+// voice_probe (GET {base}/voice-llm/health through Rust) decides enabled vs
+// disabled-with-reason. Click spawns the dedicated call pill window
+// (open_call_window) — the call must NOT live in this one-window shell, which
+// navigates between widget.html and index.html on collapse/expand (brief §D).
+
+let _voiceEntryProbe = null; // in-flight guard; re-entering Today re-probes
+
+async function probeVoiceEntry() {
+  const btn = document.getElementById("btn-log-checkin");
+  if (!btn) return;
+  if (_voiceEntryProbe) return _voiceEntryProbe;
+  btn.disabled = true;
+  btn.title = "Checking voice setup…";
+  _voiceEntryProbe = (async () => {
+    try {
+      const probe = await tauri.core.invoke("voice_probe");
+      if (probe && probe.configured) {
+        btn.disabled = false;
+        btn.title = "Start a voice check-in";
+      } else {
+        btn.disabled = true;
+        btn.title = (probe && probe.reason) || "Voice isn't set up on this engine";
+      }
+    } catch (err) {
+      // Probe itself failed (no config yet, IPC error) — disabled + honest.
+      btn.disabled = true;
+      btn.title = `Voice isn't available: ${String(err)}`;
+    } finally {
+      _voiceEntryProbe = null;
+    }
+  })();
+  return _voiceEntryProbe;
+}
+
+const logCheckinBtn = document.getElementById("btn-log-checkin");
+if (logCheckinBtn) {
+  logCheckinBtn.addEventListener("click", async () => {
+    try {
+      await tauri.core.invoke("open_call_window");
+    } catch (err) {
+      showToast({
+        kind: "failure",
+        title: "Couldn't open the call window",
+        body: String(err),
+      });
+    }
+  });
 }
 
 // Reset every Today section to its resting skeleton/empty state (synchronous —

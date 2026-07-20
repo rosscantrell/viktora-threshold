@@ -2336,6 +2336,134 @@ async fn fetch_checkin_brief(
         .map_err(|e| format!("fetch_checkin_brief: parse response failed: {e}"))
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// WP-VOICE-THRESHOLD-ENTRY V1 — click-to-talk plumbing.
+//
+// The voice backend (companion-backend.mjs) lives on the SAME droplet as the
+// engine, behind nginx at {base_url}/voice-llm/. Three commands:
+//   voice_probe        — cheap GET /voice-llm/health at Today load so the
+//                        "Check in" entry can render disabled-with-reason
+//                        (fail-visible house law) instead of a dead click.
+//   voice_mint_session — POST /voice-llm/app-session with the app's existing
+//                        bearer; the droplet replays it against the engine and
+//                        mints the ElevenLabs conversation credential
+//                        server-side. Routed through Rust (not page fetch) so
+//                        no CORS surface opens on the voice backend.
+//   open_call_window   — spawns the dedicated always-on-top call pill window,
+//                        independent of widget collapse/expand (a call inside
+//                        index.html dies on collapse — brief §D). Builder
+//                        options only; NO styleMask writes anywhere.
+// ───────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct VoiceProbeResult {
+    pub configured: bool,
+    /// Plain-language reason when not configured — rendered verbatim on the
+    /// disabled entry button's tooltip/subtitle. Never classifier internals.
+    pub reason: Option<String>,
+}
+
+#[tauri::command]
+async fn voice_probe(state: tauri::State<'_, AppState>) -> Result<VoiceProbeResult, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/voice-llm/health", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(4))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let not_set_up = |detail: String| VoiceProbeResult {
+        configured: false,
+        reason: Some(format!("Voice isn't set up on this engine ({detail})")),
+    };
+    match client.get(&url).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            let body: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => return Ok(not_set_up(format!("health parse failed: {e}"))),
+            };
+            let env_ok = |k: &str| body["env"][k].as_bool().unwrap_or(false);
+            if env_ok("ELEVENLABS_API_KEY") && env_ok("VOICE_AGENT_ID") {
+                Ok(VoiceProbeResult { configured: true, reason: None })
+            } else {
+                Ok(not_set_up("voice credentials missing on the server".into()))
+            }
+        }
+        Ok(resp) => Ok(not_set_up(format!("health returned {}", resp.status().as_u16()))),
+        Err(e) if e.is_timeout() => Ok(not_set_up("voice service timed out".into())),
+        Err(_) => Ok(not_set_up("no voice service at this engine".into())),
+    }
+}
+
+#[tauri::command]
+async fn voice_mint_session(
+    state: tauri::State<'_, AppState>,
+    transport: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = current_config(&state)?;
+    let url = format!("{}/voice-llm/app-session", cfg.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let mut body = serde_json::Map::new();
+    if transport.as_deref() == Some("ws") {
+        body.insert("transport".into(), serde_json::Value::String("ws".into()));
+    }
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                "Couldn't reach the voice service (timed out).".to_string()
+            } else {
+                format!("Couldn't reach the voice service: {e}")
+            }
+        })?;
+    let status = resp.status();
+    let value: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("voice_mint_session: parse response failed: {e}"))?;
+    if !status.is_success() {
+        // Surface the server's plain-language reason verbatim (fail-visible);
+        // fall back to a status line when the body carries none.
+        let server_msg = value["error"]["message"].as_str().unwrap_or("").to_string();
+        return Err(if server_msg.is_empty() {
+            format!("Voice session request failed (http {}).", status.as_u16())
+        } else if status.as_u16() == 401 {
+            format!("{server_msg} Check Settings → Connection.")
+        } else {
+            server_msg
+        });
+    }
+    Ok(value)
+}
+
+#[tauri::command]
+async fn open_call_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("call") {
+        // One call at a time: re-clicking the entry focuses the live pill.
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "call", tauri::WebviewUrl::App("call.html".into()))
+        .title("Check-in")
+        .inner_size(340.0, 168.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .center()
+        .build()
+        .map_err(|e| format!("Couldn't open the call window: {e}"))?;
+    Ok(())
+}
+
 /// WP-COMPANION-PLAN surface — the companion's own persisted plan of record
 /// (engine #500). Proxies GET /api/companion-plan (Threshold bearer lane).
 /// Serves {summary, items}; a 404 means COMPANION_PLAN_ENABLED is off on this
@@ -10375,6 +10503,13 @@ pub fn run() {
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // WP-VOICE-THRESHOLD-ENTRY V1 — this handler fires for
+                    // EVERY window; quit-on-close (D-12-02) is a MAIN-window
+                    // contract. Hanging up / closing the call pill must not
+                    // take the app down with it.
+                    if window.label() != "main" {
+                        return;
+                    }
                     if IN_FLIGHT.load(Ordering::SeqCst) > 0 {
                         // Prevent the default close; window stays alive while the async
                         // task waits for ingestions to drain, then exits the app entirely.
@@ -10506,6 +10641,10 @@ pub fn run() {
             // WP-THRESHOLD-LOG-UX — Connections (grounded cross-record edges)
             fetch_decision_log_full,
             fetch_checkin_brief,
+            // WP-VOICE-THRESHOLD-ENTRY V1 — click-to-talk
+            voice_probe,
+            voice_mint_session,
+            open_call_window,
             fetch_companion_plan,
             companion_plan_action,
             // WP-THRESHOLD-LOG-UX — Connections HITL (confirm/dismiss edge)
