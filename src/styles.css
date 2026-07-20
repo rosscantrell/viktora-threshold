@@ -6592,6 +6592,30 @@ button.rec-source {
   flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--surface-1); color: var(--text-primary); font: inherit; font-size: 13px;
 }
+/* WP-BYOM 3b — profile import. */
+.privacy-import-row { display: flex; align-items: center; gap: 10px; margin: 12px 0 2px; }
+.privacy-import-hint { color: var(--text-secondary); font-size: 12px; }
+.privacy-profile-input {
+  width: 100%; resize: vertical; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--surface-1);
+  color: var(--text-primary); font-family: ui-monospace, monospace; font-size: 12px;
+}
+.privacy-profile-file { color: var(--text-secondary); font-size: 12px; flex: 1; }
+.privacy-profile-identity { display: flex; align-items: center; gap: 10px; margin: 2px 0 14px; flex-wrap: wrap; }
+.privacy-recipe.is-static { cursor: default; }
+.privacy-recipe.is-static:hover { border-color: var(--border); background: var(--surface-1); }
+/* Preview-card change rows: chips on the title row, diff gets the full width. */
+.privacy-change-row { display: block; }
+.privacy-change-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.privacy-change-diff {
+  margin-top: 6px; color: var(--text-secondary); font-family: ui-monospace, monospace;
+  font-size: 12px; line-height: 1.5; overflow-wrap: anywhere;
+}
+.privacy-change-arrow { margin: 0 8px; color: var(--text-primary); }
+.privacy-picker .privacy-caveat {
+  margin-top: 16px; padding: 12px 14px; border-radius: 10px; line-height: 1.55;
+}
+.privacy-picker .pg-confirm-actions { margin-top: 20px; }
 
 .privacy-caveat {
   margin: 0;

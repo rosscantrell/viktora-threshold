@@ -1216,6 +1216,71 @@ async fn restart_routing_engine(
     Ok(json)
 }
 
+// WP-BYOM 3b — model-profile import passthroughs (preview = dry-run, apply =
+// all-or-nothing). Same thin posture: the ENGINE owns validation, signature
+// verification, and cert enforcement; refusals surface as the error string.
+#[tauri::command]
+async fn preview_model_profile(
+    base_url: String,
+    bearer_token: Option<String>,
+    profile: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    profile_post(&base_url, bearer_token, "preview", profile).await
+}
+
+#[tauri::command]
+async fn apply_model_profile(
+    base_url: String,
+    bearer_token: Option<String>,
+    profile: serde_json::Value,
+    r#override: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::Map::new();
+    body.insert("profile".into(), profile);
+    if let Some(o) = r#override {
+        body.insert("override".into(), serde_json::Value::Bool(o));
+    }
+    profile_post(&base_url, bearer_token, "apply", serde_json::Value::Object(body)).await
+}
+
+async fn profile_post(
+    base_url: &str,
+    bearer_token: Option<String>,
+    action: &str,
+    body: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}/api/model-profile/{}", base_url.trim_end_matches('/'), action);
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let mut req = client.post(&url).json(&body);
+    if let Some(token) = bearer_token {
+        if !token.trim().is_empty() {
+            req = req.bearer_auth(token.trim());
+        }
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach {}: {}", url, e))?;
+    let status = resp.status();
+    let json = resp
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("Bad JSON from {}: {}", url, e))?;
+    if !status.is_success() {
+        let msg = json
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("Server returned status {}", status.as_u16()));
+        return Err(msg);
+    }
+    Ok(json)
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Ingestion pipeline (file picker + drag-drop)
 // ───────────────────────────────────────────────────────────────────────────
@@ -10320,6 +10385,8 @@ pub fn run() {
             get_model_routing,
             put_model_routing,
             restart_routing_engine,
+            preview_model_profile,
+            apply_model_profile,
             // WP-THRESHOLD-APP-AUTH (email-login) — per-user magic-link sign-in
             auth_request_link,
             auth_verify,
