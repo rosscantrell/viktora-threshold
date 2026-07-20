@@ -4321,9 +4321,11 @@ async fn fetch_sop(
 ///      drops next to config.json. If present + parseable, it is returned as-is.
 ///      (This is how T1 is demonstrated fixture-first per the brief, without
 ///      touching the Ross-owned live backends.)
-///   2. Else proxy `GET /api/proxy-queue` — the WP-E5 endpoint. Until E5 lands
-///      that 404s → `{available:false}`, so the view degrades to its empty state
-///      rather than erroring.
+///   2. Else proxy `GET /api/proxy-queue?all=1` — the WP-E5 endpoint, all
+///      statuses (the default GET is pending-only, which starves the "Filed
+///      confidently" pile). If the endpoint is absent it 404s →
+///      `{available:false}`, so the view degrades to its empty state rather
+///      than erroring.
 /// Response contract (matches the WP-E5 queue-item shape):
 ///   { available: bool, items: [{ id, kind: merge|close|combine|chase|escalate,
 ///     confidence, evidence: { recordIds, cosine, routes, verdict, why,
@@ -4352,7 +4354,13 @@ async fn fetch_proxy_queue(
         Ok(c) => c,
         Err(_) => return Ok(serde_json::json!({ "available": false, "items": [] })),
     };
-    let url = format!("{}/api/proxy-queue", cfg.base_url.trim_end_matches('/'));
+    // ?all=1 — the engine's default GET is pending-only, but the inbox renders
+    // TWO piles: "Filed confidently" needs confirmed items too (and undo needs
+    // dispositioned items to still be addressable after a re-fetch). The piles
+    // + the badge count filter by status client-side (refreshProxyQueue /
+    // get_proxy_queue_count), so over-fetching statuses is the correct posture
+    // — fail-closed-but-visible, nothing silently vanishes on refresh.
+    let url = format!("{}/api/proxy-queue?all=1", cfg.base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(30))

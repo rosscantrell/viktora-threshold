@@ -16529,7 +16529,10 @@ async function refreshProxyQueue() {
 
   const items = payload && Array.isArray(payload.items) ? payload.items : [];
 
-  // Terminal items (dismissed/undone) never surface. Split the rest by pile:
+  // Dismissed items never surface (the dismiss toast's Undo is the recovery
+  // window; server-side the item stays addressable). "undone" is a LEGACY
+  // status from before the engine's undo-returns-to-pending fix — filtered as
+  // defense against an un-upgraded engine. Split the rest by pile:
   // "Filed confidently" = already-confirmed OR high-band pending; everything
   // else ("Wants your eye") = pending in the adjudicate band.
   const live = items.filter(
