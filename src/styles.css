@@ -6932,22 +6932,29 @@ button.rec-source {
   color: var(--accent-hover);
   border-color: var(--accent-ring);
 }
-/* WP-R3 item 5 — source affordance in the proxy Details: a label + one
- * renderSourceBadge per resolvable underlying document (opens the source pane,
- * exactly like the Log). Only rendered when a recordId resolved to a doc. */
-.proxy-source-row {
+/* #196 redline — the subject join. The joined record(s) lead the card as N0
+ * rows (the one row grammar); the ask demotes to a quiet second line; a join
+ * that can't resolve says so in plain amber (fail-closed-but-VISIBLE). */
+.proxy-subject-slot {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
+  flex-direction: column;
+  gap: 6px;
 }
-.proxy-source-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.proxy-subject-slot:empty { display: none; }
+.proxy-question-demoted {
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-secondary);
+}
+.proxy-join-missing {
+  font-size: 12px;
+  color: var(--warn-text);
+  margin: 0;
+}
+/* Per-quote source badge — sits under its verbatim like the date line does. */
+.proxy-evidence .source-badge {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .proxy-confirm-btn {

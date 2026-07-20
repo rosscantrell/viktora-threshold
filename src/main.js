@@ -16640,6 +16640,7 @@ async function enterProxyQueueView() {
 
 /** Re-fetch + re-render both piles. Called on view-enter and on Refresh. */
 async function refreshProxyQueue() {
+  invalidateProxyCardCtx(); // cards re-join the log fresh per refresh
   const attentionList = document.getElementById("proxy-attention-list");
   const filedList = document.getElementById("proxy-filed-list");
   const attentionPile = document.getElementById("proxy-pile-attention");
@@ -16743,27 +16744,53 @@ function renderProxyCard(item) {
   card.dataset.kind = item.kind || "";
   card.dataset.id = item.id || "";
 
-  // Card anatomy (§ WP-R2 amendment item 6), in this order:
-  //   1. The ask first — a plain question (derived; dual-schema tolerant).
-  //   2. The two dated quotes — the primary content a human judges (receipts).
-  //   3. Plain-language confidence — "78% confident" (not "agreement/adjudicate-band").
-  //   4. Everything mechanical behind a collapsed "Details" affordance.
+  // Card anatomy (§ WP-R2 amendment item 6, reworked per Ross's #196 redline
+  // 2026-07-20 — "nothing here gives context"), in this order:
+  //   1. The SUBJECT first — the joined decision-log record(s) this call is
+  //      about, as N0 rows (click → the full record card with its receipts /
+  //      source / relationship affordances). Async join off one shared cached
+  //      fetch; the ask carries the card alone until it lands.
+  //   2. The ask — headline pre-join, demoted to the second line after.
+  //   3. The plain-language why — user-facing prose, no longer buried.
+  //   4. The dated quotes, each with its source badge where one resolves.
+  //   5. Everything mechanical (incl. the confidence %) behind Details.
   const derived = deriveProxyAsk(item);
 
-  // ── 1. The ask, first ──────────────────────────────────────────────────────
+  // ── 1. The subject slot. Fail-VISIBLE: a join that can't resolve renders a
+  //    plain couldn't-load line, never a silently context-free card.
+  const subjectSlot = document.createElement("div");
+  subjectSlot.className = "proxy-subject-slot";
+  card.appendChild(subjectSlot);
+
+  // ── 2. The ask.
   const question = document.createElement("p");
   question.className = "proxy-question";
   question.textContent = derived.ask;
   card.appendChild(question);
+  mountProxySubjectJoin(subjectSlot, question, item);
 
-  // ── 2. The dated quotes — the decision content, via the ONE receipt component.
+  // ── 3. The explanation — evidence.why (new shape: item.why) is already
+  //    user-facing prose ("Same commitment captured in two meetings 6 days
+  //    apart…"); it was invisible inside Details.
+  const whyText =
+    (typeof item.why === "string" && item.why.trim()) ? item.why.trim() : (ev.why || "");
+  if (whyText) {
+    const why = document.createElement("p");
+    why.className = "proxy-why";
+    why.textContent = whyText;
+    card.appendChild(why);
+  }
+
+  // ── 4. The dated quotes — the decision content, via the ONE receipt component.
   //    Proxy verbatims are fleet-surfaced evidence (already citation-scoped), so
-  //    they render as quotes (verified); the source pane isn't wired in the proxy
-  //    queue, so jump is off. Each quote is paired with its date when available.
+  //    they render as quotes (verified). Each pairs with its date, and (async)
+  //    with its record's source badge where the doc resolves — the same
+  //    renderSourceBadge → openSourcePanel jump the Log uses.
   const evidence = document.createElement("div");
   evidence.className = "proxy-evidence";
   const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
   const evDates = Array.isArray(ev.dates) ? ev.dates : [];
+  const receiptEls = [];
   for (let i = 0; i < verbatims.length; i++) {
     const v = verbatims[i];
     if (!v) continue;
@@ -16778,21 +16805,16 @@ function renderProxyCard(item) {
       dateEl.textContent = String(d).slice(0, 10);
       receipt.appendChild(dateEl);
     }
+    receiptEls.push({ i, el: receipt });
     evidence.appendChild(receipt);
   }
   card.appendChild(evidence);
+  mountProxyVerbatimSources(receiptEls, ev);
 
-  // ── 3. Plain-language confidence ───────────────────────────────────────────
-  if (typeof item.confidence === "number") {
-    const conf = document.createElement("p");
-    conf.className = "proxy-confidence";
-    conf.textContent = Math.round(item.confidence * 100) + "% confident";
-    card.appendChild(conf);
-  }
-
-  // ── 4. Details — everything mechanical, collapsed by default. Legacy jargon
-  //    (why / verdict / routes / cosine / owners) OR the new-shape debugTrace all
-  //    live here so the card face stays plain. Only rendered when there's content.
+  // ── 5. Details — everything mechanical, collapsed by default. The verdict /
+  //    routes / cosine / owners, the new-shape debugTrace, AND the confidence
+  //    percentage (redline item 6: a raw % on the card face brushes the
+  //    no-classifier-internals law — the face stays qualitative) live here.
   const detailBits = [];
   // New-shape debugTrace routes here verbatim (string or JSON-stringified object).
   if (derived.debugTrace != null) {
@@ -16802,9 +16824,10 @@ function renderProxyCard(item) {
         : JSON.stringify(derived.debugTrace, null, 2);
     if (traceText && traceText.trim()) detailBits.push({ type: "trace", text: traceText });
   }
-  // Legacy mechanical fields. On the new shape these are typically absent.
-  if (ev.why) detailBits.push({ type: "why", text: ev.why });
   const metaSegs = [];
+  if (typeof item.confidence === "number") {
+    metaSegs.push(Math.round(item.confidence * 100) + "% confident");
+  }
   const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
   if (owners.length) metaSegs.push(owners.map(prettySlug).join(", "));
   if (typeof ev.cosine === "number") metaSegs.push("cos " + ev.cosine.toFixed(2));
@@ -16852,15 +16875,6 @@ function renderProxyCard(item) {
       body.appendChild(chips);
     }
 
-    // WP-R3 item 5 — open the underlying record's SOURCE in the right-hand pane,
-    // exactly like the Log. Resolve each evidence.recordId → documentId (the
-    // record→doc map, from the decision log), then let R1's existing jump
-    // (renderSourceBadge → openSourcePanel) open the pane. FULL reuse — no new
-    // pane, no new endpoint. Graceful: the FIXTURE's synthetic recordIds won't be
-    // in the corpus log, so they resolve to nothing and NO affordance renders (no
-    // dead link). Async-fills when the maps land; if already cached, fills now.
-    mountProxySourceAffordance(body, ev);
-
     details.appendChild(body);
     card.appendChild(details);
   }
@@ -16900,39 +16914,111 @@ function renderProxyCard(item) {
   return card;
 }
 
-// WP-R3 item 5 — resolve a proxy item's evidence.recordIds to their source docs
-// and append a "source" affordance (reusing renderSourceBadge → openSourcePanel,
-// the Log's mechanism) into `container`. Async: both the record→doc and doc maps
-// must be loaded so the badge can name the source type + open the pane. Renders
-// NOTHING when nothing resolves — the fixture's synthetic recordIds (rec-4821 …)
-// aren't in the corpus log, so they yield no badge (no broken/dead link). One
-// badge per distinct resolvable document (deduped).
-async function mountProxySourceAffordance(container, ev) {
-  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
-  if (!recordIds.length) return;
-  // Both maps are needed: recordId→documentId to resolve, and _docsById (via
-  // loadDocsMap) so renderSourceBadge can render + open. Best-effort; either
-  // failing just leaves the map empty → no affordance.
-  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
-  const seen = new Set();
-  const badges = [];
-  for (const rid of recordIds) {
-    const docId = recDoc.get(rid);
-    if (!docId || seen.has(docId)) continue;
-    // renderSourceBadge returns null when the doc isn't in _docsById (no metadata) —
-    // so an unresolvable/orphan doc adds nothing. This is the graceful path.
-    const chip = renderSourceBadge(docId, null);
-    if (chip) { seen.add(docId); badges.push(chip); }
+// ── The subject join (Ross redline on #196, 2026-07-20) ────────────────────
+//
+// A shared, cached decision-log context so every proxy card joins its
+// evidence.recordIds against the live records with ONE fetch per view entry.
+// Invalidated on enterNeedsYouView / refreshProxyQueue so a re-entry re-joins
+// fresh. A failed fetch never poisons the cache (next call retries).
+let _proxyCardCtxPromise = null;
+
+function invalidateProxyCardCtx() {
+  _proxyCardCtxPromise = null;
+}
+
+function loadProxyCardCtx() {
+  if (!_proxyCardCtxPromise) {
+    _proxyCardCtxPromise = (async () => {
+      const data = await tauri.core.invoke("fetch_decision_log_full");
+      const items = Array.isArray(data && data.records) ? data.records : [];
+      const byId = new Map();
+      for (const it of items) {
+        const rec = it && it.record ? it.record : it;
+        if (rec && rec.recordId) byId.set(rec.recordId, rec);
+      }
+      const ctx = {
+        items,
+        byId,
+        docProjects: new Map(),
+        edges: Array.isArray(data && data.edges) ? data.edges : [],
+        aliases: (data && data.aliases) || {},
+        jobNames: (data && data.jobNames) || {},
+        recordJobs: (data && data.recordJobs) || {},
+        frames: [],
+        facets: [],
+        jobHeat: (data && data.jobHeat) || {},
+        actionKinds: (data && data.actionKinds) || {},
+        recordRelationship: (data && data.recordRelationship) || {},
+        nursery: [],
+      };
+      // Share it as the ambient decisions context when the Log hasn't loaded
+      // its own (the receipts-view precedent) so an expanded subject row's
+      // full card resolves its badges / popovers / relationship chip.
+      if (!_decisionsCtx) _decisionsCtx = ctx;
+      return ctx;
+    })();
+    _proxyCardCtxPromise.catch(() => { _proxyCardCtxPromise = null; });
   }
-  if (!badges.length) return; // nothing resolved — no dead link
-  const row = document.createElement("div");
-  row.className = "proxy-source-row";
-  const lbl = document.createElement("span");
-  lbl.className = "proxy-source-label";
-  lbl.textContent = badges.length === 1 ? "Source" : "Sources";
-  row.appendChild(lbl);
-  for (const b of badges) row.appendChild(b);
-  container.appendChild(row);
+  return _proxyCardCtxPromise;
+}
+
+// Fill a proxy card's subject slot with the joined record(s) as N0 rows —
+// the one row grammar everywhere; click → the full record card with its
+// receipts / source / resolve / relationship affordances. Merge-kind items
+// carry both ends and both render (the Relationships edge-card way). On
+// success the ask demotes to the second line. Fail-VISIBLE: a log fetch that
+// fails or ids that no longer resolve render a plain couldn't-load line —
+// never a silently context-free card.
+async function mountProxySubjectJoin(slot, questionEl, item) {
+  const ev = (item && item.evidence) || {};
+  const ids = Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+  if (!ids.length) return; // new-shape items may carry none — the ask stays the headline
+  const missingLine = (text) => {
+    const p = document.createElement("p");
+    p.className = "proxy-join-missing";
+    p.textContent = text;
+    slot.appendChild(p);
+  };
+  let ctx;
+  try {
+    ctx = await loadProxyCardCtx();
+  } catch (err) {
+    console.warn("[main] proxy subject join failed:", err);
+    missingLine("Couldn't load the record behind this — the quotes below are the only context.");
+    return;
+  }
+  const found = ids.map((rid) => ctx.byId.get(rid)).filter(Boolean);
+  for (const rec of found) {
+    try {
+      slot.appendChild(renderRecordRow(rec, recordStateById(ctx, rec.recordId), [], { ctx }));
+    } catch (e) {
+      console.warn("[main] proxy subject row:", e);
+    }
+  }
+  if (found.length) questionEl.classList.add("proxy-question-demoted");
+  if (found.length < ids.length) {
+    missingLine(
+      found.length
+        ? "One of the records behind this couldn't be loaded."
+        : "Couldn't find the record behind this — it may have been removed.",
+    );
+  }
+}
+
+// Per-quote source badges: each verbatim pairs positionally with its
+// evidence.recordId (the fleet emits them together); resolve record → doc →
+// the same renderSourceBadge → openSourcePanel jump the Log uses. Best-effort
+// and graceful: an unresolvable record/doc adds nothing (no dead link).
+async function mountProxyVerbatimSources(receipts, ev) {
+  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds : [];
+  if (!recordIds.length || !receipts.length) return;
+  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
+  for (const { i, el } of receipts) {
+    const docId = recDoc.get(recordIds[i]);
+    if (!docId) continue;
+    const chip = renderSourceBadge(docId, null); // null when doc metadata is absent
+    if (chip) el.appendChild(chip);
+  }
 }
 
 /**
@@ -17096,6 +17182,7 @@ async function enterNeedsYouView() {
 
   // ── FIRST PAINT (synchronous) — reset to the skeleton resting state.
   _nyResetState();
+  invalidateProxyCardCtx(); // adjudicate cards re-join the log fresh per entry
   for (const id of ["ny-calls-list", "ny-go-list", "ny-confirm-list", "ny-filed-list"]) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = "";
