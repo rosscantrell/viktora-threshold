@@ -7648,3 +7648,58 @@ button.rec-source {
   padding: 4px 6px;
   color: var(--glass-text-dim);
 }
+
+/* ── The thin index (Ross ruling at the live gate, 2026-07-20) ──────────────
+ * Collapsed one-line rows per the mock's L1 row grammar: chip · summary ·
+ * meta, 0.5px hairline, 12.5px, 5px apart. Click → the row swaps in place
+ * for the existing card (a floating ▾ collapses it back). */
+.view-needs-you .needs-you-list { gap: 5px; }
+.ny-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6.5px 10px;
+  border: 0.5px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ny-row:hover { background: rgba(255, 255, 255, 0.045); }
+.ny-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.ny-row-chip {
+  flex: none;
+  text-transform: lowercase;
+  font-size: 10.5px;
+  border: 0.5px solid var(--glass-border-strong);
+  border-radius: 999px;
+  padding: 0.5px 8px;
+  color: var(--glass-text-dim);
+}
+.ny-row-chip.is-amber {
+  border-color: rgba(255, 196, 64, 0.45);
+  color: var(--glass-accent);
+}
+.ny-row-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ny-row-meta { flex: none; font-size: 11px; color: var(--glass-text-dim); }
+.ny-row-card { position: relative; }
+.ny-row-collapse {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  z-index: 1;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.ny-row-collapse:hover { color: var(--glass-text); }

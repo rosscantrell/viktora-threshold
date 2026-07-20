@@ -17160,7 +17160,11 @@ function proxyUndoFiled(item, rowEl) {
 // ───────── WP-THRESHOLD-NEEDS-YOU N1 — "Needs you", the ratification lane ─────────
 //
 // One nav destination absorbing every scattered ratify affordance, in three
-// weight groups (names LOCKED, brief §C.2):
+// weight groups (names LOCKED, brief §C.2). SHAPE RULING (Ross at the live
+// gate, 2026-07-20): the lane is a THIN INDEX — collapsed one-line rows only
+// (renderNeedsYouRow), each expanding IN PLACE into the existing card that
+// carries the verbs. No card is expanded by default; ratification CTAs live
+// on the cards they always lived on.
 //   "Calls only you can make" — adjudicate-band filings (fetch_proxy_queue →
 //     the same full cards as the proxy inbox, Confirm/Dismiss persisting via
 //     proxy_queue_decide), the organizing-question queue (the SAME QE +
@@ -17214,6 +17218,7 @@ async function enterNeedsYouView() {
 
   // ── FIRST PAINT (synchronous) — reset to the skeleton resting state.
   _nyResetState();
+  _nyRowsExpanded.clear(); // rows start collapsed on every entry (thin index)
   invalidateProxyCardCtx(); // adjudicate cards re-join the log fresh per entry
   for (const id of ["ny-calls-list", "ny-go-list", "ny-confirm-list", "ny-filed-list"]) {
     const el = document.getElementById(id);
@@ -17238,6 +17243,89 @@ async function enterNeedsYouView() {
   loadNeedsYouQuestions().catch((e) => { console.warn("[main] Needs you (questions):", e); _nySettle("questions", true); });
   loadNeedsYouPacket().catch((e) => { console.warn("[main] Needs you (colleagues):", e); _nySettle("packet", true); });
   loadNeedsYouOutbox().catch((e) => { console.warn("[main] Needs you (drafts):", e); _nySettle("outbox", true); });
+}
+
+// ── The thin index (Ross ruling at the live gate, 2026-07-20): the lane
+// renders collapsed one-line rows ONLY — chip · summary · meta, the N0 row
+// grammar — and every verb stays on the existing card the row expands into,
+// in place. Nothing is expanded by default; the wall-of-cards shape is gone.
+// Expansion state survives a same-view re-render via _nyRowsExpanded, reset
+// on each entry (rows start collapsed every visit, the _outlookExpanded
+// pattern).
+const _nyRowsExpanded = new Set();
+
+function renderNeedsYouRow(key, chipText, summaryText, metaText, buildCard, opts) {
+  opts = opts || {};
+  const wrap = document.createElement("div");
+  wrap.className = "ny-row-wrap";
+  if (key) wrap.dataset.key = key;
+
+  const row = document.createElement("div");
+  row.className = "ny-row";
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  row.setAttribute("aria-expanded", "false");
+  row.title = "Show the full card";
+  const chip = document.createElement("span");
+  chip.className = "ny-row-chip";
+  chip.textContent = chipText;
+  if (opts.amberChip) chip.classList.add("is-amber");
+  row.appendChild(chip);
+  const sum = document.createElement("span");
+  sum.className = "ny-row-summary";
+  sum.textContent = summaryText;
+  row.appendChild(sum);
+  const meta = document.createElement("span");
+  meta.className = "ny-row-meta";
+  meta.textContent = metaText || "";
+  row.appendChild(meta);
+
+  const collapse = () => {
+    const holder = wrap.querySelector(".ny-row-card");
+    if (holder) holder.remove();
+    delete wrap.dataset.expanded;
+    wrap.appendChild(row);
+    if (key) _nyRowsExpanded.delete(key);
+    row.focus();
+  };
+  const expand = () => {
+    if (wrap.querySelector(".ny-row-card")) return;
+    let card;
+    try {
+      card = buildCard();
+    } catch (e) {
+      console.warn("[main] needs-you row card:", e);
+      return;
+    }
+    const holder = document.createElement("div");
+    holder.className = "ny-row-card";
+    const chev = document.createElement("button");
+    chev.type = "button";
+    chev.className = "ny-row-collapse";
+    chev.textContent = "▾";
+    chev.title = "Collapse to one line";
+    chev.setAttribute("aria-label", "Collapse to one line");
+    chev.addEventListener("click", collapse);
+    holder.appendChild(chev);
+    holder.appendChild(card);
+    row.remove();
+    wrap.dataset.expanded = "true";
+    wrap.appendChild(holder);
+    if (key) _nyRowsExpanded.add(key);
+  };
+  row.addEventListener("click", () => expand());
+  row.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); expand(); }
+  });
+
+  wrap.appendChild(row);
+  // The async subject join upgrades a row's text once records resolve.
+  wrap._updateRow = (s, m) => {
+    if (s) sum.textContent = s;
+    if (m != null) meta.textContent = m;
+  };
+  if (key && _nyRowsExpanded.has(key)) expand();
+  return wrap;
 }
 
 /** Mark one source settled (failed or clean) and re-reconcile the lane. */
@@ -17279,11 +17367,47 @@ async function loadNeedsYouProxy() {
   const { wantsEye, filed } = splitProxyPiles(payload);
 
   const callsList = document.getElementById("ny-calls-list");
+  const proxyRows = [];
   if (callsList) {
     for (const item of wantsEye) {
-      try { callsList.appendChild(renderProxyCard(item)); }
-      catch (e) { console.warn("[main] renderProxyCard (Needs you):", e); }
+      try {
+        const derived = deriveProxyAsk(item);
+        const its = item.ts ? Date.parse(item.ts) : NaN;
+        const when = Number.isNaN(its)
+          ? ""
+          : new Date(its).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        const row = renderNeedsYouRow(
+          "proxy:" + item.id,
+          PROXY_KIND_CHIP_LABELS[item.kind] || "for review",
+          derived.ask,
+          when,
+          () => renderProxyCard(item),
+        );
+        callsList.appendChild(row);
+        proxyRows.push({ item, row });
+      } catch (e) { console.warn("[main] proxy row (Needs you):", e); }
     }
+  }
+  // The subject join upgrades each collapsed row from the ask to the record
+  // it's about (summary + owner · due) as soon as the shared ctx lands — the
+  // row is the context surface now. Best-effort: rows keep the ask on any
+  // failure (the expanded card carries its own fail-visible line).
+  if (proxyRows.length) {
+    loadProxyCardCtx()
+      .then((ctx) => {
+        for (const { item, row } of proxyRows) {
+          const ev = item.evidence || {};
+          const ids = Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+          const found = ids.map((rid) => ctx.byId.get(rid)).filter(Boolean);
+          if (!found.length || !row._updateRow) continue;
+          const summaries = found.map((r) => r.summary || r.recordId).join("  ·  ");
+          const bits = [];
+          if (found[0].owner) bits.push(prettySlug(found[0].owner));
+          if (found[0].due) bits.push("due " + formatDueDate(found[0].due));
+          row._updateRow(summaries, bits.join(" · "));
+        }
+      })
+      .catch(() => {});
   }
 
   const filedList = document.getElementById("ny-filed-list");
@@ -17332,7 +17456,14 @@ async function loadNeedsYouQuestions() {
   ]);
   const callsList = document.getElementById("ny-calls-list");
   if (callsList) {
-    for (const c of [...qe, ...mergeAsks, ...nameAsks]) callsList.appendChild(c);
+    const cards = [...qe, ...mergeAsks, ...nameAsks];
+    cards.forEach((c, idx) => {
+      const stmtEl = c.querySelector(".rule-card-statement");
+      const stmt = (stmtEl && stmtEl.textContent) || "A question for you";
+      callsList.appendChild(
+        renderNeedsYouRow("q:" + idx + ":" + stmt.slice(0, 40), "question", stmt, "", () => c),
+      );
+    });
   }
   _nySettle("questions", anyFailed);
 }
@@ -17368,35 +17499,62 @@ async function loadNeedsYouPacket() {
   const goList = document.getElementById("ny-go-list");
   const confirmList = document.getElementById("ny-confirm-list");
 
+  // Every peer arrival renders as a collapsed row expanding into its card.
+  const trimTitle = (r) => {
+    const kindWord = peerKindLabel(r.envelopeKind);
+    return (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
+  };
+  const whenShort = (r) => {
+    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+    return Number.isNaN(ms)
+      ? ""
+      : new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  const peerRow = (r, label, build) =>
+    renderNeedsYouRow(
+      "peer:" + (r.docId || r.title || ""),
+      peerKindLabel(r.envelopeKind),
+      trimTitle(r),
+      label + (whenShort(r) ? " · " + whenShort(r) : ""),
+      build,
+    );
+
   for (const r of peerRows) {
     const kind = String(r.envelopeKind || "").toLowerCase();
     const peerId = String(r.channel).slice(5);
     const peerLabel = peerSideLabel(labelById.get(peerId), peerId);
     try {
       if (kind === "question" && callsList) {
-        callsList.appendChild(renderNeedsYouPeerCard(r, peerLabel));
+        callsList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
       } else if (kind === "handoff" && goList) {
-        goList.appendChild(renderNeedsYouPeerCard(r, peerLabel));
+        goList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
       } else if (kind === "receipt" && confirmList) {
-        confirmList.appendChild(renderNeedsYouReceiptCard(r, peerLabel));
+        confirmList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouReceiptCard(r, peerLabel)));
       }
       // "answer" rows: the actionable ones arrive as accept cards below; an
       // answer WITHOUT one has nothing waiting on the user, so it stays on
       // Today's peer section rather than padding this lane.
-    } catch (e) { console.warn("[main] peer card (Needs you):", e); }
+    } catch (e) { console.warn("[main] peer row (Needs you):", e); }
     const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
     if (!Number.isNaN(ms) && _nyState) _nyState.ages.push(ms);
   }
 
-  // Group 2 — accept cards lead (a decision the other side already made is
-  // the cheapest win on the board), then staged prework. Same renderers as
-  // Today's "Prepared for you".
+  // Group 2 — accept rows lead (a decision the other side already made is
+  // the cheapest win on the board), then staged prework (renderPreworkRow is
+  // already a collapsed row — used as-is).
   if (goList) {
     const prework = data && data.prework;
     const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
     for (const card of cards) {
-      try { goList.appendChild(renderAcceptCard(card)); }
-      catch (e) { console.warn("[main] renderAcceptCard (Needs you):", e); }
+      try {
+        goList.appendChild(renderNeedsYouRow(
+          "accept:" + (card.questionId || ""),
+          "answer",
+          `${peerSideLabel(card.peerLabel, null)} answered your question — accept and file it?`,
+          "",
+          () => renderAcceptCard(card),
+        ));
+      } catch (e) { console.warn("[main] accept row (Needs you):", e); }
     }
     const items = prework && Array.isArray(prework.items) ? prework.items : [];
     for (const item of items) {
@@ -17407,8 +17565,9 @@ async function loadNeedsYouPacket() {
   _nySettle("packet", false);
 }
 
-// Outbox drafts → group 2, full cards (expanded by default in this lane) with
+// Outbox drafts → group 2, collapsed rows expanding into the full card with
 // the existing canon verbs (Dismiss / Copy draft / Mark sent / Send to peer).
+// A held peer send is NEVER silent: the row itself says so, in amber.
 async function loadNeedsYouOutbox() {
   let data;
   try {
@@ -17422,8 +17581,25 @@ async function loadNeedsYouOutbox() {
   const goList = document.getElementById("ny-go-list");
   if (goList) {
     for (const item of items) {
-      try { goList.appendChild(renderOutboxCard(item)); }
-      catch (e) { console.warn("[main] renderOutboxCard (Needs you):", e); }
+      try {
+        const held = !!(item.addressedToPeer && item.lastDispatchError);
+        const chip = item.addressedToPeer && item.envelopeKind
+          ? peerKindLabel(item.envelopeKind)
+          : outboxTypeLabel(item.type);
+        const meta = held
+          ? "held — couldn't send"
+          : item.addressedToPeer
+            ? `to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`
+            : "approved, awaiting send";
+        goList.appendChild(renderNeedsYouRow(
+          "ob:" + item.id,
+          chip,
+          item.subject || "(no subject)",
+          meta,
+          () => renderOutboxCard(item),
+          { amberChip: held },
+        ));
+      } catch (e) { console.warn("[main] outbox row (Needs you):", e); }
     }
   }
   _nySettle("outbox", false);
