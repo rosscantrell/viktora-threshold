@@ -5984,6 +5984,11 @@ button.record-action-badge {
 }
 .record-row-collapse:hover { color: var(--glass-text); }
 .record-row-wrap[data-expanded] .record-header { cursor: pointer; }
+/* The chevron is a third header child — space-between would center the type
+ * label, so pin the layout: label hugs the chevron, badge/pill stays right. */
+.record-row-wrap .record-header-split { justify-content: flex-start; }
+.record-row-wrap .record-header-split > .record-action-badge,
+.record-row-wrap .record-header-split > .record-state-pill { margin-left: auto; }
 .record-select-row .record-row-wrap { flex: 1 1 auto; min-width: 0; }
 
 /* Jump target flash. */
