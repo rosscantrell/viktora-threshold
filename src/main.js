@@ -389,7 +389,7 @@ async function bootstrap() {
 
     // WP-BYOM Phase 3 — deep-link straight to Settings → Privacy (render-look
     // loop + future posture deep-links; nothing sets this hash in production).
-    if (window.location.hash === "#privacy" || window.location.hash.startsWith("#privacy-pick-")) {
+    if (window.location.hash === "#privacy" || window.location.hash.startsWith("#privacy-pick-") || window.location.hash === "#privacy-import") {
       enterStandaloneConfigure();
       switchSettingsPanel("privacy");
       return;
@@ -1430,6 +1430,14 @@ async function renderSovereignty() {
       '<p class="field-help">On-prem server: <code>' + escapeHtml(s.localEndpoint) + "</code></p>";
   }
 
+  // WP-BYOM 3b — profile import (engines that speak /api/model-routing also
+  // speak /api/model-profile; older engines keep the read-only panel).
+  if (routing) {
+    html +=
+      '<div class="privacy-import-row"><button type="button" class="privacy-change" id="privacy-import-btn">Import profile…</button>' +
+      '<span class="privacy-import-hint">A signed setup from your organization, a provider, or your own server.</span></div>';
+  }
+
   if (Array.isArray(s.pinnedToCloud) && s.pinnedToCloud.length) {
     html +=
       '<p class="privacy-caveat">⚠ ' +
@@ -1451,11 +1459,134 @@ async function renderSovereignty() {
   const restartBtn = document.getElementById("privacy-restart-btn");
   if (restartBtn) restartBtn.addEventListener("click", restartRoutingEngine);
 
-  // Dev render-look hook: #privacy-pick-<group> opens the picker on load so the
-  // modal state is screenshottable in the shim loop. Guarded to the debug hash;
-  // nothing triggers it in production.
+  const importBtn = document.getElementById("privacy-import-btn");
+  if (importBtn) importBtn.addEventListener("click", () => openProfileImport());
+
+  // Dev render-look hooks: #privacy-pick-<group> opens the picker, #privacy-import
+  // opens the import flow pre-filled with a demo profile so the preview card is
+  // screenshottable in the shim loop. Nothing triggers these in production.
   const pick = /#privacy-pick-(generation|extraction|query)/.exec(window.location.hash || "");
   if (pick) openModelPicker(pick[1], pick[1][0].toUpperCase() + pick[1].slice(1));
+  if (window.location.hash === "#privacy-import") {
+    openProfileImport('{"version":1,"name":"Acme approved AI","publisher":"Acme IT","routing":{"generation":"endpoint:acme-glm"}}');
+  }
+}
+
+// ── WP-BYOM 3b — profile import (paste/file → preview card → apply) ────────
+
+function openProfileImport(prefillText) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane privacy-picker";
+  pane.innerHTML =
+    '<div class="pg-pane-title">Import a model profile</div>' +
+    '<p class="privacy-picker-help">Paste the profile your organization or provider gave you, or choose the file. Nothing changes until you review and apply it.</p>' +
+    '<textarea class="privacy-profile-input" rows="6" placeholder="Paste the profile here (JSON)"></textarea>' +
+    '<div class="privacy-adv-row"><input type="file" accept=".json,application/json" class="privacy-profile-file">' +
+    '<button type="button" class="pg-btn pg-btn-primary privacy-profile-preview">Preview</button></div>';
+  const ta = pane.querySelector(".privacy-profile-input");
+  if (prefillText) ta.value = prefillText;
+  pane.querySelector(".privacy-profile-file").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { ta.value = String(r.result || ""); };
+    r.readAsText(f);
+  });
+  pane.querySelector(".privacy-profile-preview").addEventListener("click", async () => {
+    let profile;
+    try {
+      profile = JSON.parse(ta.value);
+    } catch {
+      showToast({ kind: "failure", title: "Not a profile", body: "That isn't valid JSON — check the copy/paste." });
+      return;
+    }
+    const { baseUrl, bearerToken } = _routingCtx;
+    try {
+      const prev = await tauri.core.invoke("preview_model_profile", { baseUrl, bearerToken: bearerToken || null, profile });
+      pgClose(overlay);
+      showProfilePreview(profile, prev);
+    } catch (err) {
+      showToast({ kind: "failure", title: "Profile rejected", body: String(err) });
+    }
+  });
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.className = "pg-btn pg-btn-ghost"; cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  actions.appendChild(cancel);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
+  if (prefillText) pane.querySelector(".privacy-profile-preview").click();
+}
+
+function showProfilePreview(profile, prev) {
+  const overlay = pgOverlay();
+  const pane = document.createElement("div");
+  pane.className = "pg-pane privacy-picker";
+
+  const signed = String(prev.signed || "unsigned");
+  const signedChip = signed.startsWith("signed-by:")
+    ? '<span class="privacy-chip is-certified">Signed — ' + escapeHtml(signed.slice("signed-by:".length)) + "</span>"
+    : '<span class="privacy-chip is-uncertified">Unsigned — import only if you trust the source</span>';
+
+  const chipsFor = (c) => {
+    if (c.kind !== "routing") return "";
+    const locus = locusForSpec(c.to || "");
+    const cert = c.certificationStatus === "certified" || c.certificationStatus === "baseline-model"
+      ? '<span class="privacy-chip is-certified">✓ Certified</span>'
+      : '<span class="privacy-chip is-uncertified">Not certified</span>';
+    return cert + '<span class="privacy-chip ' + LOCUS_CLASS[locus] + '">' + LOCUS_LABEL[locus] + "</span>";
+  };
+  // Layout note (Ross, render-loop): long model ids fight chips on a shared
+  // line — so chips ride the TITLE row and the from→to gets the full width.
+  const changeRows = (prev.changes || []).map((c) =>
+    '<div class="privacy-recipe is-static privacy-change-row">' +
+    '<div class="privacy-change-head"><span class="privacy-recipe-name">' +
+    escapeHtml(c.kind === "connection" ? "Connection" : (ROUTING_GROUP_LABEL[c.target] || c.target)) + "</span>" +
+    '<div class="privacy-recipe-chips">' + chipsFor(c) + "</div></div>" +
+    '<div class="privacy-change-diff">' + escapeHtml(c.from || "managed default") +
+    '<span class="privacy-change-arrow">→</span>' + escapeHtml(c.to || "managed default") + "</div>" +
+    "</div>"
+  ).join("");
+
+  const warnings = (prev.warnings || []).map((w) =>
+    '<p class="privacy-caveat">⚠ ' + escapeHtml(w) + "</p>").join("");
+
+  pane.innerHTML =
+    '<div class="pg-pane-title">' + escapeHtml(prev.name || profile.name || "Model profile") + "</div>" +
+    '<div class="privacy-profile-identity">' + signedChip +
+    (prev.publisher ? '<span class="privacy-recipe-sub">from ' + escapeHtml(prev.publisher) + "</span>" : "") + "</div>" +
+    '<div class="privacy-recipes">' + (changeRows || '<p class="field-help">This profile makes no changes.</p>') + "</div>" +
+    warnings;
+
+  const hasUncert = (prev.changes || []).some((c) => c.kind === "routing" && c.certificationStatus && c.certificationStatus !== "certified" && c.certificationStatus !== "baseline-model");
+  const actions = document.createElement("div");
+  actions.className = "pg-confirm-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.className = "pg-btn pg-btn-ghost"; cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => pgClose(overlay));
+  const go = document.createElement("button");
+  go.type = "button"; go.className = "pg-btn pg-btn-primary";
+  go.textContent = hasUncert ? "Apply anyway" : "Apply";
+  go.addEventListener("click", async () => {
+    const { baseUrl, bearerToken } = _routingCtx;
+    try {
+      await tauri.core.invoke("apply_model_profile", { baseUrl, bearerToken: bearerToken || null, profile, override: hasUncert });
+      pgClose(overlay);
+      await renderSovereignty();
+      showToast({ kind: "success", title: "Profile applied", body: "It takes effect after the engine restarts." });
+    } catch (err) {
+      pgClose(overlay);
+      showToast({ kind: "failure", title: "Couldn't apply the profile", body: String(err) });
+    }
+  });
+  actions.appendChild(cancel); actions.appendChild(go);
+  pane.appendChild(actions);
+  overlay.appendChild(pane);
+  document.body.appendChild(overlay);
 }
 
 // ── WP-BYOM P3B — the model picker (recipe-first) ──────────────────────────
@@ -1491,6 +1622,7 @@ function locusForSpec(spec) {
   return "vendor-cloud";
 }
 const LOCUS_LABEL = { "org-hardware": "Your hardware", "org-cloud": "Your cloud", "vendor-cloud": "Provider cloud" };
+const ROUTING_GROUP_LABEL = { generation: "Generation", extraction: "Extraction", query: "Query understanding" };
 const LOCUS_CLASS = { "org-hardware": "is-sovereign", "org-cloud": "is-orgcloud", "vendor-cloud": "is-cloud" };
 
 function certForSpec(group, spec) {
