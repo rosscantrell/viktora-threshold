@@ -38,8 +38,14 @@ function setState(cls, label, sub) {
 function fail(reason) {
   ended = true;
   setState("error", "Couldn't start the call", reason);
-  muteBtn.disabled = true;
   hangupBtn.textContent = "Close";
+  // No session exists yet, so the mute slot becomes an in-place Retry — the
+  // mint's engine hop can be momentarily slow (backend retries too; first
+  // live call 2026-07-20 flaked exactly here). Never leave a dead-end error.
+  muteBtn.disabled = false;
+  muteBtn.textContent = "Retry";
+  muteBtn.classList.remove("muted-on");
+  muteBtn.dataset.mode = "retry";
 }
 
 async function closeWindow() {
@@ -58,6 +64,11 @@ function onDisconnect(details) {
   hangupBtn.disabled = false;
   if (details && details.reason === "error") {
     setState("error", "Call dropped", details.message || "Connection error.");
+    // A dropped call can be redialed in place, same as a failed start.
+    muteBtn.disabled = false;
+    muteBtn.textContent = "Retry";
+    muteBtn.classList.remove("muted-on");
+    muteBtn.dataset.mode = "retry";
   } else {
     setState("ended", "Call ended", "Your check-in is being filed.");
     // Give the ended state a beat to be seen, then get out of the way.
@@ -132,6 +143,11 @@ async function start() {
 }
 
 muteBtn.addEventListener("click", () => {
+  if (muteBtn.dataset.mode === "retry") {
+    // Full page reload re-runs the whole start flow from a clean slate.
+    location.reload();
+    return;
+  }
   if (!conversation || ended) return;
   muted = !muted;
   conversation.setMicMuted(muted);
