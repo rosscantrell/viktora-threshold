@@ -1,0 +1,104 @@
+<!doctype html>
+<!--
+  WP-VOICE-THRESHOLD-ENTRY V1 — the call pill. A dedicated small always-on-top
+  WebviewWindow (label "call"), spawned by open_call_window from the Today
+  header's "Check in" entry. Deliberately independent of the main window's
+  widget collapse/expand (brief §D: a call inside index.html dies the moment
+  the one-window shell navigates). V1 keeps the pill minimal — the real
+  render-look pass with Ross is V2.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Check-in</title>
+    <style>
+      :root {
+        --glass-bg: rgba(28, 30, 38, 0.97);
+        --glass-surface: rgba(255, 255, 255, 0.05);
+        --glass-surface-hover: rgba(255, 255, 255, 0.08);
+        --glass-border: rgba(255, 255, 255, 0.1);
+        --glass-text: #e8eaed;
+        --glass-text-dim: #9aa0a6;
+        --glass-accent: #ffc440;
+        --glass-success: #5dcaa5;
+        --glass-danger: #f09595;
+        --glass-radius-lg: 14px;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; background: transparent; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        color: var(--glass-text);
+      }
+      .pill {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        background: var(--glass-bg);
+        border: 1px solid var(--glass-border);
+        border-radius: var(--glass-radius-lg);
+        padding: 14px 16px 12px;
+        overflow: hidden;
+      }
+      .pill-top { flex: 1; min-height: 0; }
+      .state-row { display: flex; align-items: center; gap: 8px; }
+      .state-dot {
+        width: 9px; height: 9px; border-radius: 50%;
+        background: var(--glass-text-dim);
+        flex: 0 0 auto;
+      }
+      .state-dot.connecting { background: var(--glass-accent); animation: pulse 1.2s ease-in-out infinite; }
+      .state-dot.listening  { background: var(--glass-success); animation: pulse 2s ease-in-out infinite; }
+      .state-dot.speaking   { background: var(--glass-accent); }
+      .state-dot.error      { background: var(--glass-danger); animation: none; }
+      .state-dot.ended      { background: var(--glass-text-dim); animation: none; }
+      @keyframes pulse { 50% { opacity: 0.35; } }
+      .state-label { font-size: 14px; font-weight: 600; letter-spacing: 0.01em; }
+      .state-sub {
+        margin-top: 6px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--glass-text-dim);
+        /* failure reasons render here verbatim — give them room, never clip silently */
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .controls { display: flex; gap: 8px; }
+      .btn {
+        flex: 1;
+        font: inherit; font-size: 12.5px; font-weight: 600;
+        color: var(--glass-text);
+        background: var(--glass-surface);
+        border: 1px solid var(--glass-border);
+        border-radius: 9px;
+        padding: 7px 0;
+        cursor: pointer;
+      }
+      .btn:hover { background: var(--glass-surface-hover); }
+      .btn:disabled { opacity: 0.4; cursor: default; }
+      .btn-hangup { color: var(--glass-danger); }
+      .btn.muted-on { color: var(--glass-accent); border-color: var(--glass-accent); }
+      .drag-strip { height: 10px; margin: -14px -16px 4px; cursor: grab; }
+    </style>
+  </head>
+  <body>
+    <div class="pill">
+      <div class="pill-top">
+        <div class="drag-strip" data-tauri-drag-region></div>
+        <div class="state-row">
+          <span id="dot" class="state-dot connecting"></span>
+          <span id="state" class="state-label">Connecting…</span>
+        </div>
+        <p id="sub" class="state-sub">macOS will ask for microphone access.</p>
+      </div>
+      <div class="controls">
+        <button type="button" id="btn-mute" class="btn" disabled>Mute</button>
+        <button type="button" id="btn-hangup" class="btn btn-hangup">Hang up</button>
+      </div>
+    </div>
+    <script type="module" src="call.js"></script>
+  </body>
+</html>

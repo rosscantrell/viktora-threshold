@@ -489,6 +489,14 @@ code {
   background: var(--surface-2);
   border-color: var(--accent);
 }
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-secondary:disabled:hover {
+  background: var(--surface-1);
+  border-color: var(--border-strong);
+}
 .btn-link {
   background: transparent;
   border: none;

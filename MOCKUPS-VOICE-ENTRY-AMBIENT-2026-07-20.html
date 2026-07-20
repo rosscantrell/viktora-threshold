@@ -1,0 +1,226 @@
+<!doctype html>
+<!--
+  MOCKUPS-VOICE-ENTRY-AMBIENT-2026-07-20 — propose-before-build (Ross pixel-gates).
+
+  Ross rulings, gate session 2026-07-20:
+  (1) invocation must be SUBTLE and OMNIPRESENT — click in at any time from the
+      collapsed widget, the expanded app (every view), and the brief window;
+      NOT the prominent Today-header button V1 shipped.
+  (2) PIXEL CONTRACT = MOCKUPS-THRESHOLD-REVIEW-2026-07-20.html (repo main),
+      voice section. Values below are copied LITERALLY from that file — not
+      re-derived from existing button CSS. Grammar that binds everywhere:
+      primary verb = filled neutral #e8eaed/#14151a · secondary = hairline
+      0.5px #3a3d46 · NO green actions (green = state only) · amber = urgency
+      only · 0.5px hairlines throughout.
+
+  Deliverable when BUILDING each surface: a side-by-side composite (contract
+  crop left, build right) so Ross gates a diff, not a vibe. Nothing here is
+  wired yet.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice entry — ambient affordance (pixel contract recut)</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#101218; color:#e8eaed;
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased; padding:48px clamp(24px,6vw,80px) 96px;
+  }
+  h1{font-size:22px;font-weight:700;letter-spacing:.01em}
+  .sub{color:#9aa0a6;margin-top:6px;max-width:68ch}
+  .rule{border:0;border-top:0.5px solid #23252d;margin:36px 0}
+  section{margin-top:44px}
+  h2{font-size:15px;font-weight:600;margin-bottom:4px}
+  .note{font-size:12.5px;color:#9aa0a6;max-width:64ch;margin-bottom:18px}
+  .note code{color:#e8eaed;background:rgba(255,255,255,.05);padding:1px 5px;border-radius:4px;font-size:11.5px}
+  .cap{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6b7178;margin:10px 2px 0}
+  .stage{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+
+  /* ── CONTRACT VALUES (verbatim from MOCKUPS-THRESHOLD-REVIEW-2026-07-20) ── */
+  .appnav{display:flex;align-items:center;gap:2px;padding:8px 12px;border-bottom:0.5px solid #23252d;font-size:12px;color:#9aa0a6;background:#14161d;border-radius:12px 12px 0 0;width:560px}
+  .appnav .dest{padding:4px 10px;border-radius:7px;cursor:default}
+  .appnav .dest.active{background:rgba(255,255,255,0.07);color:#e8eaed}
+  .appnav .spacer{flex:1}
+  .appnav .mic,.ghost-mic{display:inline-flex;align-items:center;gap:6px;border:0.5px solid #3a3d46;border-radius:999px;padding:3px 11px;color:#c9ccd1;font-size:11.5px;background:transparent;cursor:pointer}
+  .btns{font-size:11.5px;border-radius:7px;padding:4px 12px;border:0.5px solid #3a3d46;color:#c9ccd1;background:transparent;cursor:pointer}
+  .pill-mock{width:280px;background:#14161d;border:0.5px solid #33363f;border-radius:14px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,0.5)}
+  .pill-mock .st{display:flex;align-items:center;gap:8px;font-size:12px;color:#e8eaed;margin-bottom:8px}
+  .pill-mock .dot{width:7px;height:7px;border-radius:50%;background:#7ec97e}
+  .pill-mock .line{font-size:11.5px;color:#9aa0a6;line-height:1.5;margin-bottom:10px}
+  .pill-mock .verbs{display:flex;gap:8px}
+  /* ── end contract values ── */
+
+  @keyframes breathe{50%{opacity:.35}}
+  .live-glyph{color:#7ec97e;animation:breathe 2.4s ease-in-out infinite}
+  @media (prefers-reduced-motion:reduce){.live-glyph{animation:none}}
+
+  /* widget facsimile (180×80 real scale, existing widget grammar) */
+  .widget{width:180px;height:80px;display:flex;align-items:center;justify-content:center;gap:10px;position:relative;
+          background:rgba(28,30,38,.97);border:0.5px solid #33363f;border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .action-btn{width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.05);
+              border:0.5px solid #33363f;border-radius:9px;color:#9aa0a6}
+  .widget .corner-mic{position:absolute;right:6px;bottom:5px;display:inline-flex;padding:2px;border:none;background:transparent;color:#6b7178;cursor:pointer}
+  .widget .corner-mic:hover{color:#e8eaed}
+
+  /* brief facsimile */
+  .briefhead{width:420px;padding:14px 16px;background:#14161d;border:0.5px solid #33363f;border-radius:14px}
+  .brief-row{display:flex;align-items:center;justify-content:space-between}
+  .brief-title{font-size:14px;font-weight:600}
+  .brief-tabs{display:flex;gap:6px;margin-top:10px}
+  .brief-tab{font:inherit;font-size:12px;color:#9aa0a6;background:rgba(255,255,255,.05);border:0.5px solid #33363f;border-radius:999px;padding:3px 10px}
+  .brief-tab.on{color:#e8eaed;border-color:#3a3d46}
+
+  .states{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;max-width:900px}
+  .state-card{background:rgba(255,255,255,.05);border:0.5px solid #33363f;border-radius:9px;padding:12px 14px}
+  .state-card b{display:block;font-size:12.5px;margin-bottom:2px}
+  .state-card span{font-size:11.5px;color:#9aa0a6}
+  .state-glyph{margin-bottom:8px}
+
+  .q{max-width:68ch}
+  .q li{margin:8px 0 0 18px;font-size:13px;color:#9aa0a6}
+  .q b{color:#e8eaed}
+</style>
+</head>
+<body>
+
+<h1>Voice entry — one ambient affordance, three surfaces</h1>
+<p class="sub">Recut to the MOCKUPS-THRESHOLD-REVIEW-2026-07-20 pixel contract. The nav entry is the
+contract's hairline ghost pill with a context-aware label; the widget and brief carry the same
+grammar at their own scale; the call window shrinks to the contract's status whisper. Click in at
+any time, from anywhere.</p>
+
+<hr class="rule">
+
+<section>
+  <h2>1 · Expanded app — nav strip (every view; contract-literal)</h2>
+  <p class="note">The contract's <code>.appnav .mic</code> verbatim: 0.5px #3a3d46 hairline, radius
+  999, padding 3px 11px, 11.5px #c9ccd1, icon + label, right end behind the spacer. Label is
+  context-aware — <b>"Check in"</b> on Today, <b>"Walk me through these"</b> on Needs you. The V1
+  Today-header button is removed in this slice (Q1).</p>
+  <div>
+    <div class="appnav">
+      <span class="dest">⌂</span>
+      <span class="dest active">Today</span>
+      <span class="dest">Watching</span>
+      <span class="dest">Log</span>
+      <span class="spacer"></span>
+      <button class="mic" type="button">🎙 Check in</button>
+    </div>
+    <p class="cap">Today · idle — the pill never fills; hover lifts text to #e8eaed only</p>
+  </div>
+  <div style="margin-top:14px">
+    <div class="appnav">
+      <span class="dest">⌂</span>
+      <span class="dest">Today</span>
+      <span class="dest active">Needs you</span>
+      <span class="dest">Log</span>
+      <span class="spacer"></span>
+      <button class="mic" type="button">🎙 Walk me through these</button>
+    </div>
+    <p class="cap">Needs you · same pill, contextual verb</p>
+  </div>
+</section>
+
+<section>
+  <h2>2 · Collapsed widget (180×80, real scale — proposed extension)</h2>
+  <p class="note">The contract doesn't spec the widget; proposal extends its grammar to the
+  smallest honest form: an icon-only ghost glyph in the corner at #6b7178 (a labeled pill doesn't
+  fit 180×80). In-call it breathes #7ec97e — state, not an action, per the grammar rules.</p>
+  <div class="stage">
+    <div>
+      <div class="widget">
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg></div>
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg></div>
+        <button class="corner-mic" title="Talk to your companion" aria-label="Talk to your companion"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button>
+      </div>
+      <p class="cap">idle · #6b7178, wakes to #e8eaed on hover</p>
+    </div>
+    <div>
+      <div class="widget">
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg></div>
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg></div>
+        <button class="corner-mic live-glyph" title="On a call — click to show the call" aria-label="On a call"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button>
+      </div>
+      <p class="cap">in-call · breathes #7ec97e (state only)</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3 · Brief window (brief.html head row — proposed extension)</h2>
+  <p class="note">The brief has room for the labeled form: the contract ghost pill, same values as
+  the nav. Read the brief, click the ear, talk it through.</p>
+  <div>
+    <div class="briefhead">
+      <div class="brief-row">
+        <div class="brief-title">Your morning brief</div>
+        <button class="ghost-mic" type="button">🎙 Check in</button>
+      </div>
+      <div class="brief-tabs">
+        <span class="brief-tab on">Morning</span>
+        <span class="brief-tab">Mid-day</span>
+        <span class="brief-tab">Evening</span>
+      </div>
+    </div>
+    <p class="cap">brief head row</p>
+  </div>
+</section>
+
+<section>
+  <h2>4 · Call window — the contract's status whisper (contract-literal)</h2>
+  <p class="note"><code>.pill-mock</code> verbatim: 280px, #14161d on 0.5px #33363f, radius 14,
+  7px #7ec97e status dot + 12px status line, one 11.5px muted transcript whisper line, two hairline
+  verbs — Hang up gets the amber-hairline treatment (border #7a5c14, text #ffc440). Same dedicated
+  WebviewWindow as V1 (§D lifecycle reasons hold); failure states keep V1's plain reason + Retry.</p>
+  <div>
+    <div class="pill-mock">
+      <div class="st"><span class="dot"></span>In a check-in · 3:12</div>
+      <div class="line">"…pulling up the renewal conflict — it's on your screen. Dana claimed it June 12; you took it July 2. Your call."</div>
+      <div class="verbs"><button class="btns" type="button">Mute</button><button class="btns" type="button" style="border-color:#7a5c14;color:#ffc440;">Hang up</button></div>
+    </div>
+    <p class="cap">280px · always-on-top · drag anywhere on the surface</p>
+  </div>
+</section>
+
+<section>
+  <h2>Affordance states (bind on all three surfaces)</h2>
+  <div class="states">
+    <div class="state-card">
+      <div class="state-glyph"><span class="ghost-mic">🎙 Check in</span></div>
+      <b>Idle</b><span>hairline ghost · #c9ccd1 on 0.5px #3a3d46 (widget corner: icon-only #6b7178)</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><span class="ghost-mic" style="color:#e8eaed">🎙 Check in</span></div>
+      <b>Hover</b><span>text lifts to #e8eaed · border unchanged · never fills</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><span class="ghost-mic"><span class="live-glyph">●</span> In a check-in</span></div>
+      <b>In-call</b><span>7px #7ec97e dot breathes · click fronts the whisper · green = state only</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><span class="ghost-mic" style="opacity:.45;cursor:not-allowed">🎙 Check in</span></div>
+      <b>Not set up</b><span>45% opacity, still visible · tooltip carries the plain reason (fail-visible law)</span>
+    </div>
+  </div>
+</section>
+
+<section class="q">
+  <h2>Open questions for the pixel gate</h2>
+  <ol>
+    <li><b>V1 Today-header button:</b> removed in this slice, or kept until the ambient entry
+        proves itself?</li>
+    <li><b>Widget corner form:</b> icon-only ghost shown (a labeled pill doesn't fit 180×80) —
+        acceptable departure from the nav's labeled form, or should the widget skip the
+        affordance entirely and rely on its right-click menu?</li>
+    <li><b>Context labels beyond Today/Needs-you:</b> contract names two; proposal defaults every
+        other view to "Check in" — confirm or extend the verb map.</li>
+  </ol>
+  <p class="note" style="margin-top:14px">Build deliverable per surface: side-by-side composite
+  (contract crop left · build right) so the gate is a diff, not a vibe.</p>
+</section>
+
+</body>
+</html>
