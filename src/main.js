@@ -106,6 +106,8 @@ const VIEWS = [
   "view-onenote-browse",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-THRESHOLD-NEEDS-YOU N1 — the ratification lane
+  "view-needs-you",
   // WP-VIGILANCE-VOID — "Watching for…" vigilance-void surface
   "view-watching",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
@@ -158,12 +160,15 @@ function showView(id) {
 
 // Destination → enter* fn. Declarations below are hoisted, so this map is safe
 // to build at module-eval time (main.js is deferred → DOM + decls both ready).
+// WP-THRESHOLD-NEEDS-YOU N1 (Ross 2026-07-20): ⌂ Home and Outbox left the bar
+// for good — ⌂'s capture screen stays reachable via goHome fallback routes,
+// and the Outbox view stays reachable at #outbox (its content also lives in
+// Needs you → "Work awaiting your go").
 const NAV_DEST_FNS = {
-  main: () => goHome(),
   today: () => enterLogView(),
+  "needs-you": () => enterNeedsYouView(),
   watching: () => enterWatchingView(),
   log: () => enterDecisionsView(undefined, { from: "home" }),
-  outbox: () => enterOutboxView(),
   edges: () => enterEdgesView(),
   settings: () => enterStandaloneConfigure(),
 };
@@ -171,7 +176,8 @@ const NAV_DEST_FNS = {
 // WP-R0 — nav visibility gate. Retired destinations are HIDDEN from nav +
 // all entry points, but their views/routes remain fully intact and return
 // the moment a flag flips (or debug re-entry is enabled). Absent key = visible.
-const VIEW_VISIBILITY = { watching: false, outbox: false, edges: false };
+// (Outbox is no longer gated — its BUTTON is gone from the bar entirely, N1.)
+const VIEW_VISIBILITY = { watching: false, edges: false };
 
 // Debug re-entry: append #debug-views (or #debugviews) to the window's URL
 // hash, or run `localStorage.setItem("threshold.debugViews", "1")` in the
@@ -204,7 +210,7 @@ function hideNav() {
  * Populate + show the nav bar.
  * @param {Array<{label:string, go?:Function}>} crumbs — last entry is the
  *        current page (its `go` is ignored).
- * @param {{active?:'main'|'today'|'log'|'edges', back?:Function|null}} opts
+ * @param {{active?:'today'|'needs-you'|'watching'|'log'|'edges'|'settings', back?:Function|null}} opts
  */
 function setNav(crumbs, opts = {}) {
   const nav = document.getElementById("app-nav");
@@ -329,6 +335,12 @@ async function bootstrap() {
       return;
     }
 
+    // WP-THRESHOLD-NEEDS-YOU N1 — seed the nav "Needs you" count pill off the
+    // critical path, whatever view we land in. Best-effort: any source failing
+    // leaves the pill unseeded (a partial count would be dishonest), and the
+    // full aggregation refreshes it whenever the view itself loads.
+    refreshNeedsYouPill().catch((e) => console.warn("[main] needs-you pill:", e));
+
     // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
     // navigates here with #tidbit in the URL hash. Bootstrap detects it,
     // fetches the cached tidbit from AppState via IPC, and renders the
@@ -429,6 +441,22 @@ async function bootstrap() {
     // #proxy-queue. Render the proxy-fleet inbox.
     if (window.location.hash === "#proxy-queue") {
       enterProxyQueueView();
+      return;
+    }
+
+    // WP-THRESHOLD-NEEDS-YOU N1 — widget_expand("needs-you") (the ambient
+    // amber badge) navigates here with #needs-you. Render the ratification
+    // lane.
+    if (window.location.hash === "#needs-you") {
+      enterNeedsYouView();
+      return;
+    }
+
+    // WP-THRESHOLD-NEEDS-YOU N1 — the Outbox left the nav (its content lives
+    // in Needs you → "Work awaiting your go") but the view itself stays
+    // reachable by hash, so nothing that linked here goes dead.
+    if (window.location.hash === "#outbox") {
+      enterOutboxView();
       return;
     }
 
@@ -5873,14 +5901,7 @@ async function collectProxyCards() {
   const filedSection = document.getElementById("today-filed-section");
   const filedList = document.getElementById("today-filed-list");
   const payload = await tauri.core.invoke("fetch_proxy_queue");
-  const items = payload && Array.isArray(payload.items) ? payload.items : [];
-  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
-  const filed = live.filter(
-    (it) =>
-      it.status === "confirmed" ||
-      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
-  );
-  const wantsEye = live.filter((it) => !filed.includes(it));
+  const { filed, wantsEye } = splitProxyPiles(payload);
   if (filed.length && filedList && filedSection) {
     for (const item of filed) {
       try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
@@ -16646,23 +16667,14 @@ async function refreshProxyQueue() {
     return;
   }
 
-  const items = payload && Array.isArray(payload.items) ? payload.items : [];
-
   // Dismissed items never surface (the dismiss toast's Undo is the recovery
   // window; server-side the item stays addressable). "undone" is a LEGACY
   // status from before the engine's undo-returns-to-pending fix — filtered as
   // defense against an un-upgraded engine. Split the rest by pile:
   // "Filed confidently" = already-confirmed OR high-band pending; everything
-  // else ("Wants your eye") = pending in the adjudicate band.
-  const live = items.filter(
-    (it) => it && it.status !== "dismissed" && it.status !== "undone",
-  );
-  const filed = live.filter(
-    (it) =>
-      it.status === "confirmed" ||
-      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
-  );
-  const wantsEye = live.filter((it) => !filed.includes(it));
+  // else ("Wants your eye") = pending in the adjudicate band. (The one shared
+  // split rule — splitProxyPiles — also feeds Today's filed line and Needs you.)
+  const { live, filed, wantsEye } = splitProxyPiles(payload);
 
   // "Wants your eye" — full cards.
   if (wantsEye.length) {
@@ -17025,6 +17037,494 @@ function proxyUndoFiled(item, rowEl) {
     title: "Moved back",
     body: "Now waiting on you again.",
   });
+}
+
+// ───────── WP-THRESHOLD-NEEDS-YOU N1 — "Needs you", the ratification lane ─────────
+//
+// One nav destination absorbing every scattered ratify affordance, in three
+// weight groups (names LOCKED, brief §C.2):
+//   "Calls only you can make" — adjudicate-band filings (fetch_proxy_queue →
+//     the same full cards as the proxy inbox, Confirm/Dismiss persisting via
+//     proxy_queue_decide), the organizing-question queue (the SAME QE +
+//     name/merge sources Today's One-question reads), and peer questions
+//     from the check-in packet's intake.
+//   "Work awaiting your go" — outbox drafts (fetch_outbox, full cards with
+//     the canon verbs), peer-answer accept cards + staged prework
+//     (fetch_checkin_brief), and peer handoffs.
+//   "Confirm what happened" — peer receipts (one-tap Confirm ONLY when the
+//     row carries a validated recordRef — engine N3; legacy receipts keep the
+//     honest two-step: open their message, then resolve), and the
+//     filed-for-you pile (collapsed rows, per-row undo via proxyUndoFiled).
+//
+// enterLogView's posture throughout: synchronous skeleton paint, then every
+// source fire-and-forget and independently guarded. Fail-VISIBLE per house
+// law: an unreachable source renders its group header with a plain
+// couldn't-reach line — never a silent absence; the affirmative empty state
+// ("Nothing needs you — all yours") is claimed only when every source
+// settled clean.
+
+// Per-render source settle/fail state + item timestamps (header age line).
+let _nyState = null;
+
+function _nyResetState() {
+  _nyState = {
+    settled: { proxy: false, questions: false, packet: false, outbox: false },
+    failed: { proxy: false, questions: false, packet: false, outbox: false },
+    ages: [], // ms timestamps of items that carry one (oldest drives the sub-line)
+  };
+}
+
+// Which sources feed which group — drives the per-group couldn't-reach lines.
+const _NY_GROUPS = [
+  { key: "calls", sources: ["proxy", "questions", "packet"] },
+  { key: "go", sources: ["outbox", "packet"] },
+  { key: "confirm", sources: ["proxy", "packet"] },
+];
+
+// Plain product language for the couldn't-reach lines (no pipeline names).
+const _NY_SOURCE_LABELS = {
+  proxy: "items filed for you",
+  questions: "your question queue",
+  packet: "what your colleagues sent",
+  outbox: "prepared drafts",
+};
+
+async function enterNeedsYouView() {
+  state.inWizard = false;
+  showView("view-needs-you");
+  setNav([{ label: "Needs you" }], { active: "needs-you", back: () => enterLogView() });
+
+  // ── FIRST PAINT (synchronous) — reset to the skeleton resting state.
+  _nyResetState();
+  for (const id of ["ny-calls-list", "ny-go-list", "ny-confirm-list", "ny-filed-list"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
+  for (const id of ["ny-calls-section", "ny-go-section", "ny-confirm-section", "ny-filed-section"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  for (const id of ["ny-calls-unreachable", "ny-go-unreachable", "ny-confirm-unreachable", "needs-you-empty"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  const skel = document.getElementById("needs-you-skeleton");
+  if (skel) skel.hidden = false;
+  const sub = document.getElementById("needs-you-sub");
+  if (sub) sub.textContent = "Everything waiting on a call from you";
+  wireNeedsYouFiledToggle();
+
+  // ── FIRE-AND-FORGET SOURCES (off the critical path, independently guarded).
+  loadNeedsYouProxy().catch((e) => { console.warn("[main] Needs you (filed for you):", e); _nySettle("proxy", true); });
+  loadNeedsYouQuestions().catch((e) => { console.warn("[main] Needs you (questions):", e); _nySettle("questions", true); });
+  loadNeedsYouPacket().catch((e) => { console.warn("[main] Needs you (colleagues):", e); _nySettle("packet", true); });
+  loadNeedsYouOutbox().catch((e) => { console.warn("[main] Needs you (drafts):", e); _nySettle("outbox", true); });
+}
+
+/** Mark one source settled (failed or clean) and re-reconcile the lane. */
+function _nySettle(source, failed) {
+  if (!_nyState) return;
+  _nyState.settled[source] = true;
+  if (failed) _nyState.failed[source] = true;
+  reconcileNeedsYou();
+}
+
+// The filed-for-you pile toggle (collapsed by default; idempotent wiring —
+// the wireTodayFiledToggle pattern).
+function wireNeedsYouFiledToggle() {
+  const toggle = document.getElementById("ny-filed-toggle");
+  const list = document.getElementById("ny-filed-list");
+  if (!toggle || !list || toggle.dataset.wired) return;
+  toggle.dataset.wired = "1";
+  const chevron = toggle.querySelector(".proxy-pile-chevron");
+  toggle.addEventListener("click", () => {
+    const open = list.hidden;
+    list.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (chevron) chevron.textContent = open ? "▾" : "▸";
+  });
+}
+
+// Proxy source → group 1 cards + group 3 filed rows. Same pile split as the
+// proxy inbox (refreshProxyQueue); the card/row renderers carry their own
+// verbs, all persisting through proxy_queue_decide.
+async function loadNeedsYouProxy() {
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_proxy_queue");
+  } catch (err) {
+    console.warn("[main] fetch_proxy_queue failed (Needs you):", err);
+    _nySettle("proxy", true);
+    return;
+  }
+  const { wantsEye, filed } = splitProxyPiles(payload);
+
+  const callsList = document.getElementById("ny-calls-list");
+  if (callsList) {
+    for (const item of wantsEye) {
+      try { callsList.appendChild(renderProxyCard(item)); }
+      catch (e) { console.warn("[main] renderProxyCard (Needs you):", e); }
+    }
+  }
+
+  const filedList = document.getElementById("ny-filed-list");
+  const filedSection = document.getElementById("ny-filed-section");
+  if (filed.length && filedList && filedSection) {
+    for (const item of filed) {
+      try { filedList.appendChild(renderProxyFiledRow(item)); }
+      catch (e) { console.warn("[main] renderProxyFiledRow (Needs you):", e); }
+    }
+    const headText = document.getElementById("ny-filed-heading-text");
+    if (headText) {
+      headText.textContent = `${filed.length} filed for you — skim & undo any`;
+    }
+    filedSection.hidden = false;
+  }
+  _nySettle("proxy", false);
+}
+
+/** The one pile-split rule, shared by the proxy inbox, Today's filed line and
+ *  Needs you: live = not dismissed/undone; filed = confirmed or high-band;
+ *  wantsEye = the adjudicate-band rest. */
+function splitProxyPiles(payload) {
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+  return { live, filed, wantsEye };
+}
+
+// The organizing-question queue → group 1. The same collectors Today's
+// One-question reads (minus the proxy cards, which group 1 renders as full
+// adjudicate cards via loadNeedsYouProxy). Each collector individually
+// guarded; a rejection marks the group partially unreachable.
+async function loadNeedsYouQuestions() {
+  let anyFailed = false;
+  const guard = (p, label) =>
+    p.catch((e) => { console.warn(`[main] ${label} (Needs you):`, e); anyFailed = true; return []; });
+  const [qe, mergeAsks, nameAsks] = await Promise.all([
+    guard(collectQuestionEngineCard(), "QE card"),
+    guard(collectMergeAskCards(), "merge asks"),
+    guard(collectNameAskCards(), "name asks"),
+  ]);
+  const callsList = document.getElementById("ny-calls-list");
+  if (callsList) {
+    for (const c of [...qe, ...mergeAsks, ...nameAsks]) callsList.appendChild(c);
+  }
+  _nySettle("questions", anyFailed);
+}
+
+// The check-in packet → peer questions (group 1), accept cards + staged
+// prework + peer handoffs (group 2), peer receipts (group 3). ONE fetch feeds
+// all three (the same packet Today and the companion's check-ins read).
+async function loadNeedsYouPacket() {
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_checkin_brief", {
+      lens: null,
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    });
+  } catch (err) {
+    console.warn("[main] fetch_checkin_brief failed (Needs you):", err);
+    _nySettle("packet", true);
+    return;
+  }
+
+  // Peer label join (channel health rows — the renderPeerArrivals pattern).
+  const labelById = new Map();
+  const intake = data && data.intake;
+  const channels = intake && Array.isArray(intake.channels) ? intake.channels : [];
+  for (const ch of channels) {
+    const id = String(ch.channel || "");
+    if (id.startsWith("peer:")) labelById.set(id.slice(5), (ch.health && ch.health.label) || null);
+  }
+  const received = intake && Array.isArray(intake.received) ? intake.received : [];
+  const peerRows = received.filter((r) => String(r.channel || "").startsWith("peer:"));
+
+  const callsList = document.getElementById("ny-calls-list");
+  const goList = document.getElementById("ny-go-list");
+  const confirmList = document.getElementById("ny-confirm-list");
+
+  for (const r of peerRows) {
+    const kind = String(r.envelopeKind || "").toLowerCase();
+    const peerId = String(r.channel).slice(5);
+    const peerLabel = peerSideLabel(labelById.get(peerId), peerId);
+    try {
+      if (kind === "question" && callsList) {
+        callsList.appendChild(renderNeedsYouPeerCard(r, peerLabel));
+      } else if (kind === "handoff" && goList) {
+        goList.appendChild(renderNeedsYouPeerCard(r, peerLabel));
+      } else if (kind === "receipt" && confirmList) {
+        confirmList.appendChild(renderNeedsYouReceiptCard(r, peerLabel));
+      }
+      // "answer" rows: the actionable ones arrive as accept cards below; an
+      // answer WITHOUT one has nothing waiting on the user, so it stays on
+      // Today's peer section rather than padding this lane.
+    } catch (e) { console.warn("[main] peer card (Needs you):", e); }
+    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+    if (!Number.isNaN(ms) && _nyState) _nyState.ages.push(ms);
+  }
+
+  // Group 2 — accept cards lead (a decision the other side already made is
+  // the cheapest win on the board), then staged prework. Same renderers as
+  // Today's "Prepared for you".
+  if (goList) {
+    const prework = data && data.prework;
+    const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
+    for (const card of cards) {
+      try { goList.appendChild(renderAcceptCard(card)); }
+      catch (e) { console.warn("[main] renderAcceptCard (Needs you):", e); }
+    }
+    const items = prework && Array.isArray(prework.items) ? prework.items : [];
+    for (const item of items) {
+      try { goList.appendChild(renderPreworkRow(item)); }
+      catch (e) { console.warn("[main] renderPreworkRow (Needs you):", e); }
+    }
+  }
+  _nySettle("packet", false);
+}
+
+// Outbox drafts → group 2, full cards (expanded by default in this lane) with
+// the existing canon verbs (Dismiss / Copy draft / Mark sent / Send to peer).
+async function loadNeedsYouOutbox() {
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_outbox");
+  } catch (err) {
+    console.warn("[main] fetch_outbox failed (Needs you):", err);
+    _nySettle("outbox", true);
+    return;
+  }
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  const goList = document.getElementById("ny-go-list");
+  if (goList) {
+    for (const item of items) {
+      try { goList.appendChild(renderOutboxCard(item)); }
+      catch (e) { console.warn("[main] renderOutboxCard (Needs you):", e); }
+    }
+  }
+  _nySettle("outbox", false);
+}
+
+// One peer question/handoff as an expanded card in the record-card family.
+// The provenance invariant holds: the envelope doc is always openable when the
+// row carries its id. No fabricated verbs — answering/accepting happens in the
+// reply the user sends, so the card carries the open affordance and the
+// arrival time, nothing invented.
+function renderNeedsYouPeerCard(r, peerLabel) {
+  const card = document.createElement("div");
+  card.className = "record-card needs-you-peer-card";
+
+  const header = document.createElement("div");
+  header.className = "record-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.textContent = peerKindLabel(r.envelopeKind);
+  header.appendChild(chip);
+  const who = document.createElement("span");
+  who.className = "record-chip outbox-peer-chip";
+  who.textContent = peerLabel;
+  header.appendChild(who);
+  card.appendChild(header);
+
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  // The kind chip already says Question/Handoff/… — trim the envelope title's
+  // matching "<Kind> — " prefix so the card doesn't say it twice.
+  const kindWord = peerKindLabel(r.envelopeKind);
+  summary.textContent = (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
+  card.appendChild(summary);
+
+  const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+  if (!Number.isNaN(ms)) {
+    const meta = document.createElement("p");
+    meta.className = "record-meta";
+    meta.textContent = "arrived " + new Date(ms).toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+    card.appendChild(meta);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
+  if (r.docId) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn btn-link";
+    open.textContent = "Open their message →";
+    open.addEventListener("click", () => openSourcePanel(r.docId, null));
+    actions.appendChild(open);
+  }
+  if (actions.childNodes.length) card.appendChild(actions);
+  return card;
+}
+
+// One peer receipt in "Confirm what happened". Two shapes, by what the wire
+// carries: a receipt with a validated recordRef (engine N3) gets the one-tap
+// Confirm — it resolves the cited record through the existing resolve verb,
+// standard Undo toast included. A receipt without one keeps the honest
+// two-step (open their message, then resolve the item where it lives). The
+// conditional IS the design, not a stopgap: envelopes minted before N3 never
+// carry the ref, and a Confirm that can't name its record would be a
+// rubber-stamp.
+function renderNeedsYouReceiptCard(r, peerLabel) {
+  const card = renderNeedsYouPeerCard(r, peerLabel);
+  let actions = card.querySelector(".record-actions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "record-actions";
+    card.appendChild(actions);
+  }
+  if (r.recordRef) {
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    // The card's one primary wears the house amber-tint (pixel-pass D3
+    // grammar) — never the legacy blue.
+    confirm.className = "needs-you-confirm-btn";
+    confirm.textContent = "Confirm";
+    confirm.title = "Confirm — resolve the item this receipt reports done";
+    confirm.addEventListener("click", () => resolveRecord(r.recordRef, card, r.title || ""));
+    actions.insertBefore(confirm, actions.firstChild);
+  } else {
+    const hint = document.createElement("p");
+    hint.className = "record-meta needs-you-two-step";
+    hint.textContent = "Check their message, then resolve the matching item in your Log.";
+    card.insertBefore(hint, actions);
+  }
+  return card;
+}
+
+// Recompute counts, group visibility, couldn't-reach lines, the header
+// sub-line and the nav pill. Called after every source settles.
+function reconcileNeedsYou() {
+  const st = _nyState;
+  if (!st) return;
+
+  let total = 0;
+  const groupCounts = {};
+  for (const g of _NY_GROUPS) {
+    const list = document.getElementById(`ny-${g.key}-list`);
+    let n = list ? list.children.length : 0;
+    if (g.key === "confirm") {
+      const filedList = document.getElementById("ny-filed-list");
+      n += filedList ? filedList.children.length : 0;
+    }
+    groupCounts[g.key] = n;
+    total += n;
+
+    const failedSources = g.sources.filter((s) => st.failed[s]);
+    const section = document.getElementById(`ny-${g.key}-section`);
+    const countEl = document.getElementById(`ny-${g.key}-count`);
+    const unreachable = document.getElementById(`ny-${g.key}-unreachable`);
+    if (countEl) countEl.textContent = n ? String(n) : "";
+    // Fail-VISIBLE: a group with an unreachable source shows its header + a
+    // plain couldn't-reach line. A clean-and-empty group hides (the
+    // affirmative empty state speaks for the whole lane).
+    if (section) section.hidden = !(n > 0 || failedSources.length > 0);
+    if (unreachable) {
+      if (failedSources.length) {
+        unreachable.textContent =
+          "Couldn't reach " +
+          failedSources.map((s) => _NY_SOURCE_LABELS[s]).join(" or ") +
+          " — anything waiting there isn't shown. Refresh to retry.";
+        unreachable.hidden = false;
+      } else {
+        unreachable.hidden = true;
+      }
+    }
+  }
+
+  const allSettled = Object.values(st.settled).every(Boolean);
+  const anyFailed = Object.values(st.failed).some(Boolean);
+  const skel = document.getElementById("needs-you-skeleton");
+  if (skel) skel.hidden = allSettled;
+
+  // The affirmative empty state is only claimed on a CLEAN all-empty — a
+  // failed source must never read as "all yours".
+  const emptyEl = document.getElementById("needs-you-empty");
+  if (emptyEl) emptyEl.hidden = !(allSettled && !anyFailed && total === 0);
+
+  // Header sub-line: count · oldest age · rough minutes to clear.
+  const sub = document.getElementById("needs-you-sub");
+  if (sub && allSettled) {
+    if (total === 0) {
+      sub.textContent = anyFailed ? "Some of this couldn't load" : "All yours";
+    } else {
+      const bits = [`${total} waiting`];
+      if (st.ages.length) {
+        const days = Math.floor((Date.now() - Math.min(...st.ages)) / 86400000);
+        if (days >= 1) bits.push(`oldest is ${days === 1 ? "a day" : `${days} days`} old`);
+      }
+      // Rough clear-time: judgment calls ~90s, gos ~60s, confirms ~30s.
+      const mins = Math.max(
+        1,
+        Math.ceil(groupCounts.calls * 1.5 + groupCounts.go * 1 + groupCounts.confirm * 0.5),
+      );
+      bits.push(`~${mins} min to clear`);
+      sub.textContent = bits.join(" · ");
+    }
+    // The pill mirrors the lane only when the count is whole — a partial load
+    // must never overwrite an honest count with an undercount.
+    if (!anyFailed) updateNeedsYouPill(total);
+  }
+}
+
+/** Nav count pill on "Needs you". Hidden at zero; capped display at 99+. */
+function updateNeedsYouPill(n) {
+  const pill = document.getElementById("app-nav-needs-you-pill");
+  if (!pill || typeof n !== "number") return;
+  pill.textContent = n > 99 ? "99+" : String(n);
+  pill.hidden = n === 0;
+}
+
+// Boot-time pill seed: the SAME sources and split/cap rules the view renders
+// from, counted without touching the view's DOM (the question collectors do
+// build detached cards — that keeps one set of cap/suppression rules instead
+// of a drifting count-only copy). Best-effort throughout: any source failing
+// leaves the pill unseeded rather than showing a partial count.
+async function refreshNeedsYouPill() {
+  if (!tauri) return;
+  let anyFailed = false;
+  const guard = (p) => p.catch(() => { anyFailed = true; return null; });
+  const [proxyPayload, outboxData, packet, qe, mergeAsks, nameAsks] = await Promise.all([
+    guard(tauri.core.invoke("fetch_proxy_queue")),
+    guard(tauri.core.invoke("fetch_outbox")),
+    guard(tauri.core.invoke("fetch_checkin_brief", {
+      lens: null,
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    })),
+    guard(collectQuestionEngineCard()),
+    guard(collectMergeAskCards()),
+    guard(collectNameAskCards()),
+  ]);
+  if (anyFailed) return;
+
+  const { live } = splitProxyPiles(proxyPayload);
+  const outboxN = outboxData && Array.isArray(outboxData.items) ? outboxData.items.length : 0;
+  const questionN = (qe || []).length + (mergeAsks || []).length + (nameAsks || []).length;
+  let packetN = 0;
+  if (packet) {
+    const received = packet.intake && Array.isArray(packet.intake.received) ? packet.intake.received : [];
+    for (const r of received) {
+      if (!String(r.channel || "").startsWith("peer:")) continue;
+      const kind = String(r.envelopeKind || "").toLowerCase();
+      if (kind === "question" || kind === "handoff" || kind === "receipt") packetN++;
+    }
+    const prework = packet.prework;
+    packetN += prework && Array.isArray(prework.acceptCards) ? prework.acceptCards.length : 0;
+    packetN += prework && Array.isArray(prework.items) ? prework.items.length : 0;
+  }
+  updateNeedsYouPill(live.length + outboxN + questionN + packetN);
+}
+
+// Refresh re-enters the view (the enterOutboxView pattern) — idempotent wiring.
+{
+  const refresh = document.getElementById("btn-needs-you-refresh");
+  if (refresh) refresh.addEventListener("click", () => enterNeedsYouView());
 }
 
 // ───────── WP-ONENOTE-EXPORT-04 — OneNote browse view ─────────

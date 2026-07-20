@@ -2693,7 +2693,8 @@ code {
 /* The card's one primary wears the house amber-tint (heads-up/draft-follow-up
    grammar) — never the legacy blue. */
 .today-accept-btn,
-.outbox-send-peer-btn {
+.outbox-send-peer-btn,
+.needs-you-confirm-btn {
   font-size: 11px;
   font-family: inherit;
   padding: 4px 12px;
@@ -2705,7 +2706,8 @@ code {
   transition: background 0.12s ease;
 }
 .today-accept-btn:hover,
-.outbox-send-peer-btn:hover {
+.outbox-send-peer-btn:hover,
+.needs-you-confirm-btn:hover {
   background: rgba(255, 196, 64, 0.22);
 }
 .today-accept-btn:disabled,
@@ -6302,6 +6304,23 @@ button.record-action-badge {
 }
 .app-nav-dest-icon { font-size: 15px; padding: 5px 9px; }
 
+/* WP-THRESHOLD-NEEDS-YOU N1 — the nav count pill on "Needs you". Amber is
+ * urgency's color (house law) and this count IS the urgency signal: how many
+ * calls wait on the user. Hidden at zero. */
+.app-nav-pill[hidden] { display: none; } /* display: outranks [hidden] — house landmine */
+.app-nav-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+  color: #241a05;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+
 /* The persistent nav bar + the always-visible Collapse button supersede the
  * per-view footer back/home/widget buttons. Hide the redundant ones; keep
  * functional footer actions (Refresh / Copy / Sync / Definition). */
@@ -7461,3 +7480,18 @@ button.rec-source {
 .day-digest-item-acts { flex: 0 0 auto; opacity: 0; transition: opacity 0.1s; }
 .day-digest-item:hover .day-digest-item-acts { opacity: 1; }
 .day-digest-more { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; padding-left: 3px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-NEEDS-YOU N1 — "Needs you" view. The groups wear Today's
+ * section grammar (today-brief-section / today-section-head) so the two
+ * destinations read as one family; only the list spacing and the
+ * couldn't-reach line are new.
+ * ════════════════════════════════════════════════════════════════════════════ */
+.needs-you-list { display: grid; gap: 10px; }
+.needs-you-list:empty { display: none; }
+.needs-you-group { margin-bottom: 22px; }
+/* Fail-VISIBLE: the couldn't-reach line under a group whose source is down. */
+.needs-you-unreachable { color: var(--warn-text); }
+.needs-you-empty { font-size: 13px; }
+/* Two-step hint on legacy receipts (no recordRef on the wire yet). */
+.needs-you-two-step { color: var(--text-tertiary); }

@@ -427,21 +427,24 @@ if (logIndicator) {
     e.stopPropagation();
     e.preventDefault();
     try {
-      await invoke("widget_expand", { targetTab: "log" });
+      // WP-THRESHOLD-NEEDS-YOU N1 — the badge counts what needs the user, and
+      // "Needs you" is now that queue's one destination, so the badge lands
+      // there (main.js routes the #needs-you hash).
+      await invoke("widget_expand", { targetTab: "needs-you" });
     } catch (err) {
-      console.warn("[widget] log expand failed:", err);
+      console.warn("[widget] needs-you expand failed:", err);
     }
   });
 }
 
 /**
- * WP-R2 — the amber "Today" badge now counts what needs you TODAY: the ratify
- * queue's pending proposals (get_proxy_queue_count) PLUS the overdue-silent
- * decision-log items (get_decision_log_summary → summary.overdueSilent). The
- * rebuilt Today view leads with the "Needs you" queue, so the badge points at
- * that pile + the overdue tail. Both counts are summed CLIENT-SIDE from the two
- * existing best-effort IPCs (each returns 0 on any error), so no server change
- * is needed. Hidden at zero; capped display at "99+".
+ * WP-R2 — the amber badge counts what needs you: the ratify queue's pending
+ * proposals (get_proxy_queue_count) PLUS the overdue-silent decision-log items
+ * (get_decision_log_summary → summary.overdueSilent). WP-THRESHOLD-NEEDS-YOU
+ * N1 — clicking it now opens the "Needs you" destination (the ratification
+ * lane), which is exactly the queue this count fronts. Both counts are summed
+ * CLIENT-SIDE from the two existing best-effort IPCs (each returns 0 on any
+ * error), so no server change is needed. Hidden at zero; capped at "99+".
  */
 async function refreshLogBadge() {
   if (!logIndicator) return;
@@ -457,7 +460,7 @@ async function refreshLogBadge() {
     const n = overdue + pending;
     if (n > 0) {
       logIndicator.textContent = n > 99 ? "99+" : String(n);
-      logIndicator.title = `${n} need${n === 1 ? "s" : ""} you today — open Today`;
+      logIndicator.title = `${n} need${n === 1 ? "s" : ""} you — open Needs you`;
       shown = true;
     }
   } catch (err) {
