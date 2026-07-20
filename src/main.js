@@ -106,6 +106,8 @@ const VIEWS = [
   "view-onenote-browse",
   // WP-THRESHOLD-LOG-UX — "Today" decision/commitment-log view
   "view-log",
+  // WP-THRESHOLD-NEEDS-YOU N1 — the ratification lane
+  "view-needs-you",
   // WP-VIGILANCE-VOID — "Watching for…" vigilance-void surface
   "view-watching",
   // WP-THRESHOLD-LOG-UX — Receipts (the evidence dossier)
@@ -158,12 +160,15 @@ function showView(id) {
 
 // Destination → enter* fn. Declarations below are hoisted, so this map is safe
 // to build at module-eval time (main.js is deferred → DOM + decls both ready).
+// WP-THRESHOLD-NEEDS-YOU N1 (Ross 2026-07-20): ⌂ Home and Outbox left the bar
+// for good — ⌂'s capture screen stays reachable via goHome fallback routes,
+// and the Outbox view stays reachable at #outbox (its content also lives in
+// Needs you → "Work awaiting your go").
 const NAV_DEST_FNS = {
-  main: () => goHome(),
   today: () => enterLogView(),
+  "needs-you": () => enterNeedsYouView(),
   watching: () => enterWatchingView(),
   log: () => enterDecisionsView(undefined, { from: "home" }),
-  outbox: () => enterOutboxView(),
   edges: () => enterEdgesView(),
   settings: () => enterStandaloneConfigure(),
 };
@@ -171,7 +176,8 @@ const NAV_DEST_FNS = {
 // WP-R0 — nav visibility gate. Retired destinations are HIDDEN from nav +
 // all entry points, but their views/routes remain fully intact and return
 // the moment a flag flips (or debug re-entry is enabled). Absent key = visible.
-const VIEW_VISIBILITY = { watching: false, outbox: false, edges: false };
+// (Outbox is no longer gated — its BUTTON is gone from the bar entirely, N1.)
+const VIEW_VISIBILITY = { watching: false, edges: false };
 
 // Debug re-entry: append #debug-views (or #debugviews) to the window's URL
 // hash, or run `localStorage.setItem("threshold.debugViews", "1")` in the
@@ -204,7 +210,7 @@ function hideNav() {
  * Populate + show the nav bar.
  * @param {Array<{label:string, go?:Function}>} crumbs — last entry is the
  *        current page (its `go` is ignored).
- * @param {{active?:'main'|'today'|'log'|'edges', back?:Function|null}} opts
+ * @param {{active?:'today'|'needs-you'|'watching'|'log'|'edges'|'settings', back?:Function|null}} opts
  */
 function setNav(crumbs, opts = {}) {
   const nav = document.getElementById("app-nav");
@@ -329,6 +335,12 @@ async function bootstrap() {
       return;
     }
 
+    // WP-THRESHOLD-NEEDS-YOU N1 — seed the nav "Needs you" count pill off the
+    // critical path, whatever view we land in. Best-effort: any source failing
+    // leaves the pill unseeded (a partial count would be dishonest), and the
+    // full aggregation refreshes it whenever the view itself loads.
+    refreshNeedsYouPill().catch((e) => console.warn("[main] needs-you pill:", e));
+
     // WP-Threshold-Tidbit-Return Phase B — `widget_expand("tidbit")`
     // navigates here with #tidbit in the URL hash. Bootstrap detects it,
     // fetches the cached tidbit from AppState via IPC, and renders the
@@ -429,6 +441,22 @@ async function bootstrap() {
     // #proxy-queue. Render the proxy-fleet inbox.
     if (window.location.hash === "#proxy-queue") {
       enterProxyQueueView();
+      return;
+    }
+
+    // WP-THRESHOLD-NEEDS-YOU N1 — widget_expand("needs-you") (the ambient
+    // amber badge) navigates here with #needs-you. Render the ratification
+    // lane.
+    if (window.location.hash === "#needs-you") {
+      enterNeedsYouView();
+      return;
+    }
+
+    // WP-THRESHOLD-NEEDS-YOU N1 — the Outbox left the nav (its content lives
+    // in Needs you → "Work awaiting your go") but the view itself stays
+    // reachable by hash, so nothing that linked here goes dead.
+    if (window.location.hash === "#outbox") {
+      enterOutboxView();
       return;
     }
 
@@ -5873,14 +5901,7 @@ async function collectProxyCards() {
   const filedSection = document.getElementById("today-filed-section");
   const filedList = document.getElementById("today-filed-list");
   const payload = await tauri.core.invoke("fetch_proxy_queue");
-  const items = payload && Array.isArray(payload.items) ? payload.items : [];
-  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
-  const filed = live.filter(
-    (it) =>
-      it.status === "confirmed" ||
-      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
-  );
-  const wantsEye = live.filter((it) => !filed.includes(it));
+  const { filed, wantsEye } = splitProxyPiles(payload);
   if (filed.length && filedList && filedSection) {
     for (const item of filed) {
       try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
@@ -16589,6 +16610,16 @@ function deriveProxyAsk(item) {
   return { ask, isNewShape: false, debugTrace: item.debugTrace };
 }
 
+// Plain-language kind chips for the card header line (pixel contract) — the
+// user-facing register, not the fleet's verbs.
+const PROXY_KIND_CHIP_LABELS = {
+  merge: "same thing?",
+  combine: "same thing?",
+  close: "looks done",
+  chase: "gone quiet",
+  escalate: "re-promised",
+};
+
 // Human labels for the routing-verdict chip.
 const PROXY_VERDICT_LABELS = {
   DUPLICATE: "duplicate",
@@ -16619,6 +16650,7 @@ async function enterProxyQueueView() {
 
 /** Re-fetch + re-render both piles. Called on view-enter and on Refresh. */
 async function refreshProxyQueue() {
+  invalidateProxyCardCtx(); // cards re-join the log fresh per refresh
   const attentionList = document.getElementById("proxy-attention-list");
   const filedList = document.getElementById("proxy-filed-list");
   const attentionPile = document.getElementById("proxy-pile-attention");
@@ -16646,23 +16678,14 @@ async function refreshProxyQueue() {
     return;
   }
 
-  const items = payload && Array.isArray(payload.items) ? payload.items : [];
-
   // Dismissed items never surface (the dismiss toast's Undo is the recovery
   // window; server-side the item stays addressable). "undone" is a LEGACY
   // status from before the engine's undo-returns-to-pending fix — filtered as
   // defense against an un-upgraded engine. Split the rest by pile:
   // "Filed confidently" = already-confirmed OR high-band pending; everything
-  // else ("Wants your eye") = pending in the adjudicate band.
-  const live = items.filter(
-    (it) => it && it.status !== "dismissed" && it.status !== "undone",
-  );
-  const filed = live.filter(
-    (it) =>
-      it.status === "confirmed" ||
-      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
-  );
-  const wantsEye = live.filter((it) => !filed.includes(it));
+  // else ("Wants your eye") = pending in the adjudicate band. (The one shared
+  // split rule — splitProxyPiles — also feeds Today's filed line and Needs you.)
+  const { live, filed, wantsEye } = splitProxyPiles(payload);
 
   // "Wants your eye" — full cards.
   if (wantsEye.length) {
@@ -16731,27 +16754,72 @@ function renderProxyCard(item) {
   card.dataset.kind = item.kind || "";
   card.dataset.id = item.id || "";
 
-  // Card anatomy (§ WP-R2 amendment item 6), in this order:
-  //   1. The ask first — a plain question (derived; dual-schema tolerant).
-  //   2. The two dated quotes — the primary content a human judges (receipts).
-  //   3. Plain-language confidence — "78% confident" (not "agreement/adjudicate-band").
-  //   4. Everything mechanical behind a collapsed "Details" affordance.
+  // Card anatomy (§ WP-R2 amendment item 6, reworked per Ross's #196 redline
+  // 2026-07-20 — "nothing here gives context"), in this order:
+  //   1. The SUBJECT first — the joined decision-log record(s) this call is
+  //      about, as N0 rows (click → the full record card with its receipts /
+  //      source / relationship affordances). Async join off one shared cached
+  //      fetch; the ask carries the card alone until it lands.
+  //   2. The ask — headline pre-join, demoted to the second line after.
+  //   3. The plain-language why — user-facing prose, no longer buried.
+  //   4. The dated quotes, each with its source badge where one resolves.
+  //   5. Everything mechanical (incl. the confidence %) behind Details.
   const derived = deriveProxyAsk(item);
 
-  // ── 1. The ask, first ──────────────────────────────────────────────────────
+  // ── 0. Header line (pixel contract, mock .nh): plain-language kind chip +
+  //    muted who/when on ONE line. "filed for you" — never fleet vocabulary.
+  const head = document.createElement("div");
+  head.className = "record-header proxy-card-head";
+  const kindChip = document.createElement("span");
+  kindChip.className = "record-chip proxy-kind-chip";
+  kindChip.textContent = PROXY_KIND_CHIP_LABELS[item.kind] || "for review";
+  head.appendChild(kindChip);
+  const cardWho = document.createElement("span");
+  cardWho.className = "proxy-card-who";
+  const ts = item.ts ? Date.parse(item.ts) : NaN;
+  cardWho.textContent =
+    "filed for you" +
+    (Number.isNaN(ts)
+      ? ""
+      : " · " + new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+  head.appendChild(cardWho);
+  card.appendChild(head);
+
+  // ── 1. The subject slot. Fail-VISIBLE: a join that can't resolve renders a
+  //    plain couldn't-load line, never a silently context-free card.
+  const subjectSlot = document.createElement("div");
+  subjectSlot.className = "proxy-subject-slot";
+  card.appendChild(subjectSlot);
+
+  // ── 2. The ask.
   const question = document.createElement("p");
   question.className = "proxy-question";
   question.textContent = derived.ask;
   card.appendChild(question);
+  mountProxySubjectJoin(subjectSlot, question, item);
 
-  // ── 2. The dated quotes — the decision content, via the ONE receipt component.
+  // ── 3. The explanation — evidence.why (new shape: item.why) is already
+  //    user-facing prose ("Same commitment captured in two meetings 6 days
+  //    apart…"); it was invisible inside Details.
+  const whyText =
+    (typeof item.why === "string" && item.why.trim()) ? item.why.trim() : (ev.why || "");
+  if (whyText) {
+    const why = document.createElement("p");
+    why.className = "proxy-why";
+    why.textContent = whyText;
+    card.appendChild(why);
+  }
+
+  // ── 4. The dated quotes — the decision content, via the ONE receipt component.
   //    Proxy verbatims are fleet-surfaced evidence (already citation-scoped), so
-  //    they render as quotes (verified); the source pane isn't wired in the proxy
-  //    queue, so jump is off. Each quote is paired with its date when available.
+  //    they render as quotes (verified). Each pairs with its date, and (async)
+  //    with its record's source badge where the doc resolves — the same
+  //    renderSourceBadge → openSourcePanel jump the Log uses.
   const evidence = document.createElement("div");
   evidence.className = "proxy-evidence";
   const verbatims = Array.isArray(ev.verbatims) ? ev.verbatims : [];
   const evDates = Array.isArray(ev.dates) ? ev.dates : [];
+  const receiptEls = [];
   for (let i = 0; i < verbatims.length; i++) {
     const v = verbatims[i];
     if (!v) continue;
@@ -16761,26 +16829,24 @@ function renderProxyCard(item) {
     );
     const d = evDates[i];
     if (d) {
+      // Pixel contract: the date rides inline at the end of its quote
+      // ("…same as last two syncs." — 2026-05-28), not on its own row.
       const dateEl = document.createElement("span");
       dateEl.className = "proxy-quote-date";
-      dateEl.textContent = String(d).slice(0, 10);
-      receipt.appendChild(dateEl);
+      dateEl.textContent = "— " + String(d).slice(0, 10);
+      const quote = receipt.querySelector(".receipt-quote");
+      (quote || receipt).appendChild(dateEl);
     }
+    receiptEls.push({ i, el: receipt });
     evidence.appendChild(receipt);
   }
   card.appendChild(evidence);
+  mountProxyVerbatimSources(receiptEls, ev);
 
-  // ── 3. Plain-language confidence ───────────────────────────────────────────
-  if (typeof item.confidence === "number") {
-    const conf = document.createElement("p");
-    conf.className = "proxy-confidence";
-    conf.textContent = Math.round(item.confidence * 100) + "% confident";
-    card.appendChild(conf);
-  }
-
-  // ── 4. Details — everything mechanical, collapsed by default. Legacy jargon
-  //    (why / verdict / routes / cosine / owners) OR the new-shape debugTrace all
-  //    live here so the card face stays plain. Only rendered when there's content.
+  // ── 5. Details — everything mechanical, collapsed by default. The verdict /
+  //    routes / cosine / owners, the new-shape debugTrace, AND the confidence
+  //    percentage (redline item 6: a raw % on the card face brushes the
+  //    no-classifier-internals law — the face stays qualitative) live here.
   const detailBits = [];
   // New-shape debugTrace routes here verbatim (string or JSON-stringified object).
   if (derived.debugTrace != null) {
@@ -16790,9 +16856,10 @@ function renderProxyCard(item) {
         : JSON.stringify(derived.debugTrace, null, 2);
     if (traceText && traceText.trim()) detailBits.push({ type: "trace", text: traceText });
   }
-  // Legacy mechanical fields. On the new shape these are typically absent.
-  if (ev.why) detailBits.push({ type: "why", text: ev.why });
   const metaSegs = [];
+  if (typeof item.confidence === "number") {
+    metaSegs.push(Math.round(item.confidence * 100) + "% confident");
+  }
   const owners = Array.isArray(ev.owners) ? ev.owners.filter(Boolean) : [];
   if (owners.length) metaSegs.push(owners.map(prettySlug).join(", "));
   if (typeof ev.cosine === "number") metaSegs.push("cos " + ev.cosine.toFixed(2));
@@ -16840,15 +16907,6 @@ function renderProxyCard(item) {
       body.appendChild(chips);
     }
 
-    // WP-R3 item 5 — open the underlying record's SOURCE in the right-hand pane,
-    // exactly like the Log. Resolve each evidence.recordId → documentId (the
-    // record→doc map, from the decision log), then let R1's existing jump
-    // (renderSourceBadge → openSourcePanel) open the pane. FULL reuse — no new
-    // pane, no new endpoint. Graceful: the FIXTURE's synthetic recordIds won't be
-    // in the corpus log, so they resolve to nothing and NO affordance renders (no
-    // dead link). Async-fills when the maps land; if already cached, fills now.
-    mountProxySourceAffordance(body, ev);
-
     details.appendChild(body);
     card.appendChild(details);
   }
@@ -16888,39 +16946,111 @@ function renderProxyCard(item) {
   return card;
 }
 
-// WP-R3 item 5 — resolve a proxy item's evidence.recordIds to their source docs
-// and append a "source" affordance (reusing renderSourceBadge → openSourcePanel,
-// the Log's mechanism) into `container`. Async: both the record→doc and doc maps
-// must be loaded so the badge can name the source type + open the pane. Renders
-// NOTHING when nothing resolves — the fixture's synthetic recordIds (rec-4821 …)
-// aren't in the corpus log, so they yield no badge (no broken/dead link). One
-// badge per distinct resolvable document (deduped).
-async function mountProxySourceAffordance(container, ev) {
-  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
-  if (!recordIds.length) return;
-  // Both maps are needed: recordId→documentId to resolve, and _docsById (via
-  // loadDocsMap) so renderSourceBadge can render + open. Best-effort; either
-  // failing just leaves the map empty → no affordance.
-  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
-  const seen = new Set();
-  const badges = [];
-  for (const rid of recordIds) {
-    const docId = recDoc.get(rid);
-    if (!docId || seen.has(docId)) continue;
-    // renderSourceBadge returns null when the doc isn't in _docsById (no metadata) —
-    // so an unresolvable/orphan doc adds nothing. This is the graceful path.
-    const chip = renderSourceBadge(docId, null);
-    if (chip) { seen.add(docId); badges.push(chip); }
+// ── The subject join (Ross redline on #196, 2026-07-20) ────────────────────
+//
+// A shared, cached decision-log context so every proxy card joins its
+// evidence.recordIds against the live records with ONE fetch per view entry.
+// Invalidated on enterNeedsYouView / refreshProxyQueue so a re-entry re-joins
+// fresh. A failed fetch never poisons the cache (next call retries).
+let _proxyCardCtxPromise = null;
+
+function invalidateProxyCardCtx() {
+  _proxyCardCtxPromise = null;
+}
+
+function loadProxyCardCtx() {
+  if (!_proxyCardCtxPromise) {
+    _proxyCardCtxPromise = (async () => {
+      const data = await tauri.core.invoke("fetch_decision_log_full");
+      const items = Array.isArray(data && data.records) ? data.records : [];
+      const byId = new Map();
+      for (const it of items) {
+        const rec = it && it.record ? it.record : it;
+        if (rec && rec.recordId) byId.set(rec.recordId, rec);
+      }
+      const ctx = {
+        items,
+        byId,
+        docProjects: new Map(),
+        edges: Array.isArray(data && data.edges) ? data.edges : [],
+        aliases: (data && data.aliases) || {},
+        jobNames: (data && data.jobNames) || {},
+        recordJobs: (data && data.recordJobs) || {},
+        frames: [],
+        facets: [],
+        jobHeat: (data && data.jobHeat) || {},
+        actionKinds: (data && data.actionKinds) || {},
+        recordRelationship: (data && data.recordRelationship) || {},
+        nursery: [],
+      };
+      // Share it as the ambient decisions context when the Log hasn't loaded
+      // its own (the receipts-view precedent) so an expanded subject row's
+      // full card resolves its badges / popovers / relationship chip.
+      if (!_decisionsCtx) _decisionsCtx = ctx;
+      return ctx;
+    })();
+    _proxyCardCtxPromise.catch(() => { _proxyCardCtxPromise = null; });
   }
-  if (!badges.length) return; // nothing resolved — no dead link
-  const row = document.createElement("div");
-  row.className = "proxy-source-row";
-  const lbl = document.createElement("span");
-  lbl.className = "proxy-source-label";
-  lbl.textContent = badges.length === 1 ? "Source" : "Sources";
-  row.appendChild(lbl);
-  for (const b of badges) row.appendChild(b);
-  container.appendChild(row);
+  return _proxyCardCtxPromise;
+}
+
+// Fill a proxy card's subject slot with the joined record(s) as N0 rows —
+// the one row grammar everywhere; click → the full record card with its
+// receipts / source / resolve / relationship affordances. Merge-kind items
+// carry both ends and both render (the Relationships edge-card way). On
+// success the ask demotes to the second line. Fail-VISIBLE: a log fetch that
+// fails or ids that no longer resolve render a plain couldn't-load line —
+// never a silently context-free card.
+async function mountProxySubjectJoin(slot, questionEl, item) {
+  const ev = (item && item.evidence) || {};
+  const ids = Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+  if (!ids.length) return; // new-shape items may carry none — the ask stays the headline
+  const missingLine = (text) => {
+    const p = document.createElement("p");
+    p.className = "proxy-join-missing";
+    p.textContent = text;
+    slot.appendChild(p);
+  };
+  let ctx;
+  try {
+    ctx = await loadProxyCardCtx();
+  } catch (err) {
+    console.warn("[main] proxy subject join failed:", err);
+    missingLine("Couldn't load the record behind this — the quotes below are the only context.");
+    return;
+  }
+  const found = ids.map((rid) => ctx.byId.get(rid)).filter(Boolean);
+  for (const rec of found) {
+    try {
+      slot.appendChild(renderRecordRow(rec, recordStateById(ctx, rec.recordId), [], { ctx }));
+    } catch (e) {
+      console.warn("[main] proxy subject row:", e);
+    }
+  }
+  if (found.length) questionEl.classList.add("proxy-question-demoted");
+  if (found.length < ids.length) {
+    missingLine(
+      found.length
+        ? "One of the records behind this couldn't be loaded."
+        : "Couldn't find the record behind this — it may have been removed.",
+    );
+  }
+}
+
+// Per-quote source badges: each verbatim pairs positionally with its
+// evidence.recordId (the fleet emits them together); resolve record → doc →
+// the same renderSourceBadge → openSourcePanel jump the Log uses. Best-effort
+// and graceful: an unresolvable record/doc adds nothing (no dead link).
+async function mountProxyVerbatimSources(receipts, ev) {
+  const recordIds = ev && Array.isArray(ev.recordIds) ? ev.recordIds : [];
+  if (!recordIds.length || !receipts.length) return;
+  const [recDoc] = await Promise.all([loadRecordDocMap(), loadDocsMap()]);
+  for (const { i, el } of receipts) {
+    const docId = recDoc.get(recordIds[i]);
+    if (!docId) continue;
+    const chip = renderSourceBadge(docId, null); // null when doc metadata is absent
+    if (chip) el.appendChild(chip);
+  }
 }
 
 /**
@@ -17025,6 +17155,670 @@ function proxyUndoFiled(item, rowEl) {
     title: "Moved back",
     body: "Now waiting on you again.",
   });
+}
+
+// ───────── WP-THRESHOLD-NEEDS-YOU N1 — "Needs you", the ratification lane ─────────
+//
+// One nav destination absorbing every scattered ratify affordance, in three
+// weight groups (names LOCKED, brief §C.2). SHAPE RULING (Ross at the live
+// gate, 2026-07-20): the lane is a THIN INDEX — collapsed one-line rows only
+// (renderNeedsYouRow), each expanding IN PLACE into the existing card that
+// carries the verbs. No card is expanded by default; ratification CTAs live
+// on the cards they always lived on.
+//   "Calls only you can make" — adjudicate-band filings (fetch_proxy_queue →
+//     the same full cards as the proxy inbox, Confirm/Dismiss persisting via
+//     proxy_queue_decide), the organizing-question queue (the SAME QE +
+//     name/merge sources Today's One-question reads), and peer questions
+//     from the check-in packet's intake.
+//   "Work awaiting your go" — outbox drafts (fetch_outbox, full cards with
+//     the canon verbs), peer-answer accept cards + staged prework
+//     (fetch_checkin_brief), and peer handoffs.
+//   "Confirm what happened" — peer receipts (one-tap Confirm ONLY when the
+//     row carries a validated recordRef — engine N3; legacy receipts keep the
+//     honest two-step: open their message, then resolve), and the
+//     filed-for-you pile (collapsed rows, per-row undo via proxyUndoFiled).
+//
+// enterLogView's posture throughout: synchronous skeleton paint, then every
+// source fire-and-forget and independently guarded. Fail-VISIBLE per house
+// law: an unreachable source renders its group header with a plain
+// couldn't-reach line — never a silent absence; the affirmative empty state
+// ("Nothing needs you — all yours") is claimed only when every source
+// settled clean.
+
+// Per-render source settle/fail state + item timestamps (header age line).
+let _nyState = null;
+
+function _nyResetState() {
+  _nyState = {
+    settled: { proxy: false, questions: false, packet: false, outbox: false },
+    failed: { proxy: false, questions: false, packet: false, outbox: false },
+    ages: [], // ms timestamps of items that carry one (oldest drives the sub-line)
+  };
+}
+
+// Which sources feed which group — drives the per-group couldn't-reach lines.
+const _NY_GROUPS = [
+  { key: "calls", sources: ["proxy", "questions", "packet"] },
+  { key: "go", sources: ["outbox", "packet"] },
+  { key: "confirm", sources: ["proxy", "packet"] },
+];
+
+// Plain product language for the couldn't-reach lines (no pipeline names).
+const _NY_SOURCE_LABELS = {
+  proxy: "items filed for you",
+  questions: "your question queue",
+  packet: "what your colleagues sent",
+  outbox: "prepared drafts",
+};
+
+async function enterNeedsYouView() {
+  state.inWizard = false;
+  showView("view-needs-you");
+  setNav([{ label: "Needs you" }], { active: "needs-you", back: () => enterLogView() });
+
+  // ── FIRST PAINT (synchronous) — reset to the skeleton resting state.
+  _nyResetState();
+  _nyRowsExpanded.clear(); // rows start collapsed on every entry (thin index)
+  invalidateProxyCardCtx(); // adjudicate cards re-join the log fresh per entry
+  for (const id of ["ny-calls-list", "ny-go-list", "ny-confirm-list", "ny-filed-list"]) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = "";
+  }
+  for (const id of ["ny-calls-section", "ny-go-section", "ny-confirm-section", "ny-filed-section"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  for (const id of ["ny-calls-unreachable", "ny-go-unreachable", "ny-confirm-unreachable", "needs-you-empty"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  }
+  const skel = document.getElementById("needs-you-skeleton");
+  if (skel) skel.hidden = false;
+  const sub = document.getElementById("needs-you-sub");
+  if (sub) sub.textContent = "Everything waiting on a call from you";
+  wireNeedsYouFiledToggle();
+
+  // ── FIRE-AND-FORGET SOURCES (off the critical path, independently guarded).
+  loadNeedsYouProxy().catch((e) => { console.warn("[main] Needs you (filed for you):", e); _nySettle("proxy", true); });
+  loadNeedsYouQuestions().catch((e) => { console.warn("[main] Needs you (questions):", e); _nySettle("questions", true); });
+  loadNeedsYouPacket().catch((e) => { console.warn("[main] Needs you (colleagues):", e); _nySettle("packet", true); });
+  loadNeedsYouOutbox().catch((e) => { console.warn("[main] Needs you (drafts):", e); _nySettle("outbox", true); });
+}
+
+// ── The thin index (Ross ruling at the live gate, 2026-07-20): the lane
+// renders collapsed one-line rows ONLY — chip · summary · meta, the N0 row
+// grammar — and every verb stays on the existing card the row expands into,
+// in place. Nothing is expanded by default; the wall-of-cards shape is gone.
+// Expansion state survives a same-view re-render via _nyRowsExpanded, reset
+// on each entry (rows start collapsed every visit, the _outlookExpanded
+// pattern).
+const _nyRowsExpanded = new Set();
+
+function renderNeedsYouRow(key, chipText, summaryText, metaText, buildCard, opts) {
+  opts = opts || {};
+  const wrap = document.createElement("div");
+  wrap.className = "ny-row-wrap";
+  if (key) wrap.dataset.key = key;
+
+  const row = document.createElement("div");
+  row.className = "ny-row";
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  row.setAttribute("aria-expanded", "false");
+  row.title = "Show the full card";
+  const chip = document.createElement("span");
+  chip.className = "ny-row-chip";
+  chip.textContent = chipText;
+  if (opts.amberChip) chip.classList.add("is-amber");
+  row.appendChild(chip);
+  const sum = document.createElement("span");
+  sum.className = "ny-row-summary";
+  sum.textContent = summaryText;
+  row.appendChild(sum);
+  const meta = document.createElement("span");
+  meta.className = "ny-row-meta";
+  meta.textContent = metaText || "";
+  row.appendChild(meta);
+
+  const collapse = () => {
+    const holder = wrap.querySelector(".ny-row-card");
+    if (holder) holder.remove();
+    delete wrap.dataset.expanded;
+    wrap.appendChild(row);
+    if (key) _nyRowsExpanded.delete(key);
+    row.focus();
+  };
+  const expand = () => {
+    if (wrap.querySelector(".ny-row-card")) return;
+    let card;
+    try {
+      card = buildCard();
+    } catch (e) {
+      console.warn("[main] needs-you row card:", e);
+      return;
+    }
+    const holder = document.createElement("div");
+    holder.className = "ny-row-card";
+    const chev = document.createElement("button");
+    chev.type = "button";
+    chev.className = "ny-row-collapse";
+    chev.textContent = "▾";
+    chev.title = "Collapse to one line";
+    chev.setAttribute("aria-label", "Collapse to one line");
+    chev.addEventListener("click", collapse);
+    holder.appendChild(chev);
+    holder.appendChild(card);
+    row.remove();
+    wrap.dataset.expanded = "true";
+    wrap.appendChild(holder);
+    if (key) _nyRowsExpanded.add(key);
+  };
+  row.addEventListener("click", () => expand());
+  row.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); expand(); }
+  });
+
+  wrap.appendChild(row);
+  // The async subject join upgrades a row's text once records resolve.
+  wrap._updateRow = (s, m) => {
+    if (s) sum.textContent = s;
+    if (m != null) meta.textContent = m;
+  };
+  if (key && _nyRowsExpanded.has(key)) expand();
+  return wrap;
+}
+
+/** Mark one source settled (failed or clean) and re-reconcile the lane. */
+function _nySettle(source, failed) {
+  if (!_nyState) return;
+  _nyState.settled[source] = true;
+  if (failed) _nyState.failed[source] = true;
+  reconcileNeedsYou();
+}
+
+// The filed-for-you pile toggle (collapsed by default; idempotent wiring —
+// the wireTodayFiledToggle pattern).
+function wireNeedsYouFiledToggle() {
+  const toggle = document.getElementById("ny-filed-toggle");
+  const list = document.getElementById("ny-filed-list");
+  if (!toggle || !list || toggle.dataset.wired) return;
+  toggle.dataset.wired = "1";
+  const chevron = toggle.querySelector(".proxy-pile-chevron");
+  toggle.addEventListener("click", () => {
+    const open = list.hidden;
+    list.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (chevron) chevron.textContent = open ? "▾" : "▸";
+  });
+}
+
+// Proxy source → group 1 cards + group 3 filed rows. Same pile split as the
+// proxy inbox (refreshProxyQueue); the card/row renderers carry their own
+// verbs, all persisting through proxy_queue_decide.
+async function loadNeedsYouProxy() {
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_proxy_queue");
+  } catch (err) {
+    console.warn("[main] fetch_proxy_queue failed (Needs you):", err);
+    _nySettle("proxy", true);
+    return;
+  }
+  const { wantsEye, filed } = splitProxyPiles(payload);
+
+  const callsList = document.getElementById("ny-calls-list");
+  const proxyRows = [];
+  if (callsList) {
+    for (const item of wantsEye) {
+      try {
+        const derived = deriveProxyAsk(item);
+        const its = item.ts ? Date.parse(item.ts) : NaN;
+        const when = Number.isNaN(its)
+          ? ""
+          : new Date(its).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        const row = renderNeedsYouRow(
+          "proxy:" + item.id,
+          PROXY_KIND_CHIP_LABELS[item.kind] || "for review",
+          derived.ask,
+          when,
+          () => renderProxyCard(item),
+        );
+        callsList.appendChild(row);
+        proxyRows.push({ item, row });
+      } catch (e) { console.warn("[main] proxy row (Needs you):", e); }
+    }
+  }
+  // The subject join upgrades each collapsed row from the ask to the record
+  // it's about (summary + owner · due) as soon as the shared ctx lands — the
+  // row is the context surface now. Best-effort: rows keep the ask on any
+  // failure (the expanded card carries its own fail-visible line).
+  if (proxyRows.length) {
+    loadProxyCardCtx()
+      .then((ctx) => {
+        for (const { item, row } of proxyRows) {
+          const ev = item.evidence || {};
+          const ids = Array.isArray(ev.recordIds) ? ev.recordIds.filter(Boolean) : [];
+          const found = ids.map((rid) => ctx.byId.get(rid)).filter(Boolean);
+          if (!found.length || !row._updateRow) continue;
+          const summaries = found.map((r) => r.summary || r.recordId).join("  ·  ");
+          const bits = [];
+          if (found[0].owner) bits.push(prettySlug(found[0].owner));
+          if (found[0].due) bits.push("due " + formatDueDate(found[0].due));
+          row._updateRow(summaries, bits.join(" · "));
+        }
+      })
+      .catch(() => {});
+  }
+
+  const filedList = document.getElementById("ny-filed-list");
+  const filedSection = document.getElementById("ny-filed-section");
+  if (filed.length && filedList && filedSection) {
+    for (const item of filed) {
+      try { filedList.appendChild(renderProxyFiledRow(item)); }
+      catch (e) { console.warn("[main] renderProxyFiledRow (Needs you):", e); }
+    }
+    const headText = document.getElementById("ny-filed-heading-text");
+    if (headText) {
+      headText.textContent = `${filed.length} filed for you — skim & undo any`;
+    }
+    filedSection.hidden = false;
+  }
+  _nySettle("proxy", false);
+}
+
+/** The one pile-split rule, shared by the proxy inbox, Today's filed line and
+ *  Needs you: live = not dismissed/undone; filed = confirmed or high-band;
+ *  wantsEye = the adjudicate-band rest. */
+function splitProxyPiles(payload) {
+  const items = payload && Array.isArray(payload.items) ? payload.items : [];
+  const live = items.filter((it) => it && it.status !== "dismissed" && it.status !== "undone");
+  const filed = live.filter(
+    (it) =>
+      it.status === "confirmed" ||
+      (typeof it.confidence === "number" && it.confidence >= PROXY_FILED_CONFIDENCE),
+  );
+  const wantsEye = live.filter((it) => !filed.includes(it));
+  return { live, filed, wantsEye };
+}
+
+// The organizing-question queue → group 1. The same collectors Today's
+// One-question reads (minus the proxy cards, which group 1 renders as full
+// adjudicate cards via loadNeedsYouProxy). Each collector individually
+// guarded; a rejection marks the group partially unreachable.
+async function loadNeedsYouQuestions() {
+  let anyFailed = false;
+  const guard = (p, label) =>
+    p.catch((e) => { console.warn(`[main] ${label} (Needs you):`, e); anyFailed = true; return []; });
+  const [qe, mergeAsks, nameAsks] = await Promise.all([
+    guard(collectQuestionEngineCard(), "QE card"),
+    guard(collectMergeAskCards(), "merge asks"),
+    guard(collectNameAskCards(), "name asks"),
+  ]);
+  const callsList = document.getElementById("ny-calls-list");
+  if (callsList) {
+    const cards = [...qe, ...mergeAsks, ...nameAsks];
+    cards.forEach((c, idx) => {
+      const stmtEl = c.querySelector(".rule-card-statement");
+      const stmt = (stmtEl && stmtEl.textContent) || "A question for you";
+      callsList.appendChild(
+        renderNeedsYouRow("q:" + idx + ":" + stmt.slice(0, 40), "question", stmt, "", () => c),
+      );
+    });
+  }
+  _nySettle("questions", anyFailed);
+}
+
+// The check-in packet → peer questions (group 1), accept cards + staged
+// prework + peer handoffs (group 2), peer receipts (group 3). ONE fetch feeds
+// all three (the same packet Today and the companion's check-ins read).
+async function loadNeedsYouPacket() {
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_checkin_brief", {
+      lens: null,
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    });
+  } catch (err) {
+    console.warn("[main] fetch_checkin_brief failed (Needs you):", err);
+    _nySettle("packet", true);
+    return;
+  }
+
+  // Peer label join (channel health rows — the renderPeerArrivals pattern).
+  const labelById = new Map();
+  const intake = data && data.intake;
+  const channels = intake && Array.isArray(intake.channels) ? intake.channels : [];
+  for (const ch of channels) {
+    const id = String(ch.channel || "");
+    if (id.startsWith("peer:")) labelById.set(id.slice(5), (ch.health && ch.health.label) || null);
+  }
+  const received = intake && Array.isArray(intake.received) ? intake.received : [];
+  const peerRows = received.filter((r) => String(r.channel || "").startsWith("peer:"));
+
+  const callsList = document.getElementById("ny-calls-list");
+  const goList = document.getElementById("ny-go-list");
+  const confirmList = document.getElementById("ny-confirm-list");
+
+  // Every peer arrival renders as a collapsed row expanding into its card.
+  const trimTitle = (r) => {
+    const kindWord = peerKindLabel(r.envelopeKind);
+    return (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
+  };
+  const whenShort = (r) => {
+    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+    return Number.isNaN(ms)
+      ? ""
+      : new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  };
+  const peerRow = (r, label, build) =>
+    renderNeedsYouRow(
+      "peer:" + (r.docId || r.title || ""),
+      peerKindLabel(r.envelopeKind),
+      trimTitle(r),
+      label + (whenShort(r) ? " · " + whenShort(r) : ""),
+      build,
+    );
+
+  for (const r of peerRows) {
+    const kind = String(r.envelopeKind || "").toLowerCase();
+    const peerId = String(r.channel).slice(5);
+    const peerLabel = peerSideLabel(labelById.get(peerId), peerId);
+    try {
+      if (kind === "question" && callsList) {
+        callsList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
+      } else if (kind === "handoff" && goList) {
+        goList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
+      } else if (kind === "receipt" && confirmList) {
+        confirmList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouReceiptCard(r, peerLabel)));
+      }
+      // "answer" rows: the actionable ones arrive as accept cards below; an
+      // answer WITHOUT one has nothing waiting on the user, so it stays on
+      // Today's peer section rather than padding this lane.
+    } catch (e) { console.warn("[main] peer row (Needs you):", e); }
+    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+    if (!Number.isNaN(ms) && _nyState) _nyState.ages.push(ms);
+  }
+
+  // Group 2 — accept rows lead (a decision the other side already made is
+  // the cheapest win on the board), then staged prework (renderPreworkRow is
+  // already a collapsed row — used as-is).
+  if (goList) {
+    const prework = data && data.prework;
+    const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
+    for (const card of cards) {
+      try {
+        goList.appendChild(renderNeedsYouRow(
+          "accept:" + (card.questionId || ""),
+          "answer",
+          `${peerSideLabel(card.peerLabel, null)} answered your question — accept and file it?`,
+          "",
+          () => renderAcceptCard(card),
+        ));
+      } catch (e) { console.warn("[main] accept row (Needs you):", e); }
+    }
+    const items = prework && Array.isArray(prework.items) ? prework.items : [];
+    for (const item of items) {
+      try { goList.appendChild(renderPreworkRow(item)); }
+      catch (e) { console.warn("[main] renderPreworkRow (Needs you):", e); }
+    }
+  }
+  _nySettle("packet", false);
+}
+
+// Outbox drafts → group 2, collapsed rows expanding into the full card with
+// the existing canon verbs (Dismiss / Copy draft / Mark sent / Send to peer).
+// A held peer send is NEVER silent: the row itself says so, in amber.
+async function loadNeedsYouOutbox() {
+  let data;
+  try {
+    data = await tauri.core.invoke("fetch_outbox");
+  } catch (err) {
+    console.warn("[main] fetch_outbox failed (Needs you):", err);
+    _nySettle("outbox", true);
+    return;
+  }
+  const items = Array.isArray(data && data.items) ? data.items : [];
+  const goList = document.getElementById("ny-go-list");
+  if (goList) {
+    for (const item of items) {
+      try {
+        const held = !!(item.addressedToPeer && item.lastDispatchError);
+        const chip = item.addressedToPeer && item.envelopeKind
+          ? peerKindLabel(item.envelopeKind)
+          : outboxTypeLabel(item.type);
+        const meta = held
+          ? "held — couldn't send"
+          : item.addressedToPeer
+            ? `to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`
+            : "approved, awaiting send";
+        goList.appendChild(renderNeedsYouRow(
+          "ob:" + item.id,
+          chip,
+          item.subject || "(no subject)",
+          meta,
+          () => renderOutboxCard(item),
+          { amberChip: held },
+        ));
+      } catch (e) { console.warn("[main] outbox row (Needs you):", e); }
+    }
+  }
+  _nySettle("outbox", false);
+}
+
+// One peer question/handoff as an expanded card in the record-card family.
+// The provenance invariant holds: the envelope doc is always openable when the
+// row carries its id. No fabricated verbs — answering/accepting happens in the
+// reply the user sends, so the card carries the open affordance and the
+// arrival time, nothing invented.
+function renderNeedsYouPeerCard(r, peerLabel) {
+  const card = document.createElement("div");
+  card.className = "record-card needs-you-peer-card";
+
+  const header = document.createElement("div");
+  header.className = "record-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.textContent = peerKindLabel(r.envelopeKind);
+  header.appendChild(chip);
+  // Pixel contract: who + when share the header line ("Elena's side · 9:12 AM"),
+  // not a chip plus a separate meta row.
+  const who = document.createElement("span");
+  who.className = "proxy-card-who";
+  const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+  who.textContent =
+    peerLabel +
+    (Number.isNaN(ms)
+      ? ""
+      : " · " + new Date(ms).toLocaleString(undefined, {
+          month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+        }));
+  header.appendChild(who);
+  card.appendChild(header);
+
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  // The kind chip already says Question/Handoff/… — trim the envelope title's
+  // matching "<Kind> — " prefix so the card doesn't say it twice.
+  const kindWord = peerKindLabel(r.envelopeKind);
+  summary.textContent = (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
+  card.appendChild(summary);
+
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
+  if (r.docId) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn btn-link";
+    open.textContent = "Open their message →";
+    open.addEventListener("click", () => openSourcePanel(r.docId, null));
+    actions.appendChild(open);
+  }
+  if (actions.childNodes.length) card.appendChild(actions);
+  return card;
+}
+
+// One peer receipt in "Confirm what happened". Two shapes, by what the wire
+// carries: a receipt with a validated recordRef (engine N3) gets the one-tap
+// Confirm — it resolves the cited record through the existing resolve verb,
+// standard Undo toast included. A receipt without one keeps the honest
+// two-step (open their message, then resolve the item where it lives). The
+// conditional IS the design, not a stopgap: envelopes minted before N3 never
+// carry the ref, and a Confirm that can't name its record would be a
+// rubber-stamp.
+function renderNeedsYouReceiptCard(r, peerLabel) {
+  const card = renderNeedsYouPeerCard(r, peerLabel);
+  let actions = card.querySelector(".record-actions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "record-actions";
+    card.appendChild(actions);
+  }
+  if (r.recordRef) {
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    // The card's one primary wears the house amber-tint (pixel-pass D3
+    // grammar) — never the legacy blue.
+    confirm.className = "needs-you-confirm-btn";
+    confirm.textContent = "Confirm";
+    confirm.title = "Confirm — resolve the item this receipt reports done";
+    confirm.addEventListener("click", () => resolveRecord(r.recordRef, card, r.title || ""));
+    actions.insertBefore(confirm, actions.firstChild);
+  } else {
+    const hint = document.createElement("p");
+    hint.className = "record-meta needs-you-two-step";
+    hint.textContent = "Check their message, then resolve the matching item in your Log.";
+    card.insertBefore(hint, actions);
+  }
+  return card;
+}
+
+// Recompute counts, group visibility, couldn't-reach lines, the header
+// sub-line and the nav pill. Called after every source settles.
+function reconcileNeedsYou() {
+  const st = _nyState;
+  if (!st) return;
+
+  let total = 0;
+  const groupCounts = {};
+  for (const g of _NY_GROUPS) {
+    const list = document.getElementById(`ny-${g.key}-list`);
+    let n = list ? list.children.length : 0;
+    if (g.key === "confirm") {
+      const filedList = document.getElementById("ny-filed-list");
+      n += filedList ? filedList.children.length : 0;
+    }
+    groupCounts[g.key] = n;
+    total += n;
+
+    const failedSources = g.sources.filter((s) => st.failed[s]);
+    const section = document.getElementById(`ny-${g.key}-section`);
+    const countEl = document.getElementById(`ny-${g.key}-count`);
+    const unreachable = document.getElementById(`ny-${g.key}-unreachable`);
+    if (countEl) countEl.textContent = n ? String(n) : "";
+    // Fail-VISIBLE: a group with an unreachable source shows its header + a
+    // plain couldn't-reach line. A clean-and-empty group hides (the
+    // affirmative empty state speaks for the whole lane).
+    if (section) section.hidden = !(n > 0 || failedSources.length > 0);
+    if (unreachable) {
+      if (failedSources.length) {
+        unreachable.textContent =
+          "Couldn't reach " +
+          failedSources.map((s) => _NY_SOURCE_LABELS[s]).join(" or ") +
+          " — anything waiting there isn't shown. Refresh to retry.";
+        unreachable.hidden = false;
+      } else {
+        unreachable.hidden = true;
+      }
+    }
+  }
+
+  const allSettled = Object.values(st.settled).every(Boolean);
+  const anyFailed = Object.values(st.failed).some(Boolean);
+  const skel = document.getElementById("needs-you-skeleton");
+  if (skel) skel.hidden = allSettled;
+
+  // The affirmative empty state is only claimed on a CLEAN all-empty — a
+  // failed source must never read as "all yours".
+  const emptyEl = document.getElementById("needs-you-empty");
+  if (emptyEl) emptyEl.hidden = !(allSettled && !anyFailed && total === 0);
+
+  // Header sub-line: count · oldest age · rough minutes to clear.
+  const sub = document.getElementById("needs-you-sub");
+  if (sub && allSettled) {
+    if (total === 0) {
+      sub.textContent = anyFailed ? "Some of this couldn't load" : "All yours";
+    } else {
+      const bits = [`${total} waiting`];
+      if (st.ages.length) {
+        const days = Math.floor((Date.now() - Math.min(...st.ages)) / 86400000);
+        if (days >= 1) bits.push(`oldest is ${days === 1 ? "a day" : `${days} days`} old`);
+      }
+      // Rough clear-time: judgment calls ~90s, gos ~60s, confirms ~30s.
+      const mins = Math.max(
+        1,
+        Math.ceil(groupCounts.calls * 1.5 + groupCounts.go * 1 + groupCounts.confirm * 0.5),
+      );
+      bits.push(`~${mins} min to clear`);
+      sub.textContent = bits.join(" · ");
+    }
+    // The pill mirrors the lane only when the count is whole — a partial load
+    // must never overwrite an honest count with an undercount.
+    if (!anyFailed) updateNeedsYouPill(total);
+  }
+}
+
+/** Nav count pill on "Needs you". Hidden at zero; capped display at 99+. */
+function updateNeedsYouPill(n) {
+  const pill = document.getElementById("app-nav-needs-you-pill");
+  if (!pill || typeof n !== "number") return;
+  pill.textContent = n > 99 ? "99+" : String(n);
+  pill.hidden = n === 0;
+}
+
+// Boot-time pill seed: the SAME sources and split/cap rules the view renders
+// from, counted without touching the view's DOM (the question collectors do
+// build detached cards — that keeps one set of cap/suppression rules instead
+// of a drifting count-only copy). Best-effort throughout: any source failing
+// leaves the pill unseeded rather than showing a partial count.
+async function refreshNeedsYouPill() {
+  if (!tauri) return;
+  let anyFailed = false;
+  const guard = (p) => p.catch(() => { anyFailed = true; return null; });
+  const [proxyPayload, outboxData, packet, qe, mergeAsks, nameAsks] = await Promise.all([
+    guard(tauri.core.invoke("fetch_proxy_queue")),
+    guard(tauri.core.invoke("fetch_outbox")),
+    guard(tauri.core.invoke("fetch_checkin_brief", {
+      lens: null,
+      tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    })),
+    guard(collectQuestionEngineCard()),
+    guard(collectMergeAskCards()),
+    guard(collectNameAskCards()),
+  ]);
+  if (anyFailed) return;
+
+  const { live } = splitProxyPiles(proxyPayload);
+  const outboxN = outboxData && Array.isArray(outboxData.items) ? outboxData.items.length : 0;
+  const questionN = (qe || []).length + (mergeAsks || []).length + (nameAsks || []).length;
+  let packetN = 0;
+  if (packet) {
+    const received = packet.intake && Array.isArray(packet.intake.received) ? packet.intake.received : [];
+    for (const r of received) {
+      if (!String(r.channel || "").startsWith("peer:")) continue;
+      const kind = String(r.envelopeKind || "").toLowerCase();
+      if (kind === "question" || kind === "handoff" || kind === "receipt") packetN++;
+    }
+    const prework = packet.prework;
+    packetN += prework && Array.isArray(prework.acceptCards) ? prework.acceptCards.length : 0;
+    packetN += prework && Array.isArray(prework.items) ? prework.items.length : 0;
+  }
+  updateNeedsYouPill(live.length + outboxN + questionN + packetN);
+}
+
+// Refresh re-enters the view (the enterOutboxView pattern) — idempotent wiring.
+{
+  const refresh = document.getElementById("btn-needs-you-refresh");
+  if (refresh) refresh.addEventListener("click", () => enterNeedsYouView());
 }
 
 // ───────── WP-ONENOTE-EXPORT-04 — OneNote browse view ─────────

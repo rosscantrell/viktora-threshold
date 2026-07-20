@@ -2693,7 +2693,8 @@ code {
 /* The card's one primary wears the house amber-tint (heads-up/draft-follow-up
    grammar) — never the legacy blue. */
 .today-accept-btn,
-.outbox-send-peer-btn {
+.outbox-send-peer-btn,
+.needs-you-confirm-btn {
   font-size: 11px;
   font-family: inherit;
   padding: 4px 12px;
@@ -2705,7 +2706,8 @@ code {
   transition: background 0.12s ease;
 }
 .today-accept-btn:hover,
-.outbox-send-peer-btn:hover {
+.outbox-send-peer-btn:hover,
+.needs-you-confirm-btn:hover {
   background: rgba(255, 196, 64, 0.22);
 }
 .today-accept-btn:disabled,
@@ -6302,6 +6304,23 @@ button.record-action-badge {
 }
 .app-nav-dest-icon { font-size: 15px; padding: 5px 9px; }
 
+/* WP-THRESHOLD-NEEDS-YOU N1 — the nav count pill on "Needs you". Amber is
+ * urgency's color (house law) and this count IS the urgency signal: how many
+ * calls wait on the user. Hidden at zero. */
+.app-nav-pill[hidden] { display: none; } /* display: outranks [hidden] — house landmine */
+.app-nav-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+  color: #241a05;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: 1px;
+}
+
 /* The persistent nav bar + the always-visible Collapse button supersede the
  * per-view footer back/home/widget buttons. Hide the redundant ones; keep
  * functional footer actions (Refresh / Copy / Sync / Definition). */
@@ -6811,12 +6830,15 @@ button.rec-source {
   color: var(--text-secondary);
   margin: 0;
 }
-/* Dated quote — the small date paired with each verbatim receipt. */
+/* Dated quote — the date rides inline at the end of its verbatim (pixel
+ * contract: "…" — Jun 12; never a row of its own). */
 .proxy-quote-date {
-  display: block;
-  margin-top: 4px;
+  display: inline;
+  margin-left: 6px;
   font-size: 11px;
+  font-style: normal;
   color: var(--text-tertiary);
+  white-space: nowrap;
 }
 /* Details — everything mechanical, collapsed by default. */
 .proxy-details {
@@ -6913,22 +6935,29 @@ button.rec-source {
   color: var(--accent-hover);
   border-color: var(--accent-ring);
 }
-/* WP-R3 item 5 — source affordance in the proxy Details: a label + one
- * renderSourceBadge per resolvable underlying document (opens the source pane,
- * exactly like the Log). Only rendered when a recordId resolved to a doc. */
-.proxy-source-row {
+/* #196 redline — the subject join. The joined record(s) lead the card as N0
+ * rows (the one row grammar); the ask demotes to a quiet second line; a join
+ * that can't resolve says so in plain amber (fail-closed-but-VISIBLE). */
+.proxy-subject-slot {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
+  flex-direction: column;
+  gap: 6px;
 }
-.proxy-source-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+.proxy-subject-slot:empty { display: none; }
+.proxy-question-demoted {
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-secondary);
+}
+.proxy-join-missing {
+  font-size: 12px;
+  color: var(--warn-text);
+  margin: 0;
+}
+/* Per-quote source badge — sits under its verbatim like the date line does. */
+.proxy-evidence .source-badge {
+  align-self: flex-start;
+  margin-top: 4px;
 }
 
 .proxy-confirm-btn {
@@ -7461,3 +7490,216 @@ button.rec-source {
 .day-digest-item-acts { flex: 0 0 auto; opacity: 0; transition: opacity 0.1s; }
 .day-digest-item:hover .day-digest-item-acts { opacity: 1; }
 .day-digest-more { font-size: 11px; color: var(--text-tertiary); margin-top: 3px; padding-left: 3px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-NEEDS-YOU N1 — "Needs you" view. The groups wear Today's
+ * section grammar (today-brief-section / today-section-head) so the two
+ * destinations read as one family; only the list spacing and the
+ * couldn't-reach line are new.
+ * ════════════════════════════════════════════════════════════════════════════ */
+.needs-you-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.needs-you-list:empty { display: none; }
+.needs-you-group { margin-bottom: 22px; }
+/* Fail-VISIBLE: the couldn't-reach line under a group whose source is down. */
+.needs-you-unreachable { color: var(--warn-text); }
+.needs-you-empty { font-size: 13px; }
+/* Two-step hint on legacy receipts (no recordRef on the wire yet). */
+.needs-you-two-step { color: var(--text-tertiary); }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-NEEDS-YOU — the pixel contract (Ross addendum to #196 redline,
+ * 2026-07-20). MOCKUPS-THRESHOLD-REVIEW-2026-07-20.html §"Needs you" is the
+ * CONTRACT for this view: measurements lifted from its CSS verbatim, colors
+ * mapped to the nearest glass token (#e8eaed→--glass-text, #9aa0a6→
+ * --glass-text-dim, #ffc440→--glass-accent). Scoped to .view-needs-you —
+ * other surfaces keep their separately-gated skins.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* The lane's column — the mock frames Needs you at 940 (vs Today's 560
+ * brief column, which this view otherwise inherits from .view-log). */
+.view-needs-you { max-width: 940px; }
+
+/* View header — mock .vh1 (19px/650) + .vsub (12px, 2px below). */
+.view-needs-you .log-title { font-size: 19px; font-weight: 650; }
+.view-needs-you .log-sub { font-size: 12px; margin: 2px 0 0; }
+
+/* Group rhythm — mock .grp/.grp-title/.grp-sub: 12.5px/650 head + 11px count,
+ * 7px below the head, 20px between groups. Half the previous build's air. */
+.view-needs-you .needs-you-group { margin-bottom: 20px; }
+.view-needs-you .today-section-head { margin-bottom: 7px; gap: 6px; }
+.view-needs-you .today-section-title { font-size: 12.5px; font-weight: 650; }
+.view-needs-you .today-section-count {
+  font-size: 11px;
+  font-weight: 400;
+  background: none;
+  color: var(--glass-text-dim);
+}
+.view-needs-you .needs-you-list { gap: 8px; }
+
+/* Card — mock .ncard: quiet wash, 0.5px hairline, radius 10, 11×14 padding,
+ * 8px between cards. Internal rhythm rides one 6px flex gap; the pieces drop
+ * their own margins. NO taller. */
+.view-needs-you .record-card {
+  gap: 6px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 10px;
+}
+
+/* Header line — mock .nh: chip + muted who/when on ONE line, 4px below
+ * (6px gap − 2px pull). */
+.view-needs-you .record-header {
+  gap: 8px;
+  align-items: baseline;
+  margin: 0 0 -2px;
+}
+.view-needs-you .record-chip {
+  font-size: 10.5px;
+  font-weight: 400;
+  padding: 0.5px 8px;
+  border-radius: 999px;
+  border: 0.5px solid var(--glass-border-strong);
+  background: none;
+  color: var(--glass-text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.view-needs-you .proxy-card-who { font-size: 11px; color: var(--glass-text-dim); }
+
+/* Claim line — mock .nt: 13px primary, lh 1.5. NOT display-size. */
+.view-needs-you .proxy-question,
+.view-needs-you .record-summary {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--glass-text);
+  margin: 0;
+}
+.view-needs-you .proxy-question-demoted,
+.view-needs-you .proxy-why {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  margin: 0;
+}
+.view-needs-you .record-meta { font-size: 11px; margin: 0; }
+
+/* Evidence — flat: one-line quotes with a 2px left hairline (mock .nev),
+ * date inline after the quote; no padded inset panel. */
+.view-needs-you .proxy-evidence {
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 4px;
+}
+.view-needs-you .receipt.receipt-proxy .receipt-quote {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0;
+  padding: 0 0 0 8px;
+  margin: 0;
+}
+.view-needs-you .receipt.receipt-proxy { gap: 2px; }
+
+/* Verb row — mock .verbs/.btnp/.btns/.btnl: 8px gaps; primary = FILLED
+ * NEUTRAL (glass-text bg, near-black text); secondary = 0.5px hairline;
+ * tertiary = bare link. There is NO green verb in this grammar — green is
+ * resolved/positive STATE only, never an action. */
+.view-needs-you .record-actions { gap: 8px; padding-top: 3px; }
+.view-needs-you .proxy-confirm-btn,
+.view-needs-you .needs-you-confirm-btn,
+.view-needs-you .today-accept-btn,
+.view-needs-you .outbox-send-peer-btn,
+.view-needs-you .record-actions .btn-primary {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 7px;
+  border: none;
+  background: var(--glass-text);
+  color: #14151a;
+  transition: opacity 0.12s ease;
+}
+.view-needs-you .proxy-confirm-btn:hover,
+.view-needs-you .needs-you-confirm-btn:hover,
+.view-needs-you .today-accept-btn:hover,
+.view-needs-you .outbox-send-peer-btn:hover,
+.view-needs-you .record-actions .btn-primary:hover {
+  background: var(--glass-text);
+  opacity: 0.88;
+}
+.view-needs-you .record-actions .btn-secondary,
+.view-needs-you .record-action-btn:not(.proxy-confirm-btn) {
+  font-size: 11.5px;
+  font-weight: 400;
+  padding: 4px 12px;
+  border-radius: 7px;
+  border: 0.5px solid var(--glass-border-strong);
+  background: none;
+  color: var(--glass-text);
+}
+.view-needs-you .record-actions .btn-link {
+  font-size: 11.5px;
+  padding: 4px 6px;
+  color: var(--glass-text-dim);
+}
+
+/* ── The thin index (Ross ruling at the live gate, 2026-07-20) ──────────────
+ * Collapsed one-line rows per the mock's L1 row grammar: chip · summary ·
+ * meta, 0.5px hairline, 12.5px, 5px apart. Click → the row swaps in place
+ * for the existing card (a floating ▾ collapses it back). */
+.view-needs-you .needs-you-list { gap: 5px; }
+.ny-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6.5px 10px;
+  border: 0.5px solid var(--glass-border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.015);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ny-row:hover { background: rgba(255, 255, 255, 0.045); }
+.ny-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.ny-row-chip {
+  flex: none;
+  text-transform: lowercase;
+  font-size: 10.5px;
+  border: 0.5px solid var(--glass-border-strong);
+  border-radius: 999px;
+  padding: 0.5px 8px;
+  color: var(--glass-text-dim);
+}
+.ny-row-chip.is-amber {
+  border-color: rgba(255, 196, 64, 0.45);
+  color: var(--glass-accent);
+}
+.ny-row-summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--glass-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ny-row-meta { flex: none; font-size: 11px; color: var(--glass-text-dim); }
+.ny-row-card { position: relative; }
+.ny-row-collapse {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  z-index: 1;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+.ny-row-collapse:hover { color: var(--glass-text); }

@@ -96,12 +96,16 @@
         <button type="button" id="app-nav-back" class="app-nav-back" title="Back" aria-label="Back" hidden>←</button>
         <ol class="app-nav-crumbs" id="app-nav-crumbs"></ol>
       </div>
+      <!-- WP-THRESHOLD-NEEDS-YOU N1 (Ross ruling 2026-07-20): "Needs you" joins
+           the nav with its honest count pill; Outbox folds INTO it ("awaiting
+           send" is a ratification state — the view stays reachable at #outbox);
+           ⌂ Home leaves the bar (the widget is the capture surface; goHome
+           routes remain as fallbacks). Net 7 → 6 destinations. -->
       <div class="app-nav-dests" id="app-nav-dests" role="group" aria-label="Go to">
-        <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="main" title="Home" aria-label="Home">⌂</button>
         <button type="button" class="app-nav-dest" data-dest="today">Today</button>
+        <button type="button" class="app-nav-dest" data-dest="needs-you">Needs you<span class="app-nav-pill" id="app-nav-needs-you-pill" hidden></span></button>
         <button type="button" class="app-nav-dest" data-dest="watching">Watching</button>
         <button type="button" class="app-nav-dest" data-dest="log">Log</button>
-        <button type="button" class="app-nav-dest" data-dest="outbox">Outbox</button>
         <button type="button" class="app-nav-dest" data-dest="edges">Relationships</button>
         <button type="button" class="app-nav-dest app-nav-dest-icon" data-dest="settings" title="Settings" aria-label="Settings">⚙</button>
       </div>
@@ -907,6 +911,85 @@
       <div id="log-stalled-sections"></div>
 
       <p class="log-status" id="log-status" hidden></p>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         WP-THRESHOLD-NEEDS-YOU N1 — "Needs you", the ratification lane.
+         ONE destination absorbing every scattered ratify affordance, grouped
+         by the WEIGHT of the call, not by which pipeline produced it (Ross
+         ruling 2026-07-20, Concept 1). Group names are LOCKED. Shape ruling
+         (Ross at the live gate, same day): a THIN INDEX — collapsed one-line
+         rows only, each expanding in place into the existing card that
+         carries the verbs; nothing expanded by default. The
+         widget's amber badge points here. enterNeedsYouView paints this
+         skeleton synchronously; every source is fire-and-forget and
+         independently guarded. Fail-VISIBLE: an unreachable source renders
+         its group header with a plain couldn't-reach line, never a silent
+         absence.
+         ══════════════════════════════════════════════════════════════════ -->
+    <section id="view-needs-you" class="view view-log view-needs-you" hidden>
+      <header class="log-header">
+        <div class="log-header-text">
+          <h1 class="log-title">Needs you</h1>
+          <p class="log-sub" id="needs-you-sub">Everything waiting on a call from you</p>
+        </div>
+        <div class="log-header-actions">
+          <button type="button" id="btn-needs-you-refresh" class="btn btn-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <!-- Group 1 — judgment calls: adjudicate-band filings (full cards with
+           Confirm/Dismiss → proxy_queue_decide), the organizing-question queue
+           (the same QE + name/merge sources Today's One-question reads), and
+           peer questions from the check-in packet. -->
+      <section class="today-brief-section needs-you-group" id="ny-calls-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Calls only you can make</h2>
+          <span class="today-section-count" id="ny-calls-count"></span>
+        </div>
+        <div class="needs-you-list" id="ny-calls-list"></div>
+        <p class="log-empty needs-you-unreachable" id="ny-calls-unreachable" hidden></p>
+      </section>
+
+      <!-- Group 2 — prepared work: outbox drafts (full cards, canon verbs),
+           peer-answer accept cards + staged prework (check-in packet), and
+           peer handoffs. -->
+      <section class="today-brief-section needs-you-group" id="ny-go-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Work awaiting your go</h2>
+          <span class="today-section-count" id="ny-go-count"></span>
+        </div>
+        <div class="needs-you-list" id="ny-go-list"></div>
+        <p class="log-empty needs-you-unreachable" id="ny-go-unreachable" hidden></p>
+      </section>
+
+      <!-- Group 3 — confirmations: peer receipts (one-tap Confirm only when
+           the row carries a validated recordRef; otherwise the honest
+           two-step), and the filed-for-you pile (collapsed rows, per-row
+           undo). -->
+      <section class="today-brief-section needs-you-group" id="ny-confirm-section" hidden>
+        <div class="today-section-head">
+          <h2 class="today-section-title">Confirm what happened</h2>
+          <span class="today-section-count" id="ny-confirm-count"></span>
+        </div>
+        <div class="needs-you-list" id="ny-confirm-list"></div>
+        <div class="today-filed-demoted" id="ny-filed-section" hidden>
+          <button
+            type="button"
+            class="today-filed-line"
+            id="ny-filed-toggle"
+            aria-expanded="false"
+          >
+            <span class="proxy-pile-chevron" aria-hidden="true">▸</span>
+            <span id="ny-filed-heading-text">Filed for you — skim &amp; undo any</span>
+          </button>
+          <div class="proxy-filed-rows" id="ny-filed-list" hidden></div>
+        </div>
+        <p class="log-empty needs-you-unreachable" id="ny-confirm-unreachable" hidden></p>
+      </section>
+
+      <p class="today-queue-skeleton" id="needs-you-skeleton">Gathering what's waiting on you…</p>
+      <p class="log-empty needs-you-empty" id="needs-you-empty" hidden>Nothing needs you — all yours.</p>
     </section>
 
     <!-- ──────────────────────────────────────────────────────────────────
