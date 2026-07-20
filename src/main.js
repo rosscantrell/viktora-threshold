@@ -10674,6 +10674,23 @@ if (receiptsCardBtn) {
 let _decisionsCtx = null;
 let _decisionsFilter = "all"; // all | open | resolved | superseded
 let _decisionsLens = "project"; // project | deadline | people
+
+// WP-THRESHOLD-NEEDS-YOU N4 — Log modes v1. Two intents over the same records:
+// "everything" (today's archive — lenses + status filters live inside it,
+// unchanged) and "catchup" (a flat priority-sorted list of quick-clearable
+// rows). The choice persists across restarts; lens/filter state belongs to
+// Everything and is never touched by a mode switch.
+const LOG_MODE_KEY = "threshold.logMode";
+let _logMode = (() => {
+  try { return localStorage.getItem(LOG_MODE_KEY) === "catchup" ? "catchup" : "everything"; }
+  catch (_e) { return "everything"; }
+})();
+
+function setLogMode(mode) {
+  _logMode = mode === "catchup" ? "catchup" : "everything";
+  try { localStorage.setItem(LOG_MODE_KEY, _logMode); } catch (_e) { /* persistence best-effort */ }
+  renderDecisions();
+}
 let _decisionsExpanded = new Set(); // group keys the user has expanded (default: collapsed)
 // WP-Work-Forest — frame/workstream SECTION collapse (distinct from per-job group
 // expand above). Keyed by name (fids aren't stable across recompiles): "top:<name>"
@@ -13212,7 +13229,16 @@ async function enterDecisionsView(initialFilter, navCtx) {
   } else {
     setNav([{ label: "Log" }], { active: "log", back: () => goHome() });
   }
-  if (initialFilter) _decisionsFilter = initialFilter;
+  if (initialFilter) {
+    _decisionsFilter = initialFilter;
+    // N4 — a caller asking for a status filter is asking for the archive
+    // (e.g. Today's "N open" affordances). Honor it even when ⚡ Catch up was
+    // the last-used mode; the switch persists like any chip click would.
+    if (_logMode !== "everything") {
+      _logMode = "everything";
+      try { localStorage.setItem(LOG_MODE_KEY, "everything"); } catch (_e) { /* best-effort */ }
+    }
+  }
 
   const listEl = document.getElementById("decisions-list");
   const statusEl = document.getElementById("decisions-status");
@@ -14028,6 +14054,114 @@ function renderProjectPanel(panel, data, slug, label) {
   }
 }
 
+// ───────── WP-THRESHOLD-NEEDS-YOU N4 — ⚡ Catch up mode ─────────
+//
+// The same records the archive holds, re-presented as ONE flat priority-sorted
+// list of quick-clearable L1 rows: open items whose resolution is one short
+// action (every open card carries Resolve; overdue / share / others-waiting
+// items clear in a tap). The big items — blocked work, conflicts, decisions
+// that need a real call — stay in Everything, and the overflow line says so
+// with an honest count + click-through (never a silent absence).
+//
+// Sort = due-date-default weighting: overdue first (oldest due leading), then
+// due-soonest, then by how many items are waiting on it. The sub-line names
+// the sort in plain words. NO per-item time estimates — the only duration
+// idiom is the header's count-based "~N min to clear" (the Needs-you rule).
+
+const CATCHUP_CAP = 8;
+// Action kinds whose resolution is a judgment call or an external unblock —
+// not a quick verb. Everything else open clears in one short action.
+const CATCHUP_BIG_KINDS = new Set(["blocked_work", "contradiction_to_resolve", "decision_needed"]);
+
+function renderCatchUpMode() {
+  const listEl = document.getElementById("decisions-list");
+  const statusEl = document.getElementById("decisions-status");
+  const subEl = document.getElementById("decisions-sub");
+  if (!_decisionsCtx || !listEl) return;
+  const { items, docProjects, actionKinds, edges } = _decisionsCtx;
+
+  const open = items.filter((it) => (it.state || "open") === "open");
+  const quick = [];
+  let bigCount = 0;
+  for (const it of open) {
+    const rec = it.record || it;
+    const ak = actionKinds && actionKinds[rec.recordId];
+    if (ak && CATCHUP_BIG_KINDS.has(ak.kind)) { bigCount++; continue; }
+    quick.push(it);
+  }
+
+  // recordId → how many undismissed items depend on it (the who's-waiting leg).
+  const waiters = new Map();
+  for (const e of edges || []) {
+    if (e.kind === "depends_on" && e.status !== "dismissed") {
+      waiters.set(e.recordB, (waiters.get(e.recordB) || 0) + 1);
+    }
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const keyed = quick.map((it) => {
+    const rec = it.record || it;
+    const due = rec.due ? new Date(rec.due + "T00:00:00") : null;
+    return {
+      it,
+      rec,
+      rank: due && due < today ? 0 : due ? 1 : 2,
+      dueMs: due ? due.getTime() : Infinity,
+      waiting: waiters.get(rec.recordId) || 0,
+    };
+  });
+  keyed.sort((a, b) => (a.rank - b.rank) || (a.dueMs - b.dueMs) || (b.waiting - a.waiting));
+
+  if (subEl) {
+    if (keyed.length === 0) {
+      subEl.textContent = "Little stuff you can clear now";
+    } else {
+      // Count-based clear-time only (the Needs-you header idiom): quick verbs
+      // ≈ a minute each. Never per-item estimates — those would be invented.
+      const mins = Math.max(1, keyed.length);
+      const noun = keyed.length === 1 ? "item" : "items";
+      subEl.textContent =
+        `Little stuff you can clear now — ${keyed.length} ${noun}, ~${mins} min to clear · sorted by due date, then who's waiting`;
+    }
+  }
+
+  if (statusEl) {
+    if (keyed.length === 0) {
+      statusEl.hidden = false;
+      statusEl.dataset.kind = "empty";
+      statusEl.textContent = bigCount > 0
+        ? "Nothing quick to clear — the big items wait in Everything."
+        : "Nothing open to catch up on.";
+    } else {
+      statusEl.hidden = true;
+    }
+  }
+
+  listEl.innerHTML = "";
+  for (const k of keyed.slice(0, CATCHUP_CAP)) {
+    listEl.appendChild(renderRecordRow(k.rec, k.it.state || "open", docProjects.get(k.rec.documentId) || []));
+  }
+
+  // Hard cap + honest overflow: what the cap hid and what the mode filtered
+  // out, each with a count; clicking through opens Everything.
+  const overflow = keyed.length > CATCHUP_CAP ? keyed.length - CATCHUP_CAP : 0;
+  const parts = [];
+  if (overflow > 0) parts.push(`${overflow} more`);
+  if (bigCount > 0) parts.push(`the ${bigCount} big ${bigCount === 1 ? "item waits" : "items wait"} in Everything`);
+  if (parts.length) {
+    const line = document.createElement("button");
+    line.type = "button";
+    line.className = "catchup-overflow";
+    line.title = "Open Everything";
+    const u = document.createElement("span");
+    u.textContent = parts.join(" · ");
+    line.appendChild(u);
+    line.addEventListener("click", () => setLogMode("everything"));
+    listEl.appendChild(line);
+  }
+}
+
 function renderDecisions() {
   const listEl = document.getElementById("decisions-list");
   const statusEl = document.getElementById("decisions-status");
@@ -14038,6 +14172,20 @@ function renderDecisions() {
   // MVP-Librarian 2.2/2.3 — a re-render rebuilds every checkbox unticked, so the
   // selection state must reset with it (stale jobKeys/recordIds never replay).
   clearBulkSelection();
+
+  // N4 — mode dispatch. Catch up re-presents the same records as a flat
+  // priority-sorted list; Everything falls through to the archive unchanged.
+  // The mode class hides the archive chrome (lenses / filter / workload) in
+  // CSS, so async unhides (loadLogWorkload) can't race it back into view.
+  const viewEl = document.getElementById("view-decisions");
+  if (viewEl) viewEl.classList.toggle("log-mode-catchup", _logMode === "catchup");
+  for (const btn of document.querySelectorAll("#log-modes .log-mode-btn")) {
+    btn.setAttribute("aria-pressed", btn.dataset.mode === _logMode ? "true" : "false");
+  }
+  if (_logMode === "catchup") {
+    renderCatchUpMode();
+    return;
+  }
 
   // sync the lens selector's pressed state
   for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
@@ -15474,11 +15622,19 @@ for (const btn of document.querySelectorAll(".decisions-lens-btn")) {
   });
 }
 
+// N4 — the mode chips (⚡ Catch up / Everything).
+for (const btn of document.querySelectorAll("#log-modes .log-mode-btn")) {
+  btn.addEventListener("click", () => setLogMode(btn.dataset.mode));
+}
+
 const decisionsHomeBtn = document.getElementById("btn-decisions-home");
 if (decisionsHomeBtn) decisionsHomeBtn.addEventListener("click", () => goHome());
 
 const decisionsRefreshBtn = document.getElementById("btn-decisions-refresh");
-if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView(_decisionsFilter));
+// N4 — no filter arg: passing _decisionsFilter back was a no-op assignment,
+// but an explicit initialFilter now opens Everything, and Refresh must
+// preserve the chosen mode instead.
+if (decisionsRefreshBtn) decisionsRefreshBtn.addEventListener("click", () => enterDecisionsView());
 
 // WP-THRESHOLD-NAV Increment 2 — Project home Refresh re-fetches the Log context
 // then re-aggregates (re-enters with the same key/opts from _projectHomeCtx).
