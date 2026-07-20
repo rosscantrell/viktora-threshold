@@ -6830,12 +6830,15 @@ button.rec-source {
   color: var(--text-secondary);
   margin: 0;
 }
-/* Dated quote — the small date paired with each verbatim receipt. */
+/* Dated quote — the date rides inline at the end of its verbatim (pixel
+ * contract: "…" — Jun 12; never a row of its own). */
 .proxy-quote-date {
-  display: block;
-  margin-top: 4px;
+  display: inline;
+  margin-left: 6px;
   font-size: 11px;
+  font-style: normal;
   color: var(--text-tertiary);
+  white-space: nowrap;
 }
 /* Details — everything mechanical, collapsed by default. */
 .proxy-details {
@@ -7494,7 +7497,7 @@ button.rec-source {
  * destinations read as one family; only the list spacing and the
  * couldn't-reach line are new.
  * ════════════════════════════════════════════════════════════════════════════ */
-.needs-you-list { display: grid; gap: 10px; }
+.needs-you-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .needs-you-list:empty { display: none; }
 .needs-you-group { margin-bottom: 22px; }
 /* Fail-VISIBLE: the couldn't-reach line under a group whose source is down. */
@@ -7502,3 +7505,146 @@ button.rec-source {
 .needs-you-empty { font-size: 13px; }
 /* Two-step hint on legacy receipts (no recordRef on the wire yet). */
 .needs-you-two-step { color: var(--text-tertiary); }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * WP-THRESHOLD-NEEDS-YOU — the pixel contract (Ross addendum to #196 redline,
+ * 2026-07-20). MOCKUPS-THRESHOLD-REVIEW-2026-07-20.html §"Needs you" is the
+ * CONTRACT for this view: measurements lifted from its CSS verbatim, colors
+ * mapped to the nearest glass token (#e8eaed→--glass-text, #9aa0a6→
+ * --glass-text-dim, #ffc440→--glass-accent). Scoped to .view-needs-you —
+ * other surfaces keep their separately-gated skins.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* The lane's column — the mock frames Needs you at 940 (vs Today's 560
+ * brief column, which this view otherwise inherits from .view-log). */
+.view-needs-you { max-width: 940px; }
+
+/* View header — mock .vh1 (19px/650) + .vsub (12px, 2px below). */
+.view-needs-you .log-title { font-size: 19px; font-weight: 650; }
+.view-needs-you .log-sub { font-size: 12px; margin: 2px 0 0; }
+
+/* Group rhythm — mock .grp/.grp-title/.grp-sub: 12.5px/650 head + 11px count,
+ * 7px below the head, 20px between groups. Half the previous build's air. */
+.view-needs-you .needs-you-group { margin-bottom: 20px; }
+.view-needs-you .today-section-head { margin-bottom: 7px; gap: 6px; }
+.view-needs-you .today-section-title { font-size: 12.5px; font-weight: 650; }
+.view-needs-you .today-section-count {
+  font-size: 11px;
+  font-weight: 400;
+  background: none;
+  color: var(--glass-text-dim);
+}
+.view-needs-you .needs-you-list { gap: 8px; }
+
+/* Card — mock .ncard: quiet wash, 0.5px hairline, radius 10, 11×14 padding,
+ * 8px between cards. Internal rhythm rides one 6px flex gap; the pieces drop
+ * their own margins. NO taller. */
+.view-needs-you .record-card {
+  gap: 6px;
+  padding: 11px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 10px;
+}
+
+/* Header line — mock .nh: chip + muted who/when on ONE line, 4px below
+ * (6px gap − 2px pull). */
+.view-needs-you .record-header {
+  gap: 8px;
+  align-items: baseline;
+  margin: 0 0 -2px;
+}
+.view-needs-you .record-chip {
+  font-size: 10.5px;
+  font-weight: 400;
+  padding: 0.5px 8px;
+  border-radius: 999px;
+  border: 0.5px solid var(--glass-border-strong);
+  background: none;
+  color: var(--glass-text-dim);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.view-needs-you .proxy-card-who { font-size: 11px; color: var(--glass-text-dim); }
+
+/* Claim line — mock .nt: 13px primary, lh 1.5. NOT display-size. */
+.view-needs-you .proxy-question,
+.view-needs-you .record-summary {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--glass-text);
+  margin: 0;
+}
+.view-needs-you .proxy-question-demoted,
+.view-needs-you .proxy-why {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  margin: 0;
+}
+.view-needs-you .record-meta { font-size: 11px; margin: 0; }
+
+/* Evidence — flat: one-line quotes with a 2px left hairline (mock .nev),
+ * date inline after the quote; no padded inset panel. */
+.view-needs-you .proxy-evidence {
+  background: none;
+  border: none;
+  padding: 0;
+  gap: 4px;
+}
+.view-needs-you .receipt.receipt-proxy .receipt-quote {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  border-left: 2px solid var(--glass-border-strong);
+  border-radius: 0;
+  padding: 0 0 0 8px;
+  margin: 0;
+}
+.view-needs-you .receipt.receipt-proxy { gap: 2px; }
+
+/* Verb row — mock .verbs/.btnp/.btns/.btnl: 8px gaps; primary = FILLED
+ * NEUTRAL (glass-text bg, near-black text); secondary = 0.5px hairline;
+ * tertiary = bare link. There is NO green verb in this grammar — green is
+ * resolved/positive STATE only, never an action. */
+.view-needs-you .record-actions { gap: 8px; padding-top: 3px; }
+.view-needs-you .proxy-confirm-btn,
+.view-needs-you .needs-you-confirm-btn,
+.view-needs-you .today-accept-btn,
+.view-needs-you .outbox-send-peer-btn,
+.view-needs-you .record-actions .btn-primary {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 7px;
+  border: none;
+  background: var(--glass-text);
+  color: #14151a;
+  transition: opacity 0.12s ease;
+}
+.view-needs-you .proxy-confirm-btn:hover,
+.view-needs-you .needs-you-confirm-btn:hover,
+.view-needs-you .today-accept-btn:hover,
+.view-needs-you .outbox-send-peer-btn:hover,
+.view-needs-you .record-actions .btn-primary:hover {
+  background: var(--glass-text);
+  opacity: 0.88;
+}
+.view-needs-you .record-actions .btn-secondary,
+.view-needs-you .record-action-btn:not(.proxy-confirm-btn) {
+  font-size: 11.5px;
+  font-weight: 400;
+  padding: 4px 12px;
+  border-radius: 7px;
+  border: 0.5px solid var(--glass-border-strong);
+  background: none;
+  color: var(--glass-text);
+}
+.view-needs-you .record-actions .btn-link {
+  font-size: 11.5px;
+  padding: 4px 6px;
+  color: var(--glass-text-dim);
+}

@@ -16610,6 +16610,16 @@ function deriveProxyAsk(item) {
   return { ask, isNewShape: false, debugTrace: item.debugTrace };
 }
 
+// Plain-language kind chips for the card header line (pixel contract) — the
+// user-facing register, not the fleet's verbs.
+const PROXY_KIND_CHIP_LABELS = {
+  merge: "same thing?",
+  combine: "same thing?",
+  close: "looks done",
+  chase: "gone quiet",
+  escalate: "re-promised",
+};
+
 // Human labels for the routing-verdict chip.
 const PROXY_VERDICT_LABELS = {
   DUPLICATE: "duplicate",
@@ -16756,6 +16766,25 @@ function renderProxyCard(item) {
   //   5. Everything mechanical (incl. the confidence %) behind Details.
   const derived = deriveProxyAsk(item);
 
+  // ── 0. Header line (pixel contract, mock .nh): plain-language kind chip +
+  //    muted who/when on ONE line. "filed for you" — never fleet vocabulary.
+  const head = document.createElement("div");
+  head.className = "record-header proxy-card-head";
+  const kindChip = document.createElement("span");
+  kindChip.className = "record-chip proxy-kind-chip";
+  kindChip.textContent = PROXY_KIND_CHIP_LABELS[item.kind] || "for review";
+  head.appendChild(kindChip);
+  const cardWho = document.createElement("span");
+  cardWho.className = "proxy-card-who";
+  const ts = item.ts ? Date.parse(item.ts) : NaN;
+  cardWho.textContent =
+    "filed for you" +
+    (Number.isNaN(ts)
+      ? ""
+      : " · " + new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+  head.appendChild(cardWho);
+  card.appendChild(head);
+
   // ── 1. The subject slot. Fail-VISIBLE: a join that can't resolve renders a
   //    plain couldn't-load line, never a silently context-free card.
   const subjectSlot = document.createElement("div");
@@ -16800,10 +16829,13 @@ function renderProxyCard(item) {
     );
     const d = evDates[i];
     if (d) {
+      // Pixel contract: the date rides inline at the end of its quote
+      // ("…same as last two syncs." — 2026-05-28), not on its own row.
       const dateEl = document.createElement("span");
       dateEl.className = "proxy-quote-date";
-      dateEl.textContent = String(d).slice(0, 10);
-      receipt.appendChild(dateEl);
+      dateEl.textContent = "— " + String(d).slice(0, 10);
+      const quote = receipt.querySelector(".receipt-quote");
+      (quote || receipt).appendChild(dateEl);
     }
     receiptEls.push({ i, el: receipt });
     evidence.appendChild(receipt);
@@ -17412,9 +17444,18 @@ function renderNeedsYouPeerCard(r, peerLabel) {
   chip.className = "record-chip";
   chip.textContent = peerKindLabel(r.envelopeKind);
   header.appendChild(chip);
+  // Pixel contract: who + when share the header line ("Elena's side · 9:12 AM"),
+  // not a chip plus a separate meta row.
   const who = document.createElement("span");
-  who.className = "record-chip outbox-peer-chip";
-  who.textContent = peerLabel;
+  who.className = "proxy-card-who";
+  const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
+  who.textContent =
+    peerLabel +
+    (Number.isNaN(ms)
+      ? ""
+      : " · " + new Date(ms).toLocaleString(undefined, {
+          month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+        }));
   header.appendChild(who);
   card.appendChild(header);
 
@@ -17425,16 +17466,6 @@ function renderNeedsYouPeerCard(r, peerLabel) {
   const kindWord = peerKindLabel(r.envelopeKind);
   summary.textContent = (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
   card.appendChild(summary);
-
-  const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
-  if (!Number.isNaN(ms)) {
-    const meta = document.createElement("p");
-    meta.className = "record-meta";
-    meta.textContent = "arrived " + new Date(ms).toLocaleString(undefined, {
-      month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    });
-    card.appendChild(meta);
-  }
 
   const actions = document.createElement("div");
   actions.className = "record-actions";
