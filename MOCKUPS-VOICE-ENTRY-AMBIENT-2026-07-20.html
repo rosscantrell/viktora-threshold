@@ -1,0 +1,244 @@
+<!doctype html>
+<!--
+  MOCKUPS-VOICE-ENTRY-AMBIENT-2026-07-20 — propose-before-build (Ross pixel-gates).
+
+  Ross ruling 2026-07-20 (first live V1 call): the Today-header "Check in"
+  button is too prominent. Wanted: a SUBTLE, OMNIPRESENT click-to-talk
+  affordance on all three surfaces — collapsed widget, expanded app (every
+  view via the nav strip), and the brief window — "click in at any time."
+  The dedicated call WebviewWindow stays as mechanics but reads as a status
+  whisper, not a control panel.
+
+  This file is the pixel CONTRACT for that V2 slice. Tokens are the app's own
+  glass tokens (distilled inline below). Amber = urgency only; no green
+  actions (in-call LIVE state uses the success hue as STATUS, mirrored from
+  the existing pill dot grammar — flagged as open question Q2).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice entry — ambient affordance (pixel contract)</title>
+<style>
+  /* ── distilled glass tokens (src/glass.css) ─────────────────────────── */
+  :root{
+    --glass-bg:rgba(28,30,38,.97); --glass-surface:rgba(255,255,255,.05);
+    --glass-surface-hover:rgba(255,255,255,.08); --glass-border:rgba(255,255,255,.10);
+    --glass-border-strong:rgba(255,255,255,.14);
+    --glass-text:#e8eaed; --glass-text-dim:#9aa0a6; --glass-text-faint:#6b7178;
+    --glass-accent:#ffc440; --glass-success:#5dcaa5; --glass-danger:#f09595;
+    --r-sm:8px; --r-md:9px; --r-lg:14px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#101218; color:var(--glass-text);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased; padding:48px clamp(24px,6vw,80px) 96px;
+  }
+  h1{font-size:22px;font-weight:700;letter-spacing:.01em}
+  .sub{color:var(--glass-text-dim);margin-top:6px;max-width:68ch}
+  .rule{border:0;border-top:1px solid var(--glass-border);margin:36px 0}
+  section{margin-top:44px}
+  h2{font-size:15px;font-weight:600;color:var(--glass-text);margin-bottom:4px}
+  .note{font-size:12.5px;color:var(--glass-text-dim);max-width:64ch;margin-bottom:18px}
+  .note code{color:var(--glass-text);background:var(--glass-surface);padding:1px 5px;border-radius:4px;font-size:11.5px}
+
+  .stage{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+  .frame{background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:var(--r-lg);
+         box-shadow:0 18px 48px rgba(0,0,0,.5)}
+  .cap{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--glass-text-faint);margin:10px 2px 0}
+
+  /* ── the one glyph (identical SVG on every surface) ─────────────────── */
+  .mic{display:inline-flex;align-items:center;justify-content:center;border:none;background:transparent;
+       color:var(--glass-text-faint);cursor:pointer;border-radius:var(--r-sm);padding:4px}
+  .mic:hover{color:var(--glass-text);background:var(--glass-surface-hover)}
+  .mic.live{color:var(--glass-success)}
+  .mic.live .live-dot{opacity:1}
+  .mic.off{opacity:.45;cursor:not-allowed}
+  .live-dot{opacity:0}
+  @keyframes breathe{50%{opacity:.35}}
+  .mic.live svg{animation:breathe 2.4s ease-in-out infinite}
+  @media (prefers-reduced-motion:reduce){.mic.live svg{animation:none}}
+
+  /* 1 — collapsed widget (180×80 real scale) */
+  .widget{width:180px;height:80px;display:flex;align-items:center;justify-content:center;gap:10px;position:relative}
+  .action-btn{width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:var(--glass-surface);
+              border:1px solid var(--glass-border);border-radius:var(--r-md);color:var(--glass-text-dim)}
+  .widget .mic{position:absolute;right:6px;bottom:5px;padding:2px}
+
+  /* 2 — nav strip */
+  .navstrip{width:560px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:var(--r-lg)}
+  .crumbs{font-size:12.5px;color:var(--glass-text-dim)}
+  .dests{display:flex;align-items:center;gap:4px}
+  .dest{font:inherit;font-size:12.5px;color:var(--glass-text-dim);background:transparent;border:none;
+        padding:5px 9px;border-radius:var(--r-sm);cursor:pointer}
+  .dest:hover{background:var(--glass-surface-hover);color:var(--glass-text)}
+  .dest.on{background:var(--glass-surface);color:var(--glass-text)}
+  .dest-sep{width:1px;height:16px;background:var(--glass-border);margin:0 4px}
+
+  /* 3 — brief head */
+  .briefhead{width:420px;padding:14px 16px}
+  .brief-row{display:flex;align-items:center;justify-content:space-between}
+  .brief-title{font-size:14px;font-weight:600}
+  .brief-tabs{display:flex;gap:6px;margin-top:10px}
+  .brief-tab{font:inherit;font-size:12px;color:var(--glass-text-dim);background:var(--glass-surface);
+             border:1px solid var(--glass-border);border-radius:999px;padding:3px 10px}
+  .brief-tab.on{color:var(--glass-text);border-color:var(--glass-border-strong)}
+
+  /* 4 — call whisper */
+  .whisper{width:260px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+  .wdot{width:8px;height:8px;border-radius:50%;background:var(--glass-success);animation:breathe 2s ease-in-out infinite}
+  .wtext{flex:1;font-size:12.5px}
+  .wsub{font-size:11px;color:var(--glass-text-faint)}
+  .wbtn{font:inherit;font-size:11px;color:var(--glass-text-dim);background:transparent;border:none;cursor:pointer;padding:3px 6px;border-radius:6px}
+  .wbtn:hover{background:var(--glass-surface-hover);color:var(--glass-text)}
+  .wbtn.end{color:var(--glass-danger)}
+
+  /* states table */
+  .states{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;max-width:860px}
+  .state-card{background:var(--glass-surface);border:1px solid var(--glass-border);border-radius:var(--r-md);padding:12px 14px}
+  .state-card b{display:block;font-size:12.5px;margin-bottom:2px}
+  .state-card span{font-size:11.5px;color:var(--glass-text-dim)}
+  .state-glyph{margin-bottom:8px}
+
+  .q{max-width:68ch}
+  .q li{margin:8px 0 0 18px;font-size:13px;color:var(--glass-text-dim)}
+  .q b{color:var(--glass-text)}
+</style>
+</head>
+<body>
+
+<h1>Voice entry — one ambient glyph, three surfaces</h1>
+<p class="sub">The affordance is a single small mic glyph — the companion's ear — always in the
+same visual role: idle it's faint, hover it wakes, in-call it breathes green and becomes the
+status mirror. Click it anywhere, any time, and the call opens. No labeled button anywhere.</p>
+
+<hr class="rule">
+
+<section>
+  <h2>1 · Collapsed widget (180×80, real scale)</h2>
+  <p class="note">The two existing actions keep their footprint. The ear sits in the
+  bottom-right corner at 16px — visible when you look for it, silent when you don't.
+  In-call it breathes; the widget needs no other change.</p>
+  <div class="stage">
+    <div>
+      <div class="frame widget">
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg></div>
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg></div>
+        <button class="mic" title="Talk to your companion" aria-label="Talk to your companion">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg>
+        </button>
+      </div>
+      <p class="cap">idle</p>
+    </div>
+    <div>
+      <div class="frame widget">
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><circle cx="12" cy="12" r="9"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg></div>
+        <div class="action-btn"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><polyline points="9 15 12 12 15 15"/></svg></div>
+        <button class="mic live" title="On a call — click to show the call" aria-label="On a call">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg>
+        </button>
+      </div>
+      <p class="cap">in-call (breathes)</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2 · Expanded app — nav strip (every view, not just Today)</h2>
+  <p class="note">The ear rides the right end of <code>app-nav-dests</code> behind a hairline
+  separator, icon-only like Home. Present on every view because the nav is. The Today-header
+  "Check in" button from V1 is <b>removed</b> in this slice.</p>
+  <div>
+    <div class="frame navstrip">
+      <div class="crumbs">Today</div>
+      <div class="dests">
+        <button class="dest">⌂</button>
+        <button class="dest on">Today</button>
+        <button class="dest">Watching</button>
+        <button class="dest">Log</button>
+        <div class="dest-sep"></div>
+        <button class="mic" title="Talk to your companion" aria-label="Talk to your companion">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg>
+        </button>
+      </div>
+    </div>
+    <p class="cap">idle · hover wakes it to full text color + surface</p>
+  </div>
+</section>
+
+<section>
+  <h2>3 · Brief window (brief.html head row)</h2>
+  <p class="note">Same glyph, right of the head row. A check-in that starts FROM the brief is
+  the natural morning gesture — read the brief, click the ear, talk it through.</p>
+  <div>
+    <div class="frame briefhead">
+      <div class="brief-row">
+        <div class="brief-title">Your morning brief</div>
+        <button class="mic" title="Talk to your companion" aria-label="Talk to your companion">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg>
+        </button>
+      </div>
+      <div class="brief-tabs">
+        <button class="brief-tab on">Morning</button>
+        <button class="brief-tab">Mid-day</button>
+        <button class="brief-tab">Evening</button>
+      </div>
+    </div>
+    <p class="cap">brief head row</p>
+  </div>
+</section>
+
+<section>
+  <h2>4 · The call window becomes a status whisper</h2>
+  <p class="note">Same dedicated WebviewWindow (§D lifecycle reasons hold), shrunk to one line:
+  dot + state + two ghost verbs. No panel furniture. Failure states keep their plain reason +
+  Retry exactly as V1 ships them.</p>
+  <div>
+    <div class="frame whisper">
+      <div class="wdot"></div>
+      <div class="wtext">Listening<div class="wsub">2:41</div></div>
+      <button class="wbtn">Mute</button>
+      <button class="wbtn end">End</button>
+    </div>
+    <p class="cap">260×44 · always-on-top · drag anywhere on the strip</p>
+  </div>
+</section>
+
+<section>
+  <h2>Glyph states (identical grammar on all three surfaces)</h2>
+  <div class="states">
+    <div class="state-card">
+      <div class="state-glyph"><button class="mic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button></div>
+      <b>Idle</b><span>--glass-text-faint · invisible until sought</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><button class="mic" style="color:var(--glass-text);background:var(--glass-surface-hover)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button></div>
+      <b>Hover</b><span>--glass-text on --glass-surface-hover · tooltip "Talk to your companion"</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><button class="mic live"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button></div>
+      <b>In-call</b><span>--glass-success, breathing · click fronts the whisper · status, not an action (Q2)</span>
+    </div>
+    <div class="state-card">
+      <div class="state-glyph"><button class="mic off"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/></svg></button></div>
+      <b>Not set up</b><span>45% opacity, still visible · tooltip carries the plain reason (fail-visible law)</span>
+    </div>
+  </div>
+</section>
+
+<section class="q">
+  <h2>Open questions for the pixel gate</h2>
+  <ol>
+    <li><b>Widget corner vs. third button:</b> corner glyph shown (subtler); a third full
+        action-btn is the alternative if 16px is too shy at widget scale.</li>
+    <li><b>In-call hue:</b> green shown as STATUS (mirrors the V1 pill's listening dot; "no
+        green actions" read as actions only). If green is out entirely, fallback is
+        --glass-text at full strength + breathe.</li>
+    <li><b>V1 Today-header button:</b> removed in this slice, or kept until the ambient glyph
+        proves itself?</li>
+  </ol>
+</section>
+
+</body>
+</html>
