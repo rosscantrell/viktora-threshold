@@ -27,5 +27,12 @@
   <dict>
     <key>LSUIElement</key>
     <true/>
+    <!--
+      WP-VOICE-THRESHOLD-ENTRY §E — without this key macOS KILLS the process
+      on first getUserMedia/mic touch in a signed build (no prompt, straight
+      crash). String is the user-visible line in the TCC permission dialog.
+    -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Threshold uses the microphone for voice check-ins with your companion.</string>
   </dict>
 </plist>
