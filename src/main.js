@@ -281,6 +281,15 @@ async function bootstrap() {
     return;
   }
 
+  // WP-VOICE-THRESHOLD-ENTRY Spike-0 TEMPORARY — the "Voice Probe (spike)"
+  // menu item expands here with #voice-probe. The probe page is standalone
+  // and needs no config/bearer, so this sits BEFORE all config gating.
+  // Removed with voice-probe.html after the spike verdict.
+  if (window.location.hash === "#voice-probe") {
+    window.location.replace("voice-probe.html");
+    return;
+  }
+
   // WP-WINDOW — overlay-titlebar affordance. On macOS the expanded window
   // uses the Overlay titlebar style (transparent titlebar, inline traffic
   // lights over our own glass). Tag <body> so the sticky #app-nav gains extra
