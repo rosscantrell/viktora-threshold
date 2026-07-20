@@ -16849,9 +16849,10 @@ function renderProxyFiledRow(item) {
 
 /**
  * Ratify a "Wants your eye" card: optimistically remove it, best-effort POST the
- * decision to the WP-E5 endpoint (via a future proxy_queue_decide IPC — absent
- * for now, so this stays local), and show an Undo toast that re-inserts the card
- * (mirrors dismissRecord → undoDismiss). `action` is "confirm" | "dismiss".
+ * decision server-side via the proxy_queue_decide IPC (engine
+ * /api/proxy-queue/:id/{confirm,dismiss,undo}), and show an Undo toast that
+ * re-inserts the card (mirrors dismissRecord → undoDismiss). `action` is
+ * "confirm" | "dismiss".
  */
 function proxyRatify(item, cardEl, action) {
   if (!cardEl) return;
@@ -16859,9 +16860,9 @@ function proxyRatify(item, cardEl, action) {
   const next = cardEl.nextSibling;
   cardEl.remove();
 
-  // Best-effort server decision. The IPC is a WP-E5 dependency; until it exists
-  // the invoke throws and we keep the optimistic local state (offline-tolerant,
-  // same posture as dismissRecord's server best-effort).
+  // Best-effort server decision (WP-THRESHOLD-NEEDS-YOU N1). On failure —
+  // offline, engine down — we keep the optimistic local state (same posture as
+  // dismissRecord's server best-effort); the item re-surfaces on next fetch.
   tauri.core
     .invoke("proxy_queue_decide", { id: item.id, decision: action })
     .catch((err) => console.warn("[main] proxy_queue_decide failed:", err));
@@ -16888,8 +16889,10 @@ function proxyRatify(item, cardEl, action) {
   });
 }
 
-/** Undo a filed item: remove the collapsed row and re-fetch so it re-surfaces
- *  in "Wants your eye" (server-side status flips to pending). Best-effort. */
+/** Undo a filed item: remove the collapsed row and best-effort persist the
+ *  reversal via proxy_queue_decide (engine sets status to "undone" — verified
+ *  against the live verbs 2026-07-20; note the engine's default GET is
+ *  pending-only, so an undone item re-surfaces via fixture or ?all=1). */
 function proxyUndoFiled(item, rowEl) {
   if (rowEl) rowEl.remove();
   tauri.core
