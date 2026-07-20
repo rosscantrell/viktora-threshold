@@ -4402,6 +4402,69 @@ async fn get_proxy_queue_count(state: tauri::State<'_, AppState>) -> Result<u32,
     Ok(count)
 }
 
+/// WP-THRESHOLD-NEEDS-YOU N1 — persist a proxy-inbox ratification server-side.
+/// Proxies POST /api/proxy-queue/:id/{confirm,dismiss,undo} (the engine verbs
+/// shipped in fleet/routes.ts) so decisions survive an app restart instead of
+/// living only in the optimistic client state. Mirrors `fetch_proxy_queue`:
+/// bearer auth, base_url, 30s timeout, and fixture-first — when the operator's
+/// `proxy-queue.fixture.json` is present the queue is fixture-served, so there
+/// is no server store to write to; return Ok and let the UI flow proceed.
+/// Response contract: { ok: true, item } from the engine, or { ok: true,
+/// fixture: true } in fixture mode.
+#[tauri::command]
+async fn proxy_queue_decide(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    decision: String,
+) -> Result<serde_json::Value, String> {
+    if !matches!(decision.as_str(), "confirm" | "dismiss" | "undo") {
+        return Err(format!(
+            "proxy_queue_decide: invalid decision {decision:?} (expected confirm|dismiss|undo)"
+        ));
+    }
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return Err("proxy_queue_decide: id is required".into());
+    }
+
+    // Fixture mode — the queue `fetch_proxy_queue` served came from the local
+    // fixture, so there is no server-side item to transition. Succeed so the
+    // optimistic UI flow (remove card, Undo toast) works in dev/demo.
+    if let Some(fixture) = config_dir().map(|p| p.join("proxy-queue.fixture.json")) {
+        if fixture.exists() {
+            log::info!("proxy_queue_decide({decision}) no-op: queue is fixture-served");
+            return Ok(serde_json::json!({ "ok": true, "fixture": true }));
+        }
+    }
+
+    let cfg = current_config(&state)?;
+    let url = format!(
+        "{}/api/proxy-queue/{}/{}",
+        cfg.base_url.trim_end_matches('/'),
+        urlencoding_minimal(&id),
+        decision
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("proxy_queue_decide: parse response failed: {e}"))
+}
+
 /// WP-SoP-Team-Update-Compose — derive an OUTWARD team status update FROM a
 /// Work-Forest SoP digest. Proxies POST /api/state-of-play/compose with
 /// { level, id }. `level` is required; `id` is required for job/frame (omit for
@@ -10482,6 +10545,8 @@ pub fn run() {
             // WP-CASCADE-PRODUCTION WP-T1 — proxy-fleet inbox queue + badge count
             fetch_proxy_queue,
             get_proxy_queue_count,
+            // WP-THRESHOLD-NEEDS-YOU N1 — persist ratifications server-side
+            proxy_queue_decide,
             frame_edit,
             fetch_learning_state,
             develop_rules,
