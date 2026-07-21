@@ -123,6 +123,14 @@ sets) makes the ladder decidable.
 - **Voice lane:** capture-lane stamping routes through the resolver (their
   postcall/boardwalk lanes stamped `ross` vs `ross-cantrell` — the founding
   variance); teaching lines per coherence architecture (registry, never prose).
+  *Folded precision (their contest-window ack, 2026-07-21, binding):* both
+  capture lanes already carry a deterministic identity INPUT (postcall =
+  REVIEWED_BY env email; boardwalk = the MCP token identity) — they route
+  through the **r2 email rung BY CONSTRUCTION**, never the alias rungs; a
+  capture that would fall below r2 FAILS LOUD (stamps ownerless + name-ask),
+  never guesses. Composes with their postcall fallback-only fix: that guard
+  decides WHETHER the webhook captures; this resolver decides WHAT identity
+  any capture stamps.
 - **Networking lane:** peer-doc/envelope identities resolve through the same
   ladder (the `companion+<frameKey>@<host>` email-form identity choice already
   anticipated slug pollution — r2 handles it); contest window open.
