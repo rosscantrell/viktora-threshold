@@ -108,6 +108,12 @@ calibration stream for tightening checklists over time — measured, not assumed
   pass, worker process call), pass charges, register lines, obligations —
   which enter the REGISTRY, never prose (coherence rule; e.g. a single
   `build-to-contract` obligation for deliverable passes, appliesTo declared).
+  *Voice-lane precision (their contest-window ack, folded 2026-07-21, binding):*
+  "pass charges" means MISSION references only — the build-to-contract
+  obligation rides `compilePassObligations` via the registry, and NO ordering
+  or compliance prose enters `cfg.system` (anti-resedimentation posture;
+  charges stay obligation-free — their #558 lesson). Registry entries name
+  their grade probes per the coherence law.
 - Flags: `DELIVERABLE_CONTRACTS_ENABLED` (contract serving + checklist gate),
   enrolled in pilot-full same-PR (drift gate). Spend/enables stay under the
   release-and-pilot gate.
