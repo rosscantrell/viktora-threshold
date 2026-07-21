@@ -3292,6 +3292,10 @@ async fn set_record_disposition(
     reason: Option<String>,
     comment: Option<String>,
     snooze_until: Option<String>,
+    // WP-THRESHOLD-RATIFY — when the gesture ratifies a companion proposal,
+    // the server stamps this id on the HitlEvent so the proposal's disposition
+    // joins EXACTLY (backlink) instead of by inference (the #466 contract).
+    proposal_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     if record_id.trim().is_empty() {
         return Err("set_record_disposition: empty record_id".into());
@@ -3317,6 +3321,9 @@ async fn set_record_disposition(
     }
     if let Some(s) = snooze_until {
         body.insert("snoozeUntil".into(), serde_json::Value::String(s));
+    }
+    if let Some(p) = proposal_id {
+        body.insert("proposalId".into(), serde_json::Value::String(p));
     }
 
     let client = reqwest::Client::builder()
@@ -3413,6 +3420,115 @@ async fn edit_record(
     resp.json::<serde_json::Value>()
         .await
         .map_err(|e| format!("edit_record: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-RATIFY — the companion's filed-closure queue (pending
+/// proposals awaiting the user's confirm/dismiss). Mirrors `fetch_proxy_queue`:
+/// fixture-first (`ratify-queue.fixture.json` beside config.json — the
+/// render-look path), then `GET /api/proposals?disposition=pending`. A 404/503
+/// means the engine doesn't serve the lane yet → `{available:false}` so the
+/// view keeps a calm absence (the fetch_companion_plan precedent) — a feature
+/// that isn't deployed is not a failure, so it must never wear a
+/// couldn't-reach line.
+#[tauri::command]
+async fn fetch_ratify_queue(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if let Some(fixture) = config_dir().map(|p| p.join("ratify-queue.fixture.json")) {
+        if fixture.exists() {
+            let raw = fs::read_to_string(&fixture)
+                .map_err(|e| format!("fetch_ratify_queue: read fixture failed: {e}"))?;
+            let val: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("fetch_ratify_queue: fixture parse failed: {e}"))?;
+            log::info!("ratify-queue served from fixture {}", fixture.display());
+            return Ok(val);
+        }
+    }
+
+    let cfg = match current_config(&state) {
+        Ok(c) => c,
+        Err(_) => return Ok(serde_json::json!({ "available": false, "proposals": [] })),
+    };
+    let url = format!(
+        "{}/api/proposals?disposition=pending&limit=200",
+        cfg.base_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if http_status.as_u16() == 404 || http_status.as_u16() == 503 {
+        return Ok(serde_json::json!({ "available": false, "proposals": [] }));
+    }
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("fetch_ratify_queue: parse response failed: {e}"))
+}
+
+/// WP-THRESHOLD-RATIFY — decline a companion proposal ITSELF (the proposal is
+/// dismissed; the underlying record is never touched). Proxies
+/// `POST /api/proposals/:id/decline`. Fixture mode (ratify-queue fixture
+/// present) no-ops like `proxy_queue_decide` — there is no server-side
+/// proposal to transition.
+#[tauri::command]
+async fn decline_proposal(
+    state: tauri::State<'_, AppState>,
+    proposal_id: String,
+    reason: Option<String>,
+) -> Result<serde_json::Value, String> {
+    if proposal_id.trim().is_empty() {
+        return Err("decline_proposal: empty proposal_id".into());
+    }
+    if let Some(fixture) = config_dir().map(|p| p.join("ratify-queue.fixture.json")) {
+        if fixture.exists() {
+            log::info!("decline_proposal no-op: queue is fixture-served");
+            return Ok(serde_json::json!({ "ok": true, "fixture": true }));
+        }
+    }
+    let cfg = current_config(&state)?;
+    let encoded: String =
+        url::form_urlencoded::byte_serialize(proposal_id.as_bytes()).collect();
+    let url = format!(
+        "{}/api/proposals/{}/decline",
+        cfg.base_url.trim_end_matches('/'),
+        encoded
+    );
+    let mut body = serde_json::Map::new();
+    if let Some(r) = reason {
+        body.insert("reason".into(), serde_json::Value::String(r));
+    }
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("HTTP client init failed: {e}"))?;
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", cfg.bearer_token))
+        .json(&serde_json::Value::Object(body))
+        .send()
+        .await
+        .map_err(|e| format!("Couldn't reach Apolla: {e}"))?;
+    let http_status = resp.status();
+    if !http_status.is_success() {
+        let body_text = resp.text().await.unwrap_or_default();
+        return Err(plaud_status_error(http_status, &url, &body_text));
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .map_err(|e| format!("decline_proposal: parse response failed: {e}"))
 }
 
 /// POST /api/synthesis/state-of-play/edit — the inline DIGEST edit decomposition
@@ -10514,6 +10630,9 @@ pub fn run() {
             set_record_disposition,
             // TYPED-DIFF-CAPTURE Phase 1 — typed draft-edit (owner / focus / prose)
             edit_record,
+            // WP-THRESHOLD-RATIFY — the companion's filed-closure queue
+            fetch_ratify_queue,
+            decline_proposal,
             // TYPED-DIFF-CAPTURE Phase B — inline digest decomposition + approve
             edit_digest,
             create_record_from_proposal,

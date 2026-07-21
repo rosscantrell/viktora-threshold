@@ -7695,3 +7695,41 @@ button.rec-source {
   cursor: pointer;
 }
 .ny-row-collapse:hover { color: var(--glass-text); }
+
+/* ── WP-THRESHOLD-RATIFY — the companion's filed closures (group 3) ─────────
+ * Rows reuse the ny-row grammar untouched. Additions: the capped-hidden
+ * state (rows stay in DOM + counts, display deferred behind the quiet line),
+ * the quiet show-all / cleared-themselves lines (11.5px dim, hairline
+ * underline on the actionable segment — never amber), the quoted why-note,
+ * and the batch member list. */
+.ny-row-wrap.ny-row-capped { display: none; }
+.ny-quiet-line {
+  display: block;
+  background: none;
+  border: none;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: none;
+}
+.ny-quiet-line:hover { color: var(--glass-text); }
+.ny-quiet-note {
+  padding: 4px 10px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+}
+.ratify-card .ratify-note {
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  line-height: 1.5;
+  border-left: 2px solid var(--glass-border-strong);
+  padding: 0 0 0 8px;
+  margin: 4px 0 6px;
+}
+.ratify-batch-members { margin: 2px 0 4px; }
+.ratify-batch-member { margin: 2px 0; }
+.ratify-batch-status { margin: 4px 0 0; }
