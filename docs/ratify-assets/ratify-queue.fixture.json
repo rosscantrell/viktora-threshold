@@ -1,0 +1,291 @@
+{
+  "available": true,
+  "counts": {
+    "pending": 16,
+    "expired": 3
+  },
+  "proposals": [
+    {
+      "proposalId": "fx-batch-snooze-1",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t1",
+      "when": "2026-07-19T11:01:21.202Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Trisha usability review \u2014 schedule the walkthrough session",
+        "owner": "trisha-comsti",
+        "due": "2026-06-25",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-batch-snooze-2",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t2",
+      "when": "2026-07-19T11:01:21.097Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Ambiguous-items cleanup from the June 25 recording",
+        "owner": "trisha-comsti",
+        "due": "2026-06-28",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-batch-snooze-3",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t3",
+      "when": "2026-07-19T11:01:21.005Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Narrative refresh v2 out to the client for review",
+        "owner": "trisha-comsti",
+        "due": "2026-07-02",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-batch-snooze-4",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t4",
+      "when": "2026-07-19T11:01:20.915Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Configure-and-test note for the shared workspace",
+        "owner": "trisha-comsti",
+        "due": "2026-07-03",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-batch-snooze-5",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t5",
+      "when": "2026-07-19T11:01:20.806Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Quarterly plan sync \u2014 reschedule after the pilot readout",
+        "owner": "trisha-comsti",
+        "due": "2026-07-08",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-batch-snooze-6",
+      "lane": "closure",
+      "verb": "snooze",
+      "recordId": "fx-rec-t6",
+      "when": "2026-07-19T11:01:20.724Z",
+      "proposedBy": "mcp-agent",
+      "note": "You said to park all eight Trisha-related items indefinitely \u2014 nothing time-critical enough to pursue.",
+      "disposition": "pending",
+      "payload": {
+        "snoozeUntil": null
+      },
+      "record": {
+        "summary": "Ingest checklist handoff \u2014 waiting on the template",
+        "owner": "trisha-comsti",
+        "due": "2026-07-10",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-resolve-keith",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-k1",
+      "when": "2026-07-20T21:16:58.196Z",
+      "proposedBy": "mcp-agent",
+      "note": "The Keith Griffiths meeting happened Monday 9:30 \u2014 you confirmed it at the midday check-in. This task is discharged.",
+      "disposition": "pending",
+      "payload": {},
+      "record": {
+        "summary": "Prep for the Keith Griffiths meeting \u2014 Sora status, Catalyst status, Copilot+ licensing ask",
+        "owner": "ross-cantrell",
+        "due": "2026-07-20",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-resolve-hr",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-h1",
+      "when": "2026-07-20T16:41:55.906Z",
+      "proposedBy": "mcp-agent",
+      "note": "You confirmed the competency spreadsheet went to HR on Friday \u2014 closing out the overdue tracker item.",
+      "disposition": "pending",
+      "payload": {},
+      "record": {
+        "summary": "Submit the competency spreadsheet to HR",
+        "owner": "ross-cantrell",
+        "due": "2026-07-17",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-resolve-goals",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-g1",
+      "when": "2026-07-21T12:10:14.788Z",
+      "proposedBy": "mcp-agent",
+      "note": "The catch-up with Maria and Rob on monthly goal-setting happened yesterday \u2014 you confirmed it this morning. Next step: send Rob the Excel files.",
+      "disposition": "pending",
+      "payload": {},
+      "record": {
+        "summary": "Catch up with Maria and Rob on monthly/period goal-setting",
+        "owner": "ross-cantrell",
+        "due": "2026-07-20",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-redate-fumi",
+      "lane": "closure",
+      "verb": "re_date",
+      "recordId": "fx-rec-f1",
+      "when": "2026-07-17T16:38:04.824Z",
+      "proposedBy": "mcp-agent",
+      "note": "You asked to push this to the Tuesday check-in instead of chasing it now.",
+      "disposition": "pending",
+      "payload": {
+        "from": "2026-07-16",
+        "to": "2026-07-22"
+      },
+      "record": {
+        "summary": "Fumi system architecture review \u2014 walk the open decisions",
+        "owner": "ross-cantrell",
+        "due": "2026-07-16",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-redate-speaker5",
+      "lane": "closure",
+      "verb": "re_date",
+      "recordId": "fx-rec-s5",
+      "when": "2026-07-17T16:38:04.314Z",
+      "proposedBy": "mcp-agent",
+      "note": "Pushed together with the architecture item \u2014 re-surface at Tuesday's check-in.",
+      "disposition": "pending",
+      "payload": {
+        "from": "2026-07-16",
+        "to": "2026-07-22"
+      },
+      "record": {
+        "summary": "Speaker 5 review item \u2014 competency table follow-through",
+        "owner": "ross-cantrell",
+        "due": "2026-07-16",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-expired-1",
+      "lane": "closure",
+      "verb": "re_date",
+      "recordId": "fx-rec-f1",
+      "when": "2026-07-17T16:32:36.522Z",
+      "proposedBy": "mcp-agent",
+      "note": "You asked to push this to Tuesday check-in rather than chase now.",
+      "disposition": "pending",
+      "expired": true,
+      "expiredReason": "superseded-by-newer",
+      "payload": {
+        "from": "2026-07-16",
+        "to": "2026-07-22"
+      },
+      "record": {
+        "summary": "Fumi system architecture review \u2014 walk the open decisions",
+        "owner": "ross-cantrell",
+        "due": "2026-07-16",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-expired-2",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-z1",
+      "when": "2026-07-15T16:54:12.270Z",
+      "proposedBy": "mcp-agent",
+      "note": "Draft complete and queued to the outbox for your review.",
+      "disposition": "pending",
+      "payload": {},
+      "record": {
+        "summary": "AI tool usage guidance one-slider",
+        "owner": "ross-cantrell",
+        "due": "2026-07-20",
+        "state": "open"
+      }
+    },
+    {
+      "proposalId": "fx-expired-3",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-z2",
+      "when": "2026-07-15T16:46:05.383Z",
+      "proposedBy": "mcp-agent",
+      "note": "Plan-of-record continuity persisted.",
+      "disposition": "pending",
+      "expired": true,
+      "expiredReason": "record-closed",
+      "payload": {},
+      "record": {
+        "summary": "Persist charter handoff continuity",
+        "owner": "ross-cantrell",
+        "due": null,
+        "state": "resolved"
+      }
+    },
+    {
+      "proposalId": "fx-expired-4",
+      "lane": "closure",
+      "verb": "resolve",
+      "recordId": "fx-rec-z3",
+      "when": "2026-07-13T21:31:02.854Z",
+      "proposedBy": "mcp-agent",
+      "note": "Moot \u2014 the note went out directly.",
+      "disposition": "pending",
+      "expired": true,
+      "expiredReason": "record-closed",
+      "payload": {},
+      "record": {
+        "summary": "Review and send the Nathalia HR note",
+        "owner": "ross-cantrell",
+        "due": "2026-07-13",
+        "state": "resolved"
+      }
+    }
+  ]
+}

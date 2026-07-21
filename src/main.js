@@ -17094,8 +17094,8 @@ let _nyState = null;
 
 function _nyResetState() {
   _nyState = {
-    settled: { proxy: false, questions: false, packet: false, outbox: false },
-    failed: { proxy: false, questions: false, packet: false, outbox: false },
+    settled: { proxy: false, questions: false, packet: false, outbox: false, ratify: false },
+    failed: { proxy: false, questions: false, packet: false, outbox: false, ratify: false },
     ages: [], // ms timestamps of items that carry one (oldest drives the sub-line)
   };
 }
@@ -17104,7 +17104,7 @@ function _nyResetState() {
 const _NY_GROUPS = [
   { key: "calls", sources: ["proxy", "questions", "packet"] },
   { key: "go", sources: ["outbox", "packet"] },
-  { key: "confirm", sources: ["proxy", "packet"] },
+  { key: "confirm", sources: ["proxy", "packet", "ratify"] },
 ];
 
 // Plain product language for the couldn't-reach lines (no pipeline names).
@@ -17113,6 +17113,7 @@ const _NY_SOURCE_LABELS = {
   questions: "your question queue",
   packet: "what your colleagues sent",
   outbox: "prepared drafts",
+  ratify: "closures your companion filed",
 };
 
 async function enterNeedsYouView() {
@@ -17147,6 +17148,7 @@ async function enterNeedsYouView() {
   loadNeedsYouQuestions().catch((e) => { console.warn("[main] Needs you (questions):", e); _nySettle("questions", true); });
   loadNeedsYouPacket().catch((e) => { console.warn("[main] Needs you (colleagues):", e); _nySettle("packet", true); });
   loadNeedsYouOutbox().catch((e) => { console.warn("[main] Needs you (drafts):", e); _nySettle("outbox", true); });
+  loadNeedsYouRatify().catch((e) => { console.warn("[main] Needs you (ratify):", e); _nySettle("ratify", true); });
 }
 
 // ── The thin index (Ross ruling at the live gate, 2026-07-20): the lane
@@ -17517,6 +17519,428 @@ async function loadNeedsYouOutbox() {
   _nySettle("outbox", false);
 }
 
+// ── WP-THRESHOLD-RATIFY — the companion's filed closures → group 3 ─────────
+//
+// Every closure the companion files on a call lands as an INERT proposal
+// awaiting the user's tap; until now the queue had no surface, so proposals
+// aged pending and walked rows kept reading as open (the live false-negative).
+// This source renders each pending proposal as a collapsed decision row in
+// "Confirm what happened". Confirm applies the proposed verb through the
+// EXISTING ratify lanes (resolve/snooze → set_record_disposition threading
+// proposalId — the exact-backlink contract; re_date → edit_record substance
+// due edit, inferred-join lane by server design). Dismiss declines the
+// proposal itself and never touches the record. Proposals filed together as
+// one spoken decision (same verb + same note) collapse into ONE batch row —
+// eight parks from one "park all eight" utterance are one decision, not
+// eight taps. Rows the server flags expired (record already closed, or a
+// newer same-verb proposal exists) are never decisions — they fold into a
+// quiet cleared-themselves count.
+
+const _RATIFY_VERB_CHIPS = { resolve: "close out", re_date: "move date", snooze: "park", link: "link" };
+const _RATIFY_VERB_WORDS = { resolve: "Close out", re_date: "Move", snooze: "Park", link: "Link" };
+const _NY_RATIFY_CAP = 6; // visible decision rows before the show-all quiet line
+
+/** ONE grouping/count rule shared by the view and the boot pill — no drifting
+ *  count-only copy. Returns { singles, batches, expiredN, decisionN }. */
+function groupRatifyQueue(payload) {
+  const rows = payload && Array.isArray(payload.proposals) ? payload.proposals : [];
+  const pending = rows.filter((r) => r && r.proposalId && !r.expired && r.disposition !== "dismissed");
+  const expiredN = rows.filter((r) => r && r.expired).length;
+  const ts = (r) => (r.when ? Date.parse(r.when) || 0 : 0);
+  const byKey = new Map();
+  for (const r of pending) {
+    const key = r.verb + " " + (r.note || "");
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(r);
+  }
+  const singles = [];
+  const batches = [];
+  for (const group of byKey.values()) {
+    group.sort((a, b) => ts(b) - ts(a));
+    if (group.length >= 2 && group[0].note) batches.push(group);
+    else singles.push(...group);
+  }
+  singles.sort((a, b) => ts(b) - ts(a));
+  batches.sort((a, b) => ts(b[0]) - ts(a[0]));
+  return { singles, batches, expiredN, decisionN: singles.length + batches.length };
+}
+
+async function loadNeedsYouRatify() {
+  let payload;
+  try {
+    payload = await tauri.core.invoke("fetch_ratify_queue");
+  } catch (err) {
+    console.warn("[main] fetch_ratify_queue failed (Needs you):", err);
+    _nySettle("ratify", true);
+    return;
+  }
+  // Engine without the lane → calm absence (the fetch_companion_plan
+  // precedent), never a couldn't-reach line for an undeployed feature.
+  if (!payload || payload.available === false) {
+    _nySettle("ratify", false);
+    return;
+  }
+  const { singles, batches, expiredN } = groupRatifyQueue(payload);
+  const confirmList = document.getElementById("ny-confirm-list");
+  if (confirmList) {
+    const rowEls = [];
+    for (const group of batches) {
+      try { rowEls.push(renderRatifyBatchRow(group)); }
+      catch (e) { console.warn("[main] ratify batch row:", e); }
+    }
+    for (const r of singles) {
+      try { rowEls.push(renderRatifySingleRow(r)); }
+      catch (e) { console.warn("[main] ratify row:", e); }
+    }
+    rowEls.forEach((el, idx) => {
+      if (idx >= _NY_RATIFY_CAP) el.classList.add("ny-row-capped");
+      confirmList.appendChild(el);
+    });
+    // Hard cap + honest overflow (fail-closed-but-visible): hidden rows stay
+    // in the DOM and in the counts; the quiet line reveals them.
+    if (rowEls.length > _NY_RATIFY_CAP) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "ny-quiet-line";
+      more.dataset.nyNonrow = "1";
+      more.textContent = `${rowEls.length - _NY_RATIFY_CAP} more from your companion — show all`;
+      more.addEventListener("click", () => {
+        confirmList.querySelectorAll(".ny-row-capped").forEach((el) => el.classList.remove("ny-row-capped"));
+        more.remove();
+      });
+      confirmList.appendChild(more);
+    }
+    if (expiredN) {
+      const q = document.createElement("p");
+      q.className = "ny-quiet-note";
+      q.dataset.nyNonrow = "1";
+      q.textContent = `${expiredN} cleared ${expiredN === 1 ? "itself" : "themselves"} — already closed or superseded`;
+      confirmList.appendChild(q);
+    }
+  }
+  if (_nyState) {
+    for (const r of [...singles, ...batches.flat()]) {
+      const ms = r.when ? Date.parse(r.when) : NaN;
+      if (!Number.isNaN(ms)) _nyState.ages.push(ms);
+    }
+  }
+  _nySettle("ratify", false);
+}
+
+function _ratifyWhenShort(r) {
+  const ms = r.when ? Date.parse(r.when) : NaN;
+  return Number.isNaN(ms)
+    ? ""
+    : new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function _ratifySummary(r) {
+  const rec = r.record || {};
+  if (rec.summary) return rec.summary;
+  return clampText(r.note || "A filed closure", 100);
+}
+
+function _ratifyMeta(r) {
+  const bits = [];
+  const when = _ratifyWhenShort(r);
+  if (when) bits.push("filed " + when);
+  const p = r.payload || {};
+  if (r.verb === "re_date" && p.to) bits.push("→ due " + formatDueDate(p.to));
+  // The park chip already says park — the meta only adds a date when there is one.
+  if (r.verb === "snooze" && p.snoozeUntil) bits.push("until " + formatDueDate(p.snoozeUntil));
+  return bits.join(" · ");
+}
+
+/** Apply one proposal through the existing ratify lanes. Throws on failure —
+ *  callers keep the row and surface the error (a kept row is the honest
+ *  state; nothing hides on a failed write). */
+async function applyRatifyProposal(r) {
+  const comment = r.note ? clampText(r.note, 300) : undefined;
+  if (r.verb === "resolve") {
+    return tauri.core.invoke("set_record_disposition", {
+      recordId: r.recordId,
+      disposition: "resolved",
+      comment,
+      proposalId: r.proposalId,
+    });
+  }
+  if (r.verb === "snooze") {
+    const args = {
+      recordId: r.recordId,
+      disposition: "snoozed",
+      comment,
+      proposalId: r.proposalId,
+    };
+    const p = r.payload || {};
+    if (p.snoozeUntil) args.snoozeUntil = p.snoozeUntil;
+    return tauri.core.invoke("set_record_disposition", args);
+  }
+  if (r.verb === "re_date") {
+    const p = r.payload || {};
+    if (!p.to) throw new Error("This proposal doesn't carry the new date — open the item in the Log to move it.");
+    return tauri.core.invoke("edit_record", {
+      recordId: r.recordId,
+      editType: "substance",
+      edits: [{ field: "due", from: p.from || null, to: p.to }],
+    });
+  }
+  throw new Error("This kind of proposal isn't tap-ratifiable yet — open the item in the Log.");
+}
+
+function renderRatifySingleRow(r) {
+  return renderNeedsYouRow(
+    "ratify:" + r.proposalId,
+    _RATIFY_VERB_CHIPS[r.verb] || "filed",
+    _ratifySummary(r),
+    _ratifyMeta(r),
+    () => renderRatifyCard(r),
+  );
+}
+
+/** Shared card chrome: header (verb chip + provenance) on a record-card. */
+function _ratifyCardShell(chipText, whenText) {
+  const card = document.createElement("div");
+  card.className = "record-card ratify-card";
+  const header = document.createElement("div");
+  header.className = "record-header";
+  const chip = document.createElement("span");
+  chip.className = "record-chip";
+  chip.textContent = chipText;
+  header.appendChild(chip);
+  const who = document.createElement("span");
+  who.className = "proxy-card-who";
+  who.textContent = "your companion" + (whenText ? " · filed " + whenText : "");
+  header.appendChild(who);
+  card.appendChild(header);
+  return card;
+}
+
+/** Remove the row a card lives in and re-reconcile counts/pill. */
+function _ratifyRemoveRow(cardEl) {
+  const wrap = cardEl.closest(".ny-row-wrap");
+  if (wrap) wrap.remove();
+  reconcileNeedsYou();
+}
+
+function renderRatifyCard(r) {
+  const card = _ratifyCardShell(_RATIFY_VERB_CHIPS[r.verb] || "filed", _ratifyWhenShort(r));
+
+  const rec = r.record || {};
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = rec.summary || clampText(r.note || "", 140) || "(item unavailable)";
+  card.appendChild(summary);
+
+  const metaBits = [];
+  if (rec.owner) metaBits.push(prettySlug(rec.owner));
+  if (rec.due) metaBits.push("due " + formatDueDate(rec.due));
+  const p = r.payload || {};
+  if (r.verb === "re_date" && p.to) {
+    metaBits.push(`moves ${p.from ? formatDueDate(p.from) : "the date"} → ${formatDueDate(p.to)}`);
+  }
+  if (r.verb === "snooze") {
+    metaBits.push(p.snoozeUntil ? "parks it until " + formatDueDate(p.snoozeUntil) : "parks it until you bring it back");
+  }
+  if (metaBits.length) {
+    const meta = document.createElement("p");
+    meta.className = "record-meta";
+    meta.textContent = metaBits.join(" · ");
+    card.appendChild(meta);
+  }
+
+  // The why — the note the companion filed with the proposal, quoted.
+  if (r.note && rec.summary) {
+    const note = document.createElement("p");
+    note.className = "ratify-note";
+    note.textContent = r.note;
+    card.appendChild(note);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "needs-you-confirm-btn";
+  confirm.textContent = "Confirm";
+  confirm.title = "Confirm — apply what the companion filed";
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "btn btn-secondary";
+  dismiss.textContent = "Dismiss";
+  dismiss.title = "Dismiss the proposal — the item stays exactly as it is";
+  confirm.addEventListener("click", async () => {
+    confirm.disabled = true;
+    dismiss.disabled = true;
+    confirm.textContent = "Filing…";
+    try {
+      await applyRatifyProposal(r);
+      _ratifyRemoveRow(card);
+      showToast({
+        kind: "success",
+        title: "Confirmed",
+        body: clampText(_ratifySummary(r), 80),
+      });
+    } catch (err) {
+      console.warn("[main] ratify confirm failed:", err);
+      confirm.disabled = false;
+      dismiss.disabled = false;
+      confirm.textContent = "Confirm";
+      showToast({ kind: "failure", title: "Couldn't file it", body: String(err && err.message ? err.message : err) });
+    }
+  });
+  dismiss.addEventListener("click", async () => {
+    confirm.disabled = true;
+    dismiss.disabled = true;
+    try {
+      await tauri.core.invoke("decline_proposal", { proposalId: r.proposalId });
+      _ratifyRemoveRow(card);
+      showToast({
+        kind: "idempotent",
+        title: "Dismissed",
+        body: "The item stays as it was.",
+      });
+    } catch (err) {
+      console.warn("[main] decline_proposal failed:", err);
+      confirm.disabled = false;
+      dismiss.disabled = false;
+      showToast({ kind: "failure", title: "Couldn't dismiss", body: String(err && err.message ? err.message : err) });
+    }
+  });
+  actions.appendChild(confirm);
+  actions.appendChild(dismiss);
+  card.appendChild(actions);
+  return card;
+}
+
+function renderRatifyBatchRow(group) {
+  const r0 = group[0];
+  const word = _RATIFY_VERB_WORDS[r0.verb] || "File";
+  return renderNeedsYouRow(
+    "ratify-batch:" + r0.proposalId,
+    (_RATIFY_VERB_CHIPS[r0.verb] || "filed") + " ×" + group.length,
+    `${word} ${group.length} items together`,
+    _ratifyWhenShort(r0) ? "filed " + _ratifyWhenShort(r0) : "",
+    () => renderRatifyBatchCard(group),
+  );
+}
+
+function renderRatifyBatchCard(group) {
+  const r0 = group[0];
+  const card = _ratifyCardShell(
+    (_RATIFY_VERB_CHIPS[r0.verb] || "filed") + " ×" + group.length,
+    _ratifyWhenShort(r0),
+  );
+
+  // The shared note IS the decision — it leads the card.
+  const summary = document.createElement("p");
+  summary.className = "record-summary";
+  summary.textContent = r0.note || `${_RATIFY_VERB_WORDS[r0.verb] || "File"} ${group.length} items together`;
+  card.appendChild(summary);
+
+  // Member list — capped with an honest overflow line.
+  const MEMBER_CAP = 8;
+  const members = document.createElement("div");
+  members.className = "ratify-batch-members";
+  for (const r of group.slice(0, MEMBER_CAP)) {
+    const line = document.createElement("p");
+    line.className = "record-meta ratify-batch-member";
+    const rec = r.record || {};
+    line.textContent = "· " + (rec.summary ? clampText(rec.summary, 90) : "(item " + r.recordId + ")");
+    members.appendChild(line);
+  }
+  if (group.length > MEMBER_CAP) {
+    const moreLine = document.createElement("p");
+    moreLine.className = "record-meta ratify-batch-member";
+    moreLine.textContent = `· and ${group.length - MEMBER_CAP} more`;
+    members.appendChild(moreLine);
+  }
+  card.appendChild(members);
+
+  const status = document.createElement("p");
+  status.className = "record-meta ratify-batch-status";
+  status.hidden = true;
+  card.appendChild(status);
+
+  const actions = document.createElement("div");
+  actions.className = "record-actions";
+  const confirmAll = document.createElement("button");
+  confirmAll.type = "button";
+  confirmAll.className = "needs-you-confirm-btn";
+  confirmAll.textContent = `Confirm all ${group.length}`;
+  const dismissAll = document.createElement("button");
+  dismissAll.type = "button";
+  dismissAll.className = "btn btn-secondary";
+  dismissAll.textContent = "Dismiss all";
+  dismissAll.title = "Dismiss every proposal in this group — the items stay as they are";
+  const reviewEach = document.createElement("button");
+  reviewEach.type = "button";
+  reviewEach.className = "btn btn-link";
+  reviewEach.textContent = "Review each";
+
+  // Sequential apply (one write at a time — the server's write lane is FIFO
+  // and a burst of parallel PATCHes is the paid-for race shape). Honest
+  // partial on failure: succeeded rows leave, failures stay listed.
+  const runAll = async (applyOne, doneTitle) => {
+    confirmAll.disabled = true;
+    dismissAll.disabled = true;
+    reviewEach.disabled = true;
+    status.hidden = false;
+    const failed = [];
+    let done = 0;
+    for (const r of group) {
+      status.textContent = `Filing ${done + failed.length + 1} of ${group.length}…`;
+      try {
+        await applyOne(r);
+        done++;
+      } catch (err) {
+        console.warn("[main] ratify batch item failed:", err);
+        failed.push(r);
+      }
+    }
+    if (!failed.length) {
+      _ratifyRemoveRow(card);
+      showToast({ kind: "success", title: doneTitle, body: `${done} of ${group.length} filed.` });
+      return;
+    }
+    // Honest partial: the card stays, listing only what's left.
+    members.innerHTML = "";
+    for (const r of failed.slice(0, MEMBER_CAP)) {
+      const line = document.createElement("p");
+      line.className = "record-meta ratify-batch-member";
+      const rec = r.record || {};
+      line.textContent = "· " + (rec.summary ? clampText(rec.summary, 90) : "(item " + r.recordId + ")");
+      members.appendChild(line);
+    }
+    group = failed;
+    status.textContent = `${done} filed · ${failed.length} couldn't be filed — kept here, try again.`;
+    confirmAll.textContent = `Confirm all ${group.length}`;
+    confirmAll.disabled = false;
+    dismissAll.disabled = false;
+    reviewEach.disabled = false;
+  };
+
+  confirmAll.addEventListener("click", () => runAll((r) => applyRatifyProposal(r), "Confirmed"));
+  dismissAll.addEventListener("click", () =>
+    runAll((r) => tauri.core.invoke("decline_proposal", { proposalId: r.proposalId }), "Dismissed"),
+  );
+  reviewEach.addEventListener("click", () => {
+    const wrap = card.closest(".ny-row-wrap");
+    if (!wrap || !wrap.parentNode) return;
+    for (const r of group) {
+      try { wrap.parentNode.insertBefore(renderRatifySingleRow(r), wrap); }
+      catch (e) { console.warn("[main] ratify review-each row:", e); }
+    }
+    wrap.remove();
+    reconcileNeedsYou();
+  });
+
+  actions.appendChild(confirmAll);
+  actions.appendChild(dismissAll);
+  actions.appendChild(reviewEach);
+  card.appendChild(actions);
+  return card;
+}
+
 // One peer question/handoff as an expanded card in the record-card family.
 // The provenance invariant holds: the envelope doc is always openable when the
 // row carries its id. No fabricated verbs — answering/accepting happens in the
@@ -17614,7 +18038,12 @@ function reconcileNeedsYou() {
   const groupCounts = {};
   for (const g of _NY_GROUPS) {
     const list = document.getElementById(`ny-${g.key}-list`);
-    let n = list ? list.children.length : 0;
+    // Quiet lines (show-all toggles, cleared-themselves counts) live inside
+    // the lists but are not items — they carry data-ny-nonrow and are
+    // excluded from the honest counts. Capped-hidden rows stay counted.
+    let n = list
+      ? list.children.length - list.querySelectorAll(":scope > [data-ny-nonrow]").length
+      : 0;
     if (g.key === "confirm") {
       const filedList = document.getElementById("ny-filed-list");
       n += filedList ? filedList.children.length : 0;
@@ -17696,7 +18125,7 @@ async function refreshNeedsYouPill() {
   if (!tauri) return;
   let anyFailed = false;
   const guard = (p) => p.catch(() => { anyFailed = true; return null; });
-  const [proxyPayload, outboxData, packet, qe, mergeAsks, nameAsks] = await Promise.all([
+  const [proxyPayload, outboxData, packet, qe, mergeAsks, nameAsks, ratifyPayload] = await Promise.all([
     guard(tauri.core.invoke("fetch_proxy_queue")),
     guard(tauri.core.invoke("fetch_outbox")),
     guard(tauri.core.invoke("fetch_checkin_brief", {
@@ -17706,10 +18135,16 @@ async function refreshNeedsYouPill() {
     guard(collectQuestionEngineCard()),
     guard(collectMergeAskCards()),
     guard(collectNameAskCards()),
+    guard(tauri.core.invoke("fetch_ratify_queue")),
   ]);
   if (anyFailed) return;
 
   const { live } = splitProxyPiles(proxyPayload);
+  // Same grouping rule the view renders with — a batch is ONE decision.
+  const ratifyN =
+    ratifyPayload && ratifyPayload.available !== false
+      ? groupRatifyQueue(ratifyPayload).decisionN
+      : 0;
   const outboxN = outboxData && Array.isArray(outboxData.items) ? outboxData.items.length : 0;
   const questionN = (qe || []).length + (mergeAsks || []).length + (nameAsks || []).length;
   let packetN = 0;
@@ -17724,7 +18159,7 @@ async function refreshNeedsYouPill() {
     packetN += prework && Array.isArray(prework.acceptCards) ? prework.acceptCards.length : 0;
     packetN += prework && Array.isArray(prework.items) ? prework.items.length : 0;
   }
-  updateNeedsYouPill(live.length + outboxN + questionN + packetN);
+  updateNeedsYouPill(live.length + outboxN + questionN + packetN + ratifyN);
 }
 
 // Refresh re-enters the view (the enterOutboxView pattern) — idempotent wiring.
