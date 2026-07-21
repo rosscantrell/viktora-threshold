@@ -4799,6 +4799,62 @@ button.today-count-link:hover {
   color: var(--glass-text);
 }
 
+/* ── WP-THRESHOLD-NEEDS-YOU N4 — Log modes v1 (Concept L2 mock = pixel
+   contract). Chip row: gap 6 / 14 below; selected = soft fill
+   rgba(255,255,255,0.07) + primary text + radius 7; unselected = bare 12px
+   dim text. Measurements lifted from the mock, colors mapped to tokens. */
+.log-modes {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.log-mode-btn {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px; /* integer chip height — the row below sits at a whole-pixel offset */
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  color: var(--glass-text-dim);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.log-mode-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--glass-text);
+}
+
+/* Catch up hides the archive chrome (lenses, status filter, workload) via the
+   view-level mode class — a CLASS, not [hidden], because loadLogWorkload
+   unhides its section asynchronously and would race a hidden attribute. */
+#view-decisions.log-mode-catchup .decisions-controls,
+#view-decisions.log-mode-catchup .decisions-filter,
+#view-decisions.log-mode-catchup #log-workload-section {
+  display: none;
+}
+
+/* Honest overflow line under the capped list (mock .quiet-line: 11.5px dim,
+   4x10 padding; the underline idiom = 0.5px bottom hairline, no text
+   decoration). A button — clicking it opens Everything (review affordance). */
+.catchup-overflow {
+  font-family: inherit;
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.catchup-overflow > span {
+  border-bottom: 0.5px solid #3a3d46;
+}
+
 /* Lens selector — the organizing-axis switch (Project / Deadline / Person). */
 .decisions-controls {
   display: flex;
