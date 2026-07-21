@@ -480,6 +480,24 @@ code {
   box-shadow: none;
   cursor: not-allowed;
 }
+/* The design-grammar filled-neutral primary (DESIGN-GRAMMAR-THRESHOLD-
+   2026-07-20): a verb's strongest weight is a glass-text fill on near-black —
+   never the legacy blue, never green (green = state only). */
+.btn-neutral {
+  background: var(--glass-text);
+  color: #14151a;
+  font-weight: 600;
+  box-shadow: var(--edge-highlight);
+  transition: opacity 0.12s ease;
+}
+.btn-neutral:hover {
+  background: var(--glass-text);
+  opacity: 0.88;
+}
+.btn-neutral:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .btn-secondary {
   background: var(--surface-1);
   color: var(--text-primary);
@@ -2721,65 +2739,34 @@ code {
   color: var(--glass-success);
 }
 
-/* WP-COMPANION-NETWORK-UI — "From your colleagues": quiet receipt rows of what
-   arrived from linked peers since the user last looked. Same panel footing as
-   the plan stratum; kinds are tinted-ghost words, never filled pills. */
-.today-peer-panel {
-  padding: 10px 14px;
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  box-shadow: var(--edge-highlight);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-#today-peer-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.today-peer-row {
+/* WP-THRESHOLD-NEEDS-YOU N2 — the quiet-line cluster: the dissolved sections'
+   counted pointers into Needs you, ONE line at the bottom of the brief (the
+   mock's .quiet-line grammar: 11.5px dim, hairline underline under the nav
+   segments, never amber). [hidden] guard — display:flex outranks [hidden]
+   (the documented trap). */
+.today-quiet-lines {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 10px 0;
 }
-.today-peer-row.is-openable {
-  cursor: pointer;
-}
-.today-peer-row.is-openable:hover .today-peer-text {
-  color: var(--text-primary);
-}
-.today-peer-kind {
-  flex: none;
-  min-width: 58px;
-  font-size: 10.5px;
-  color: var(--glass-text-faint);
-}
-.today-peer-text {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  color: var(--glass-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.today-peer-when {
-  flex: none;
-  font-size: 10.5px;
-  color: var(--glass-text-faint);
-  white-space: nowrap;
-}
-.today-peer-overflow {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: var(--glass-text-faint);
-}
-.today-peer-overflow[hidden] {
+.today-quiet-lines[hidden] {
   display: none;
+}
+.today-quiet-sep {
+  font-size: 11.5px;
+  color: var(--glass-text-faint);
+}
+.today-quiet-lines button.today-log-line {
+  border-bottom: 0.5px solid var(--glass-border-strong);
+  padding-bottom: 1px;
+}
+.today-quiet-lines .today-log-line.is-static {
+  cursor: default;
+}
+.today-quiet-lines .today-log-line.is-static:hover {
+  color: var(--glass-text-faint);
 }
 
 /* ③ Your plan — reconciliation rows: quiet mark (✓ done, · open) + text +
@@ -3430,6 +3417,18 @@ code {
   text-align: center;
 }
 .today-section-count:empty { display: none; }
+.today-section-count[hidden] { display: none; }
+
+/* N2 — a head count that POINTS somewhere (the question rest-count → Needs
+   you) is a real button wearing the same count chip. */
+button.today-count-link {
+  font-family: inherit;
+  cursor: pointer;
+}
+button.today-count-link:hover {
+  color: var(--glass-text);
+  border-color: var(--glass-border-strong);
+}
 
 /* ① SoP header — the streamed narrative + skeleton resting state. */
 .today-sop-skeleton {
@@ -3489,15 +3488,6 @@ code {
   color: var(--glass-text-faint);
   font-size: 10px;
 }
-
-/* Awaiting-send drafts inside the Needs-you band (WP-TODAY-3BANDS — the former
-   standalone tray). Cards keep the companion-card anatomy below. */
-.today-outbox-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.today-outbox-list:empty { display: none; }
 
 /* WP-OUTBOX-COMPANION-CARD — the companion-lane outbox card. */
 /* Doubled selector beats .record-chip's uppercase regardless of sheet order —
@@ -7615,7 +7605,8 @@ button.rec-source {
 .view-needs-you .needs-you-confirm-btn,
 .view-needs-you .today-accept-btn,
 .view-needs-you .outbox-send-peer-btn,
-.view-needs-you .record-actions .btn-primary {
+.view-needs-you .record-actions .btn-primary,
+.view-needs-you .record-actions .btn-neutral {
   font-size: 11.5px;
   font-weight: 600;
   padding: 4px 12px;
@@ -7629,7 +7620,8 @@ button.rec-source {
 .view-needs-you .needs-you-confirm-btn:hover,
 .view-needs-you .today-accept-btn:hover,
 .view-needs-you .outbox-send-peer-btn:hover,
-.view-needs-you .record-actions .btn-primary:hover {
+.view-needs-you .record-actions .btn-primary:hover,
+.view-needs-you .record-actions .btn-neutral:hover {
   background: var(--glass-text);
   opacity: 0.88;
 }

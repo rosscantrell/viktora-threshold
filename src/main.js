@@ -5482,7 +5482,6 @@ async function enterLogView() {
   // idempotent toggles. No await, no network — this returns to the event loop
   // before any data source resolves, so the paint is immediate.
   renderTodaySkeleton();
-  wireTodayFiledToggle();
 
   // ── FIRE-AND-FORGET ENRICHMENT (off the critical path) ──────────────────────
   // Each source patches its own section when it lands; each is independently
@@ -5523,23 +5522,23 @@ async function enterLogView() {
     if (!_missSettled.voids) missSettle("voids", true); // never skeleton-forever
   });
 
-  // ③ Your plan + ④'s staged half — ONE packet fetch feeds both (the same
-  //    packet the companion's check-ins read; the drift rule, 2026-07-12).
+  // ③ Your plan + the peer/prepared quiet-line counts — ONE packet fetch
+  //    feeds both (the same packet the companion's check-ins read; the drift
+  //    rule, 2026-07-12). N2: the sections these counts used to head now
+  //    live in Needs you.
   loadTodayPlan().catch((e) => {
     console.warn("[main] Your plan:", e);
-    if (!_preparedSettled.prework) {
-      _preparedFailed.prework = true;
-      renderPreworkStaging(null);
-    }
+    if (_todayQuiet && !_todayQuiet.peer.settled) settlePeerQuietLine(null, true);
+    if (_todayQuiet && !_todayQuiet.prepared.settled.prework) settlePreparedPrework(null, true);
   });
 
-  // ④ Prepared for you — the outbox half (approved, awaiting send).
+  // The prepared quiet-line's outbox half (approved, awaiting send).
   loadTodayPlanDrafts().catch((e) => {
-    console.warn("[main] Prepared for you:", e);
-    if (!_preparedSettled.outbox) {
-      _preparedFailed.outbox = true;
-      _preparedSettled.outbox = true;
-      reconcilePreparedState();
+    console.warn("[main] prepared quiet-line (outbox):", e);
+    if (_todayQuiet && !_todayQuiet.prepared.settled.outbox) {
+      _todayQuiet.prepared.settled.outbox = true;
+      _todayQuiet.prepared.failed.outbox = true;
+      renderTodayQuietLines();
     }
   });
 
@@ -5577,16 +5576,13 @@ function renderTodaySkeleton() {
   // ② Your week — hidden until the full-records source lands.
   const nextWeeks = document.getElementById("today-nextweeks-section");
   if (nextWeeks) nextWeeks.hidden = true;
-  for (const id of ["today-outlook-rows", "today-outlook-rest"]) {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = "";
-  }
   const outlookRows = document.getElementById("today-outlook-rows");
-  if (outlookRows) outlookRows.hidden = false; // re-shown after an errored entry hid it
-  const restWrap = document.getElementById("today-outlook-rest");
-  if (restWrap) restWrap.hidden = true;
-  const restToggle = document.getElementById("today-week-rest-toggle");
-  if (restToggle) { restToggle.hidden = true; restToggle.setAttribute("aria-expanded", "false"); }
+  if (outlookRows) {
+    outlookRows.innerHTML = "";
+    outlookRows.hidden = false; // re-shown after an errored entry hid it
+  }
+  const weekMore = document.getElementById("today-week-more");
+  if (weekMore) weekMore.hidden = true;
   const nextWeeksCount = document.getElementById("today-nextweeks-count");
   if (nextWeeksCount) nextWeeksCount.textContent = "";
 
@@ -5604,35 +5600,22 @@ function renderTodaySkeleton() {
   const planWhen = document.getElementById("today-planrec-when");
   if (planWhen) planWhen.textContent = "";
 
-  // ④ Prepared for you — both lists clear; the Log line waits for the summary.
-  for (const id of ["today-prework-list", "today-outbox-list"]) {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = "";
-  }
-  const preparedEmpty = document.getElementById("today-prepared-empty");
-  if (preparedEmpty) preparedEmpty.hidden = true;
+  // The into-the-Log line under ③ waits for the decision-log summary.
   const planLine = document.getElementById("today-plan-log-line");
   if (planLine) planLine.hidden = true;
-  const preparedCount = document.getElementById("today-prepared-count");
-  if (preparedCount) preparedCount.textContent = "";
-  _preparedSettled = { prework: false, outbox: false };
-  _preparedFailed = { prework: false, outbox: false };
 
-  // ④ One question — clear both slots; the filed line hides until data.
+  // ④ One question — clear the slot; the head count waits for the queue.
   const qSlot = document.getElementById("today-question-slot");
   if (qSlot) qSlot.innerHTML = "";
-  const qRest = document.getElementById("today-question-rest");
-  if (qRest) { qRest.innerHTML = ""; qRest.hidden = true; }
-  const qMore = document.getElementById("today-question-more");
-  if (qMore) { qMore.hidden = true; qMore.setAttribute("aria-expanded", "false"); }
   const qCount = document.getElementById("today-question-count");
-  if (qCount) qCount.textContent = "";
+  if (qCount) { qCount.textContent = ""; qCount.hidden = true; }
   const qEmpty = document.getElementById("today-question-empty");
   if (qEmpty) qEmpty.hidden = true;
-  const filedSection = document.getElementById("today-filed-section");
-  if (filedSection) filedSection.hidden = true;
-  const filedList = document.getElementById("today-filed-list");
-  if (filedList) filedList.innerHTML = "";
+
+  // N2 — the quiet-line cluster resets with its sources unsettled.
+  resetTodayQuiet();
+  const quietBox = document.getElementById("today-quiet-lines");
+  if (quietBox) { quietBox.innerHTML = ""; quietBox.hidden = true; }
 
   // Runway rows start COLLAPSED on every entry (Ross 2026-07-12: an expanded
   // step plan made "Due this week" read as the plan stratum) — the set still
@@ -5646,23 +5629,6 @@ function renderTodaySkeleton() {
   }
   const statusEl = document.getElementById("log-status");
   if (statusEl) statusEl.hidden = true;
-}
-
-// Toggle the demoted "Filed automatically" line inside "Waiting on you"
-// (collapsed by default). Idempotent — binds the click handler once across
-// re-renders.
-function wireTodayFiledToggle() {
-  const toggle = document.getElementById("today-filed-toggle");
-  const list = document.getElementById("today-filed-list");
-  if (!toggle || !list || toggle.dataset.wired) return;
-  toggle.dataset.wired = "1";
-  const chevron = toggle.querySelector(".proxy-pile-chevron");
-  toggle.addEventListener("click", () => {
-    const open = list.hidden; // about to open if currently hidden
-    list.hidden = !open;
-    toggle.setAttribute("aria-expanded", String(open));
-    if (chevron) chevron.textContent = open ? "▾" : "▸";
-  });
 }
 
 // ── Today context: viewer identity + capture-attribution join ───────────────
@@ -5832,8 +5798,6 @@ function renderMissRow(e) {
 // ══════════════════════════════════════════════════════════════════════════
 async function loadTodayQuestions() {
   const slot = document.getElementById("today-question-slot");
-  const rest = document.getElementById("today-question-rest");
-  const moreBtn = document.getElementById("today-question-more");
   const countEl = document.getElementById("today-question-count");
   const emptyEl = document.getElementById("today-question-empty");
   if (!slot) return;
@@ -5847,11 +5811,9 @@ async function loadTodayQuestions() {
   const cards = [...qe, ...mergeAsks, ...nameAsks, ...proxy];
 
   slot.innerHTML = "";
-  if (rest) { rest.innerHTML = ""; rest.hidden = true; }
-  if (moreBtn) { moreBtn.hidden = true; moreBtn.setAttribute("aria-expanded", "false"); }
 
   if (!cards.length) {
-    if (countEl) countEl.textContent = "";
+    if (countEl) { countEl.textContent = ""; countEl.hidden = true; }
     // The calm pull affordance still renders solo when the engine is on.
     const pull = buildQuestionSection();
     if (pull) {
@@ -5865,23 +5827,17 @@ async function loadTodayQuestions() {
 
   if (emptyEl) emptyEl.hidden = true;
   slot.appendChild(cards[0]);
+  // N2 — the rest of the queue renders in FULL in Needs you (the lane reads
+  // the same sources, #196); the head count is the honest pointer there, not
+  // a second queue behind a toggle.
   const waiting = cards.length - 1;
-  if (countEl) countEl.textContent = waiting > 0 ? `${waiting} more waiting` : "";
-  if (waiting > 0 && rest && moreBtn) {
-    for (const c of cards.slice(1)) rest.appendChild(c);
-    const closed = `▸ show the ${waiting} waiting`;
-    moreBtn.textContent = closed;
-    moreBtn.hidden = false;
-    if (!moreBtn.dataset.wired) {
-      moreBtn.dataset.wired = "1";
-      moreBtn.addEventListener("click", () => {
-        const open = rest.hidden;
-        rest.hidden = !open;
-        moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
-        moreBtn.textContent = open ? "▾ later questions" : (moreBtn.dataset.closedLabel || closed);
-      });
+  if (countEl) {
+    countEl.textContent = waiting > 0 ? `${waiting} more wait in Needs you` : "";
+    countEl.hidden = waiting <= 0;
+    if (!countEl.dataset.wired) {
+      countEl.dataset.wired = "1";
+      countEl.addEventListener("click", () => enterNeedsYouView());
     }
-    moreBtn.dataset.closedLabel = closed;
   }
 }
 
@@ -5895,20 +5851,15 @@ async function collectQuestionEngineCard() {
 }
 
 // Proxy source — "wants your eye" reviews are questions ("did I file this
-// right?"); the high-confidence pile renders as the quiet filed line (ids in
-// stratum ④, unchanged behavior).
+// right?"); the high-confidence pile COUNTS into the filed quiet-line (N2 —
+// the reviewable rows themselves live in Needs you's filed-for-you pile).
 async function collectProxyCards() {
-  const filedSection = document.getElementById("today-filed-section");
-  const filedList = document.getElementById("today-filed-list");
   const payload = await tauri.core.invoke("fetch_proxy_queue");
   const { filed, wantsEye } = splitProxyPiles(payload);
-  if (filed.length && filedList && filedSection) {
-    for (const item of filed) {
-      try { filedList.appendChild(renderProxyFiledRow(item)); } catch (e) { console.warn("[main] renderProxyFiledRow:", e); }
-    }
-    filedSection.hidden = false;
-    const headText = document.getElementById("today-filed-heading-text");
-    if (headText) headText.textContent = `${filed.length} filed automatically — review`;
+  if (_todayQuiet) {
+    _todayQuiet.filed.count = filed.length;
+    _todayQuiet.filed.settled = true;
+    renderTodayQuietLines();
   }
   const cards = [];
   for (const item of wantsEye) {
@@ -6431,8 +6382,27 @@ async function loadTodayMissVoids() {
 // stratum ④ rows tagged "awaiting your review" (the authorization gradient —
 // the scheduled pass may write ONLY staging + questions).
 // ══════════════════════════════════════════════════════════════════════════
-let _preparedSettled = { prework: false, outbox: false };
-let _preparedFailed = { prework: false, outbox: false };
+// WP-THRESHOLD-NEEDS-YOU N2 — Today's quiet-line cluster state. The dissolved
+// sections (peer arrivals #182, prepared-for-you, the filed-automatically
+// pile) settle their COUNTS here; renderTodayQuietLines composes the one
+// bottom line of counted pointers into Needs you. Fail-closed-but-VISIBLE:
+// a failed source keeps a couldn't-check segment, never a silent absence.
+let _todayQuiet = null;
+
+function resetTodayQuiet() {
+  _todayQuiet = {
+    peer: { phrases: [], count: 0, overflow: 0, settled: false, failed: false },
+    prepared: {
+      count: 0,
+      preworkCount: 0,
+      outboxCount: 0,
+      settled: { prework: false, outbox: false },
+      failed: { prework: false, outbox: false },
+    },
+    filed: { count: 0, settled: false },
+  };
+}
+resetTodayQuiet();
 
 async function loadTodayPlan() {
   let data;
@@ -6445,19 +6415,19 @@ async function loadTodayPlan() {
     });
   } catch (err) {
     // Old server / unreachable — the plan stratum stays hidden; the staging
-    // half settles FAILED so ④ shows its couldn't-reach line instead of a
-    // false "nothing prepared" (fail-closed-but-VISIBLE).
+    // + peer quiet-line segments settle FAILED so the cluster shows its
+    // couldn't-check line instead of a false calm (fail-closed-but-VISIBLE).
     console.warn("[main] fetch_checkin_brief failed:", err);
-    _preparedFailed.prework = true;
-    renderPreworkStaging(null);
+    settlePeerQuietLine(null, true);
+    settlePreparedPrework(null, true);
     return;
   }
   try { renderTodayPlanSection(data && data.todaysPlan); }
   catch (e) { console.warn("[main] Your plan render:", e); }
-  try { renderPreworkStaging(data && data.prework); }
-  catch (e) { console.warn("[main] prework render:", e); renderPreworkStaging(null); }
-  try { renderPeerArrivals(data && data.intake); }
-  catch (e) { console.warn("[main] peer arrivals render:", e); }
+  try { settlePreparedPrework(data && data.prework, false); }
+  catch (e) { console.warn("[main] prework count:", e); settlePreparedPrework(null, true); }
+  try { settlePeerQuietLine(data && data.intake, false); }
+  catch (e) { console.warn("[main] peer arrivals count:", e); settlePeerQuietLine(null, true); }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -6503,91 +6473,47 @@ function appendWithBold(el, text) {
 // The per-render label join: channel "peer:<id>" → its health row's label.
 let _peerLabelById = new Map();
 
-// "From your colleagues" — intake receipts from peer channels only. Counts per
-// peer read like speech: "2 questions, 1 receipt from Elena's side". Rows are
-// openable when the receipt carries its document id (provenance invariant).
-function renderPeerArrivals(intake) {
-  const section = document.getElementById("today-peer-section");
-  const list = document.getElementById("today-peer-list");
-  const countEl = document.getElementById("today-peer-count");
-  const overflowEl = document.getElementById("today-peer-overflow");
-  if (!section || !list) return;
-
-  _peerLabelById = new Map();
-  const channels = intake && Array.isArray(intake.channels) ? intake.channels : [];
-  for (const ch of channels) {
-    const id = String(ch.channel || "");
-    if (id.startsWith("peer:")) {
-      _peerLabelById.set(id.slice(5), (ch.health && ch.health.label) || null);
+// The dissolved "From your colleagues" section (WP-THRESHOLD-NEEDS-YOU N2):
+// every peer arrival renders in Needs you now (questions group 1, handoffs
+// group 2, answers + receipts group 3); Today keeps ONE honest counted line
+// — "2 arrivals from Elena's side → Needs you" — per-peer counts, never a
+// rollup that hides a colleague. The packet's cross-channel overflow count
+// stays visible too (it spans ALL channels, so it's worded honestly rather
+// than claimed as peer-sent).
+function settlePeerQuietLine(intake, failed) {
+  if (!_todayQuiet) resetTodayQuiet();
+  const st = _todayQuiet.peer;
+  st.settled = true;
+  st.failed = !!failed;
+  st.phrases = [];
+  st.count = 0;
+  st.overflow = 0;
+  if (!failed && intake) {
+    _peerLabelById = new Map();
+    const channels = Array.isArray(intake.channels) ? intake.channels : [];
+    for (const ch of channels) {
+      const id = String(ch.channel || "");
+      if (id.startsWith("peer:")) {
+        _peerLabelById.set(id.slice(5), (ch.health && ch.health.label) || null);
+      }
     }
-  }
-
-  const received = intake && Array.isArray(intake.received) ? intake.received : [];
-  const rows = received.filter((r) => String(r.channel || "").startsWith("peer:"));
-  if (!rows.length) {
-    section.hidden = true; // calm absence — nothing peer-sent since last look
-    return;
-  }
-
-  // Per-peer kind tally → "2 questions, 1 receipt from Elena's side".
-  const byPeer = new Map();
-  for (const r of rows) {
-    const peerId = String(r.channel).slice(5);
-    if (!byPeer.has(peerId)) byPeer.set(peerId, new Map());
-    const kinds = byPeer.get(peerId);
-    const kind = PEER_KIND_LABELS[String(r.envelopeKind || "").toLowerCase()] || "message";
-    kinds.set(kind, (kinds.get(kind) || 0) + 1);
-  }
-  const phrases = [];
-  for (const [peerId, kinds] of byPeer) {
-    const bits = [];
-    for (const kind of ["question", "answer", "handoff", "receipt", "message"]) {
-      const n = kinds.get(kind);
-      if (n) bits.push(`${n} ${kind}${n === 1 ? "" : "s"}`);
+    const received = Array.isArray(intake.received) ? intake.received : [];
+    const rows = received.filter((r) => String(r.channel || "").startsWith("peer:"));
+    const byPeer = new Map();
+    for (const r of rows) {
+      const peerId = String(r.channel).slice(5);
+      byPeer.set(peerId, (byPeer.get(peerId) || 0) + 1);
     }
-    phrases.push(`${bits.join(", ")} from ${peerSideLabel(_peerLabelById.get(peerId), peerId)}`);
-  }
-  if (countEl) countEl.textContent = phrases.join(" · ");
-
-  list.innerHTML = "";
-  for (const r of rows) {
-    const row = document.createElement("div");
-    row.className = "today-peer-row";
-    const kind = document.createElement("span");
-    kind.className = "today-peer-kind";
-    kind.dataset.kind = String(r.envelopeKind || "").toLowerCase();
-    kind.textContent = peerKindLabel(r.envelopeKind);
-    row.appendChild(kind);
-    const text = document.createElement("span");
-    text.className = "today-peer-text";
-    // The kind column already says Question/Answer/… — trim the envelope
-    // title's matching "<Kind> — " prefix so the row doesn't say it twice.
-    const kindWord = peerKindLabel(r.envelopeKind);
-    const title = (r.title || "(untitled)").replace(new RegExp(`^${kindWord}\\s+—\\s+`, "i"), "");
-    text.textContent = title;
-    if (title.length > 64) text.title = r.title || title;
-    row.appendChild(text);
-    const when = document.createElement("span");
-    when.className = "today-peer-when";
-    const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
-    if (!Number.isNaN(ms)) {
-      when.textContent = new Date(ms).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    st.count = rows.length;
+    let first = true;
+    for (const [peerId, n] of byPeer) {
+      const side = peerSideLabel(_peerLabelById.get(peerId), peerId);
+      st.phrases.push(first ? `${n} arrival${n === 1 ? "" : "s"} from ${side}` : `${n} from ${side}`);
+      first = false;
     }
-    row.appendChild(when);
-    if (r.docId) {
-      row.classList.add("is-openable");
-      row.addEventListener("click", () => openSourcePanel(r.docId, null));
-    }
-    list.appendChild(row);
+    st.overflow = intake.receivedOverflow || 0;
   }
-  if (overflowEl) {
-    // The packet caps receipts; the overflow count spans ALL channels, so word
-    // it honestly rather than claiming the tail is peer-sent.
-    const extra = (intake && intake.receivedOverflow) || 0;
-    overflowEl.textContent = extra ? `+${extra} more arrived across your channels` : "";
-    overflowEl.hidden = !extra;
-  }
-  section.hidden = false;
+  renderTodayQuietLines();
 }
 
 // The reconciliation stratum. Buckets render in the mockup-D grammar: moved
@@ -6707,29 +6633,19 @@ function renderTodayPlanSection(tp) {
   section.hidden = false;
 }
 
-// ④'s staged half — prework items from the scheduled pass. Rows expand to the
-// full prework detail: what's known (receipted), what's missing, the targeted
-// questions, and the draft (bracketed blanks where unknowns survived).
-function renderPreworkStaging(prework) {
-  const list = document.getElementById("today-prework-list");
-  if (list) {
-    list.innerHTML = "";
-    // WP-COMPANION-NETWORK-UI — accept cards lead the stratum: a decision the
-    // other side already made is the cheapest win on the board (doctrine),
-    // and NOTHING is resolved until the user's tap (the cards are inert).
-    const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
-    for (const card of cards) {
-      try { list.appendChild(renderAcceptCard(card)); }
-      catch (e) { console.warn("[main] renderAcceptCard:", e); }
-    }
-    const items = prework && Array.isArray(prework.items) ? prework.items : [];
-    for (const item of items) {
-      try { list.appendChild(renderPreworkRow(item)); }
-      catch (e) { console.warn("[main] renderPreworkRow:", e); }
-    }
-  }
-  _preparedSettled.prework = true;
-  reconcilePreparedState();
+// The dissolved "Prepared for you" section's staged half (N2): accept cards
+// + prework items render in Needs you group 2 now; Today only counts them
+// into the prepared quiet-line.
+function settlePreparedPrework(prework, failed) {
+  if (!_todayQuiet) resetTodayQuiet();
+  const st = _todayQuiet.prepared;
+  st.settled.prework = true;
+  st.failed.prework = !!failed;
+  const accepts = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards.length : 0;
+  const staged = prework && Array.isArray(prework.items) ? prework.items.length : 0;
+  st.preworkCount = failed ? 0 : accepts + staged;
+  st.count = (st.preworkCount || 0) + (st.outboxCount || 0);
+  renderTodayQuietLines();
 }
 
 // The flagship trust artifact: "<peer>'s side answered your question — accept
@@ -6776,7 +6692,6 @@ function renderAcceptCard(card) {
       done.textContent = `✓ Filed — closed on the answer from ${peerSideLabel(card.peerLabel, null)}.`;
       wrap.replaceChildren(done);
       wrap.classList.add("is-done");
-      reconcilePreparedState();
       showToast({
         kind: "success",
         title: "Accepted",
@@ -6865,111 +6780,96 @@ function renderPreworkRow(item) {
   return wrap;
 }
 
-// ④'s shared count/empty math — both halves (staged + outbox) settle here.
-function reconcilePreparedState() {
-  const countEl = document.getElementById("today-prepared-count");
-  const emptyEl = document.getElementById("today-prepared-empty");
-  const accepts = document.querySelectorAll("#today-prework-list .today-accept-card:not(.is-done)").length;
-  const acceptsDone = document.querySelectorAll("#today-prework-list .today-accept-card.is-done").length;
-  const staged = document.querySelectorAll("#today-prework-list .today-draft-item").length;
-  const drafts = document.querySelectorAll("#today-outbox-list .today-draft-item").length;
-  // Done accept cards keep the stratum visibly non-empty (their ✓ line IS the
-  // content) but never count toward the header numbers.
-  const n = accepts + staged + drafts + acceptsDone;
-  if (countEl) {
-    const parts = [];
-    if (accepts) parts.push(`${accepts} answered — accept?`);
-    if (staged) parts.push(`${staged} awaiting review`);
-    if (drafts) parts.push(`${drafts} to send`);
-    countEl.textContent = parts.join(" · ");
-  }
-  const settled = _preparedSettled.prework && _preparedSettled.outbox;
-  const anyFailed = _preparedFailed.prework || _preparedFailed.outbox;
-  if (emptyEl) {
-    if (settled && anyFailed) {
-      // Fail-closed-but-VISIBLE: a raced/failed fetch must never read as an
-      // honest "nothing prepared" (the live 2026-07-15 slow-engine incident).
-      emptyEl.textContent = n
-        ? "Part of this list couldn't load — Refresh to retry."
-        : "Couldn't reach Apolla — Refresh to retry.";
-      emptyEl.hidden = false;
-    } else {
-      emptyEl.textContent = "Nothing prepared right now.";
-      emptyEl.hidden = !(n === 0 && settled);
+// ── WP-THRESHOLD-NEEDS-YOU N2 — the quiet-line cluster renderer ────────────
+// One bottom line of counted pointers into Needs you (the mock's
+// ".quiet-line" grammar): peer arrivals · prepared for you · filed
+// automatically. Zero-count segments don't render (calm absence); a FAILED
+// source renders a couldn't-check segment instead — suppression stays
+// visible, never silent. Every counted segment navigates to Needs you,
+// where the items themselves live.
+function renderTodayQuietLines() {
+  const box = document.getElementById("today-quiet-lines");
+  if (!box || !_todayQuiet) return;
+  box.innerHTML = "";
+  const addSegment = (text, navigates) => {
+    if (box.childNodes.length) {
+      const dot = document.createElement("span");
+      dot.className = "today-quiet-sep";
+      dot.textContent = "·";
+      box.appendChild(dot);
     }
+    if (navigates) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "today-log-line";
+      btn.textContent = text;
+      btn.addEventListener("click", () => enterNeedsYouView());
+      box.appendChild(btn);
+    } else {
+      const span = document.createElement("span");
+      span.className = "today-log-line is-static";
+      span.textContent = text;
+      box.appendChild(span);
+    }
+  };
+
+  const peer = _todayQuiet.peer;
+  if (peer.failed) {
+    addSegment("couldn't check what your colleagues sent — Refresh to retry", false);
+  } else if (peer.count) {
+    addSegment(`${peer.phrases.join(" · ")} → Needs you`, true);
   }
+  if (peer.overflow) {
+    addSegment(`+${peer.overflow} more arrived across your channels`, false);
+  }
+
+  const prep = _todayQuiet.prepared;
+  const prepFailed = prep.failed.prework || prep.failed.outbox;
+  if (prepFailed && prep.settled.prework && prep.settled.outbox) {
+    addSegment(
+      prep.count
+        ? `${prep.count} prepared for you → Needs you (part of the list couldn't load)`
+        : "couldn't check what's prepared for you — Refresh to retry",
+      prep.count > 0,
+    );
+  } else if (prep.count) {
+    addSegment(`${prep.count} prepared for you → Needs you`, true);
+  }
+
+  const filed = _todayQuiet.filed;
+  if (filed.count) {
+    addSegment(`${filed.count} filed automatically → Needs you`, true);
+  }
+
+  box.hidden = !box.childNodes.length;
 }
 
-// WP-TODAY-BRIEF ④ (outbox half) — drafts from the AUTHORIZED lanes (attended
-// sessions + post-close wings). Compact rows; the full companion card (body,
-// artifacts, verbs — PR #150 anatomy unchanged) expands in place.
-// ══════════════════════════════════════════════════════════════════════════
+// The dissolved "Prepared for you" section's outbox half (N2): drafts render
+// in Needs you group 2 now; Today only counts them into the prepared
+// quiet-line. Fail-closed-but-VISIBLE: a failed fetch settles a
+// couldn't-check segment, never a false calm (the live 2026-07-15
+// slow-engine incident).
 async function loadTodayPlanDrafts() {
-  const list = document.getElementById("today-outbox-list");
-  if (!list) return;
+  if (!_todayQuiet) resetTodayQuiet();
+  const st = _todayQuiet.prepared;
   let data;
   try {
     data = await tauri.core.invoke("fetch_outbox");
   } catch (err) {
-    console.warn("[main] fetch_outbox failed (Prepared for you):", err);
-    _preparedFailed.outbox = true;
-    _preparedSettled.outbox = true;
-    reconcilePreparedState(); // calm couldn't-reach line, never a false-empty
+    console.warn("[main] fetch_outbox failed (prepared quiet-line):", err);
+    st.failed.outbox = true;
+    st.settled.outbox = true;
+    st.outboxCount = 0;
+    st.count = st.preworkCount || 0;
+    renderTodayQuietLines();
     return;
   }
   const items = Array.isArray(data && data.items) ? data.items : [];
-  list.innerHTML = "";
-  for (const item of items) {
-    try { list.appendChild(renderDraftRow(item)); }
-    catch (e) { console.warn("[main] renderDraftRow (Prepared for you):", e); }
-  }
-  _preparedSettled.outbox = true;
-  reconcilePreparedState();
-}
-
-// One compact draft row: ✦ when companion-drafted, the subject, a quiet
-// "ready to send"; click expands the full outbox card in place (lazily).
-function renderDraftRow(item) {
-  const wrap = document.createElement("div");
-  wrap.className = "today-draft-item";
-  const row = document.createElement("button");
-  row.type = "button";
-  row.className = "today-draft-row";
-  row.setAttribute("aria-expanded", "false");
-  const text = document.createElement("span");
-  text.className = "today-draft-text";
-  text.textContent =
-    (item.proposedBy === "mcp-agent" ? "✦ " : "") + (item.subject || "(no subject)");
-  text.title = item.subject || "";
-  row.appendChild(text);
-  const tag = document.createElement("span");
-  tag.className = "today-draft-tag";
-  // WP-COMPANION-NETWORK-UI — a held peer send is NEVER silent: the compact
-  // row itself says so (the expanded card carries the error + retry).
-  if (item.addressedToPeer && item.lastDispatchError) {
-    tag.textContent = "held — couldn't send";
-    tag.classList.add("is-held");
-  } else if (item.addressedToPeer) {
-    tag.textContent = `to ${peerSideLabel(item.addressedToPeerLabel, item.addressedToPeer)}`;
-  } else {
-    tag.textContent = "approved, awaiting send";
-  }
-  row.appendChild(tag);
-  const detail = document.createElement("div");
-  detail.className = "today-draft-detail";
-  detail.hidden = true;
-  row.addEventListener("click", () => {
-    const open = detail.hidden;
-    if (open && !detail.childNodes.length) {
-      try { detail.appendChild(renderOutboxCard(item)); }
-      catch (e) { console.warn("[main] renderOutboxCard (draft row):", e); }
-    }
-    detail.hidden = !open;
-    row.setAttribute("aria-expanded", open ? "true" : "false");
-  });
-  wrap.appendChild(row);
-  wrap.appendChild(detail);
-  return wrap;
+  st.settled.outbox = true;
+  st.failed.outbox = false;
+  st.outboxCount = items.length;
+  st.count = (st.preworkCount || 0) + items.length;
+  renderTodayQuietLines();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -7055,6 +6955,9 @@ function setTodayFilter(filter) {
 // IPC, no engine change. Empty ⇒ absent (never fabricates demo content).
 // ══════════════════════════════════════════════════════════════════════════
 const COMINGUP_WINDOW_DAYS = 14;
+// N2 (Ross 2026-07-20, Concept 1): "Due this week" shows the soonest 3 runway
+// rows; the overflow + fortnight are ONE honest count line into the Log.
+const TODAY_WEEK_CAP = 3;
 // Any silence ≥ this many days on a due-soon item earns the "quiet" badge — the
 // point is due-soon AND nobody-touching-it (looser than the 40d overdue-silent
 // badge, per the amendment).
@@ -7170,10 +7073,12 @@ async function loadTodayComingUp() {
       entryIsMine(e, _todayCtx.viewerSlug, _todayCtx.viewerEmail, _todayCtx.submitterByDoc));
   }
 
-  // WP-TODAY-BRIEF ② — the WEEK leads; the rest of the fortnight sits behind
-  // one collapsed line (Ross 2026-07-12: "weekly needs" is the intention, the
-  // fortnight is context). Week = through Friday; on Sat/Sun the upcoming week
-  // (same convention as the check-in brief).
+  // WP-TODAY-BRIEF ② — the WEEK leads; N2 caps it at the soonest
+  // TODAY_WEEK_CAP runway rows. The week's overflow + the whole fortnight
+  // stay collapsed behind ONE honest count line into the Log ("3 more this
+  // week · 4 in the fortnight → Log") — counted, never hidden. Week =
+  // through Friday; on Sat/Sun the upcoming week (same convention as the
+  // check-in brief).
   const dow = today.getDay(); // 0 Sun … 6 Sat
   const addToFri = dow === 0 ? 5 : dow === 6 ? 6 : 5 - dow;
   const weekEnd = today.getTime() + addToFri * 86400000 + (86400000 - 1);
@@ -7182,35 +7087,32 @@ async function loadTodayComingUp() {
     return d && d.getTime() <= weekEnd;
   });
   const restRows = rows.filter((it) => !weekRows.includes(it));
+  const shownRows = weekRows.slice(0, TODAY_WEEK_CAP);
+  const weekOverflow = weekRows.length - shownRows.length;
 
-  if (countEl) countEl.textContent = weekRows.length ? `${weekRows.length} due` : "";
-
-  try { renderTodayOutlook(weekRows, today); } catch (e) { console.warn("[main] your week:", e); }
-  const restEl = document.getElementById("today-outlook-rest");
-  if (restEl) {
-    restEl.innerHTML = "";
-    if (restRows.length) {
-      try { renderTodayOutlook(restRows, today, restEl); } catch (e) { console.warn("[main] fortnight rest:", e); }
-    }
+  if (countEl) {
+    countEl.textContent = !weekRows.length
+      ? ""
+      : weekOverflow
+        ? `${shownRows.length} of ${weekRows.length}`
+        : `${weekRows.length} due`;
   }
-  const restToggle = document.getElementById("today-week-rest-toggle");
-  if (restToggle) {
-    if (restRows.length && restEl) {
-      const closed = `▸ rest of the fortnight — ${restRows.length} more`;
-      restToggle.textContent = restEl.hidden ? closed : `▾ rest of the fortnight`;
-      restToggle.dataset.closedLabel = closed;
-      restToggle.hidden = false;
-      if (!restToggle.dataset.wired) {
-        restToggle.dataset.wired = "1";
-        restToggle.addEventListener("click", () => {
-          const open = restEl.hidden;
-          restEl.hidden = !open;
-          restToggle.setAttribute("aria-expanded", open ? "true" : "false");
-          restToggle.textContent = open ? "▾ rest of the fortnight" : (restToggle.dataset.closedLabel || "▸ rest of the fortnight");
-        });
+
+  try { renderTodayOutlook(shownRows, today); } catch (e) { console.warn("[main] your week:", e); }
+  const weekMore = document.getElementById("today-week-more");
+  if (weekMore) {
+    const bits = [];
+    if (weekOverflow) bits.push(`${weekOverflow} more this week`);
+    if (restRows.length) bits.push(`${restRows.length} in the fortnight`);
+    if (bits.length) {
+      weekMore.textContent = `${bits.join(" · ")} → Log`;
+      weekMore.hidden = false;
+      if (!weekMore.dataset.wired) {
+        weekMore.dataset.wired = "1";
+        weekMore.addEventListener("click", () => enterDecisionsView("open", { from: "today" }));
       }
     } else {
-      restToggle.hidden = true;
+      weekMore.hidden = true;
     }
   }
 
@@ -7276,7 +7178,7 @@ async function loadNextWeeksFocusChips() {
       .filter(Boolean),
   );
   if (!focusIds.size) return;
-  for (const row of document.querySelectorAll("#today-outlook-rows .today-outlook-item[data-record-id], #today-outlook-rest .today-outlook-item[data-record-id]")) {
+  for (const row of document.querySelectorAll("#today-outlook-rows .today-outlook-item[data-record-id]")) {
     if (!focusIds.has(row.dataset.recordId)) continue;
     const label = row.querySelector(".today-outlook-label");
     if (!label || label.querySelector(".today-focus-chip")) continue;
@@ -17175,7 +17077,9 @@ function proxyUndoFiled(item, rowEl) {
 //     (fetch_checkin_brief), and peer handoffs.
 //   "Confirm what happened" — peer receipts (one-tap Confirm ONLY when the
 //     row carries a validated recordRef — engine N3; legacy receipts keep the
-//     honest two-step: open their message, then resolve), and the
+//     honest two-step: open their message, then resolve), peer answers that
+//     arrived without an accept card (skim + open — N2 moved them here so
+//     Today's peer section could dissolve without losing an item), and the
 //     filed-for-you pile (collapsed rows, per-row undo via proxyUndoFiled).
 //
 // enterLogView's posture throughout: synchronous skeleton paint, then every
@@ -17469,8 +17373,9 @@ async function loadNeedsYouQuestions() {
 }
 
 // The check-in packet → peer questions (group 1), accept cards + staged
-// prework + peer handoffs (group 2), peer receipts (group 3). ONE fetch feeds
-// all three (the same packet Today and the companion's check-ins read).
+// prework + peer handoffs (group 2), peer receipts + card-less answers
+// (group 3). ONE fetch feeds all three (the same packet Today and the
+// companion's check-ins read).
 async function loadNeedsYouPacket() {
   let data;
   try {
@@ -17519,6 +17424,16 @@ async function loadNeedsYouPacket() {
       build,
     );
 
+  // N2 — every peer arrival now lands in the lane (Today's peer section
+  // dissolved to a quiet-line count pointing here). An answer whose accept
+  // card renders in group 2 is ONE item with one surface — the accept card;
+  // an answer WITHOUT one renders as a group-3 row (skim + open, the
+  // confirm-what-happened weight), so the quiet-line's count never
+  // over-promises.
+  const prework = data && data.prework;
+  const acceptCards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
+  const acceptDocIds = new Set(acceptCards.map((c) => c.answerDocId).filter(Boolean));
+
   for (const r of peerRows) {
     const kind = String(r.envelopeKind || "").toLowerCase();
     const peerId = String(r.channel).slice(5);
@@ -17530,10 +17445,9 @@ async function loadNeedsYouPacket() {
         goList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
       } else if (kind === "receipt" && confirmList) {
         confirmList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouReceiptCard(r, peerLabel)));
+      } else if (kind === "answer" && confirmList && !(r.docId && acceptDocIds.has(r.docId))) {
+        confirmList.appendChild(peerRow(r, peerLabel, () => renderNeedsYouPeerCard(r, peerLabel)));
       }
-      // "answer" rows: the actionable ones arrive as accept cards below; an
-      // answer WITHOUT one has nothing waiting on the user, so it stays on
-      // Today's peer section rather than padding this lane.
     } catch (e) { console.warn("[main] peer row (Needs you):", e); }
     const ms = r.ingestedAt ? Date.parse(r.ingestedAt) : NaN;
     if (!Number.isNaN(ms) && _nyState) _nyState.ages.push(ms);
@@ -17543,9 +17457,7 @@ async function loadNeedsYouPacket() {
   // the cheapest win on the board), then staged prework (renderPreworkRow is
   // already a collapsed row — used as-is).
   if (goList) {
-    const prework = data && data.prework;
-    const cards = prework && Array.isArray(prework.acceptCards) ? prework.acceptCards : [];
-    for (const card of cards) {
+    for (const card of acceptCards) {
       try {
         goList.appendChild(renderNeedsYouRow(
           "accept:" + (card.questionId || ""),
@@ -18864,7 +18776,9 @@ function renderOutboxCard(item) {
   } else {
     const sentBtn = document.createElement("button");
     sentBtn.type = "button";
-    sentBtn.className = "btn btn-primary btn-compact";
+    // Filled-neutral primary (the design-grammar contract; flagged on #196 —
+    // the legacy blue btn-primary is not a verb color in this grammar).
+    sentBtn.className = "btn btn-neutral btn-compact";
     sentBtn.textContent = "Mark sent";
     sentBtn.addEventListener("click", () => outboxDecide(item.id, "sent", card));
     actions.appendChild(sentBtn);
@@ -18904,12 +18818,7 @@ async function outboxSendToPeer(item, card, btn) {
     return;
   }
   if (result && result.ok === true) {
-    // In Today the card sits inside a compact draft row — the whole row goes
-    // (a sent item lingering as "to send" would be the fake-pending lie).
-    const wrap = card && card.closest && card.closest(".today-draft-item");
-    const node = wrap || card;
-    if (node && node.parentNode) node.parentNode.removeChild(node);
-    reconcilePreparedState();
+    if (card && card.parentNode) card.parentNode.removeChild(card);
     showToast({ kind: "success", title: `Sent to ${side}`, body: "They have it — you'll see their reply when it lands." });
     return;
   }
@@ -18920,11 +18829,8 @@ async function outboxSendToPeer(item, card, btn) {
     lastDispatchError: { message: (result && result.error) || "The other side couldn't be reached.", at: new Date().toISOString() },
   };
   try {
-    // Flip the enclosing compact row's tag too (Today) so the hold is visible
-    // without expanding.
-    const wrap = card.closest && card.closest(".today-draft-item");
-    const tag = wrap && wrap.querySelector(".today-draft-tag");
-    if (tag) { tag.textContent = "held — couldn't send"; tag.classList.add("is-held"); }
+    // A held send stays visible where the card renders (Needs you row / the
+    // outbox view) — the collapsed ny-row's own meta already says "held".
     card.replaceWith(renderOutboxCard(updated));
   }
   catch (e) { console.warn("[main] held re-render failed:", e); btn.disabled = false; btn.textContent = "Try again"; }
@@ -18938,12 +18844,7 @@ async function outboxSendToPeer(item, card, btn) {
 async function outboxDecide(itemId, action, card) {
   try {
     await tauri.core.invoke("outbox_decide", { itemId, action });
-    // In Today the card lives inside a compact draft row — remove the row too,
-    // so a decided item doesn't linger as a stale "to send" line.
-    const wrap = card && card.closest && card.closest(".today-draft-item");
-    const node = wrap || card;
-    if (node && node.parentNode) node.parentNode.removeChild(node);
-    reconcilePreparedState();
+    if (card && card.parentNode) card.parentNode.removeChild(card);
     const remaining = document.querySelectorAll("#outbox-list .record-card").length;
     const statusEl = document.getElementById("outbox-status");
     if (remaining === 0 && statusEl) {

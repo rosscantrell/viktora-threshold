@@ -7,6 +7,8 @@ for. Details live in the linked docs — read them before the work they govern.
 ## Frontend posture (Ross-ruled)
 - ONE pair of eyes, tight render-look loop. No agent fan-out for anything
   user-visible; agents build well-specced plumbing only.
+- Today accepts no new sections — a WP that wants surface area on Today buys
+  a quiet-line count into its own destination (Ross 2026-07-20).
 - Native (AppKit/Tauri) changes: probe state before changing it; byte-verify
   the RUNNING binary after (`lsof -p <pid> | grep txt` → grep for a compiled
   string — comments don't compile); live-test transitions yourself.
