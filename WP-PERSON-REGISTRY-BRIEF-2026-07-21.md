@@ -54,6 +54,19 @@ bound it: rung + source + receipt + timestamp) · `emails[]` · `mergedFrom[]` �
 + the speaker-owner sweep's applied resolutions. The registry is substrate:
 versioned, receipted, human-correctable via the existing correction lane.
 
+**Synthetic actor identities are TYPED, never merged (networking-lane binding
+addition, folded 2026-07-21):** rows seeded from `peer+<peerId>@<host>`,
+`companion+<frameKey>@<host>`, and `apolla-companion` are NOT persons. They
+carry an actor `kind` (companion/agent) in the registry; they are EXCLUDED
+from person-merge candidacy at every rung AND from r5 name-ask offers (a filed
+"who is peer+elena-p?" is noise — and a hand-answered merge of a companion
+identity into its human would collapse the "Elena's side" vs "Elena"
+distinction that the as-built language canon, the captureSource≠human-truth
+rule, and accept-card provenance depend on: a companion's assertion must never
+become attributable AS the human's own statement). The companion→human
+relationship is a typed link on the registry row (`actsFor: <canonicalId>`),
+never an alias. This also future-proofs per-frame companion identities.
+
 ## §4 THE RESOLVER — one chokepoint, a deterministic ladder
 
 Extraction stops minting canon. The LLM emits the name AS SPOKEN (additive
@@ -78,6 +91,10 @@ already lives — it BECOMES the general owner-resolution ladder), every mint pa
 Laws: NEVER a zero-evidence merge (ambiguity always asks); dominance/frequency
 is a prior, never a rung; the resolver is pure-deterministic, no LLM; flag
 `PERSON_RESOLVER_ENABLED`, pilot-full same-PR, flag-off byte-identical.
+**Envelope hint fields (`entityHints`/`frameHint`/`senderRecordIds`) are never
+identity evidence at any rung** — hints are placement/provenance priors only
+(networking-lane trust boundary, folded 2026-07-21: a sender must not be able
+to steer the receiver's identity merges cross-corpus).
 
 ## §5 THE LOOP — an unknown costs ONE question, ONCE
 
